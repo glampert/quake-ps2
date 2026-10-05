@@ -10,6 +10,9 @@ paths:
 
 # Memory budget (32 MB EE RAM)
 
+> **Quake II facts.** Everything below was measured or decided on the Quake II port. Keep
+> what still holds and rewrite the rest when this subsystem is ported to Quake 1.
+
 - A single program-wide dlmalloc heap (`system/heap.h`) carries per-tag accounting
   (`ps2::heap::MemTag`). Kernel, ELF image and stack are booked as `MemTag::ElfSys`, so the
   tags add up to the whole 32 MB. dlmalloc's page size is pinned to 4096 because ps2sdk's

@@ -11,7 +11,7 @@
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": "$gcc",
       "presentation": { "reveal": "always", "panel": "shared", "clear": true },
-      "detail": "Compile quake2.elf (Shift+Cmd+B)"
+      "detail": "Compile quake.elf (Shift+Cmd+B)"
     },
     {
       "label": "run",
@@ -20,7 +20,7 @@
       "group": "build",
       "problemMatcher": "$gcc",
       "presentation": { "reveal": "always", "panel": "shared" },
-      "detail": "Build then launch quake2.elf in PCSX2 (F5)"
+      "detail": "Build then launch quake.elf in PCSX2 (F5)"
     },
     {
       "label": "clean",

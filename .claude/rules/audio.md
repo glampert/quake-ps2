@@ -6,6 +6,9 @@ paths:
 
 # Audio and CD music
 
+> **Quake II facts.** Everything below was measured or decided on the Quake II port. Keep
+> what still holds and rewrite the rest when this subsystem is ported to Quake 1.
+
 The README's "Sound" section covers `AudsrvDevice` and `MixRing`. The decisions and
 measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
 `tools/host/musenc.cpp`, `make music`):

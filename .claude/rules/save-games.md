@@ -8,6 +8,9 @@ paths:
 
 # Save games and config.cfg
 
+> **Quake II facts.** Everything below was measured or decided on the Quake II port. Keep
+> what still holds and rewrite the rest when this subsystem is ported to Quake 1.
+
 The README's "Save games" section and `save/save_system.h` give the overview. Decisions and
 facts behind them:
 

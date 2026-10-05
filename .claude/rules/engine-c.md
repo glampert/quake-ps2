@@ -1,63 +1,56 @@
 ---
 paths:
-  - "src/client/**"
-  - "src/common/**"
-  - "src/game/**"
-  - "src/server/**"
+  - "src/quake/**"
 ---
 
-# id's engine C (`client/`, `common/`, `game/`, `server/`)
+# QuakeSpasm's C (`src/quake`)
 
 ## Editing rules
 
-- Keep id's code as close to untouched as possible. Platform work belongs in `src/ps2`
+- Keep QuakeSpasm's code as close to untouched as possible. Platform work belongs in `src/ps2`
   behind a seam. When an engine change is unavoidable, keep it minimal and tag it:
-  `// [PS2_QUAKE]: <why>` (about 180 tags exist; follow their style).
-- This code is C89 (`-std=gnu89 -fcommon`) with a lenient warning set, built with
-  `-fno-strict-aliasing -fsingle-precision-constant`. None of the backend's C++ style or
+  `// [PS2_QUAKE]: <why>`. The first commit holds QuakeSpasm 0.97.0 as released, so
+  `git diff <first commit> -- src/quake` shows every change.
+- Built as C11 (`-std=gnu11`, because common.h's `q_min`/`q_max`/`CLAMP` use `_Generic` there
+  and GCC 15 would otherwise default to C23), with `-fno-strict-aliasing
+  -fsingle-precision-constant` and a lenient warning set. None of the backend's C++ style or
   `-Werror` rules apply here.
-- **No double FPU on the EE.** Unsuffixed constants are made float by the flag, and libm calls
-  are redirected by `ps2/math/math_c.h` (via `q_shared.h`). Don't add `double` math or
-  `<math.h>` double calls to engine code.
-- `Sys_Error` is not `[[noreturn]]`, and its declaration in the game header stays as it is.
-- Seams the backend implements: `refexport_t` (the renderer), `Sys_*`, `NET_*` (loopback
-  only), `IN_*` (plus the four `IN_Rumble*` hooks in cl_fx.c, cl_parse.c, cl_ents.c and
-  cl_scrn.c), `SNDDMA_*`, `CDAudio_*`, `Sys_Save*` (`q_common.h`).
+- **No double FPU on the EE.** Unsuffixed constants are made float by the flag. Don't add
+  `double` math or `<math.h>` double calls to engine code. QuakeSpasm's own `double` time
+  (`realtime`, `cl.time`, `Sys_DoubleTime`) stays until profiling says otherwise.
+- `Sys_Error` and `Host_Error` are `FUNC_NORETURN` here (unlike Quake II's `Sys_Error`).
 - A changed `.c` here needs only `make`. There is no separate engine build.
+- Files the PS2 doesn't build are deleted, not left behind. A file QuakeSpasm keeps only as
+  declarations (`bgmusic.h`, `snd_codec.h`, `image.h`) stays because the backend defines what
+  it declares.
 
-## Known engine quirks and bugs
+## Seams the backend implements
 
-- **`COM_Parse` writes `com_token[MAX_TOKEN_CHARS] = 0`, one byte past the array**, after
-  truncating a 128+ char token. It corrupts whatever comes next (it hit `_BigShort`).
-  It is unfixed and was reported to the user. Avoid long quoted tokens in scripts.
-- `Sys_FindFirst` is a stub on this port (always nullptr), so `FS_ExecAutoexec` never runs
-  `autoexec.cfg`, and anything else that enumerates files gets nothing.
-- `wait` runs twice per frame (`Cbuf_Execute` in `Qcommon_Frame` and `CL_SendCommand`).
-- Quake II has no `nomonsters`. `deathmatch` and `cheats` are `CVAR_LATCH`, and `sv_init.c`
-  forces `maxclients` to 8 under deathmatch.
-- The client frame interleaves **2D → 3D → 2D** (`SCR_UpdateScreen`), with no hook at the
-  boundaries. The renderer handles this itself (see `gs-renderer.md`).
+QuakeSpasm has no renderer interface like Quake II's `refexport_t`: the client calls its GL
+renderer directly. So the seam is that renderer's public surface, implemented in `src/ps2`:
 
-## Level loading and registration
+- 2D: `draw.h` (`Draw_*`, `GL_SetCanvas`) and `GL_Set2D`.
+- Frame: `GL_BeginRendering`/`GL_EndRendering`, `VID_*` and the `vid` global (`vid.h`).
+- Refresh: `render.h` (`R_Init`, `R_NewMap`, `R_RenderView`, ...), `R_TranslatePlayerSkin`,
+  `D_FlushCaches`, `Sky_*`, the renderer globals and cvars the client reads (`r_refdef`,
+  `r_lerpmodels`, `gl_polyblend`, ...).
+- Textures: `gl_texmgr.h` (`TexMgr_*`).
+- Platform: `Sys_*` (sys.h, plus the globals `isDedicated` and `sys_throttle`), `PL_*`
+  (platform.h), `IN_*` (input.h), `SNDDMA_*` (q_sound.h), `CDAudio_*` (cdaudio.h), and
+  `net_drivers[]`/`net_numdrivers` (loopback only).
 
-- `CL_PrepRefresh` does free-before-load: it first runs its registration calls in touch-only
-  mode (`re.SetRegistrationTouchOnly`), then `re.FreeUnregistered`, then the real pass. This
-  keeps the old level's unused assets from overlapping the new level's in memory (see
-  `memory-budget.md`).
-- Every view weapon is preloaded in `CL_RegisterTEntModels` (id only did three), and player
-  weapon fire sounds are preloaded with the level. Mid-level loads drop frames, so prefer
-  preloading for anything that appears at a predictable moment.
-- `CDAudio_Play` is called by `CL_PrepRefresh` when loading is done. It is a useful event
-  hook for scripted tests.
+Some files with GL names hold engine logic and stay, with only their GL halves cut:
+`gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen` and
+the loading plaque), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation) and
+`gl_fog.c` (its message parsing must run, or the stream desyncs).
 
-## Save game duty
+## Known engine quirks
 
-The game saves function and `mmove_t` pointers as FNV-1a hashes of their names, through
-tables generated from the game objects at build time
-(`src/tools/scripts/gen_save_tables.py` → `build/<cfg>/gen/g_save_tables.c`). It runs `nm`
-over the game objects and a `^mmove_t` regex over the sources, skipping `#if 0` blocks.
-`G_SaveFingerprint` covers struct sizes, field tables, `itemlist` and `SAVE_FORMAT_VERSION`.
+Record QuakeSpasm quirks here as they are found.
 
-- After touching `g_save.c` or any saved game struct, run `ps2_testsaves 1`.
-- **Bump `SAVE_FORMAT_VERSION` in `g_save.c`** for layout changes the fingerprint can't see,
-  such as a field whose meaning changed but whose size didn't.
+- `startdemos` (the last line of `quake.rc`) plays the attract loop only while `cl_startdemos`
+  is 1 (the default, archived) or `-fitz` is given; otherwise it opens the main menu. Once a
+  map is running (say from `autoexec.cfg`), it does neither.
+- QuakeSpasm's own `default.cfg`, with gamepad binds (`LSHOULDER`, `RTRIGGER`, ...), is
+  embedded as `default_cfg.h` but used only when no `default.cfg` exists. id's `pak0.pak` has
+  one without them, so the pad's keys start unbound unless the input layer seeds binds.
