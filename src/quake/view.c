@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // view.c -- player eye positioning
 
 #include "quakedef.h"
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]
 
 /*
 
@@ -532,33 +533,7 @@ void V_PolyBlend (void)
 	if (!gl_polyblend.value || !v_blend[3])
 		return;
 
-	GL_DisableMultitexture();
-
-	glDisable (GL_ALPHA_TEST);
-	glDisable (GL_TEXTURE_2D);
-	glDisable (GL_DEPTH_TEST);
-	glEnable (GL_BLEND);
-
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity ();
-	glOrtho (0, 1, 1, 0, -99999, 99999);
-	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity ();
-
-	glBegin (GL_QUADS);
-
-	glColor4fv (v_blend); // inside glBegin / glEnd to workaround an AMD driver bug
-
-	glVertex2f (0,0);
-	glVertex2f (1, 0);
-	glVertex2f (1, 1);
-	glVertex2f (0, 1);
-	glEnd ();
-
-	glDisable (GL_BLEND);
-	glEnable (GL_DEPTH_TEST);
-	glEnable (GL_TEXTURE_2D);
-	glEnable (GL_ALPHA_TEST);
+	PS2_DrawPolyBlend (v_blend); // [PS2_QUAKE]: was a GL full-screen quad
 }
 
 /*

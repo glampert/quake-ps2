@@ -226,24 +226,9 @@ typedef struct
 
 #include "platform.h"
 
-#if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
-#if defined(USE_SDL2)
-#ifdef __EMSCRIPTEN__
-#include <GL/gl.h>
-#include <GL/glext.h>
-#endif
-#include <SDL2/SDL.h>
-#ifndef __EMSCRIPTEN__
-#include <SDL2/SDL_opengl.h>
-#endif
-#else /* SDL-1.2: */
-#include <SDL/SDL.h>
-#include <SDL/SDL_opengl.h>
-#endif
-#else /**/
-#include "SDL.h"
-#include "SDL_opengl.h"
-#endif
+// [PS2_QUAKE]: no SDL and no OpenGL on the PS2. The renderer's headers still declare their
+// structs and function pointers with GL type names, so gl_types.h provides those, and only those.
+#include "ps2/renderer/gl_types.h"
 
 #ifndef APIENTRY
 #define	APIENTRY

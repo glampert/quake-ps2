@@ -1,15 +1,15 @@
 # ============================================================================
-#  Quake II PS2 - build system
+#  Quake PS2 - build system
 # ----------------------------------------------------------------------------
-#  Produces build/<config>/quake2.elf for the PS2 EE, using the modern ps2dev
+#  Produces build/<config>/quake.elf for the PS2 EE, using the modern ps2dev
 #  toolchain (mips64r5900el-ps2-elf-*). Built on the PS2SDK sample makefiles.
 #
-#    make             -> debug build -> build/debug/quake2.elf   (VSCode: Shift+Cmd+B)
-#    make release     -> optimized   -> build/release/quake2.elf
+#    make             -> debug build -> build/debug/quake.elf   (VSCode: Shift+Cmd+B)
+#    make release     -> optimized   -> build/release/quake.elf
 #    make run         -> build + launch in PCSX2  (VSCode: F5)
 #    make release run -> the same, with the release build
-#    make tools       -> build host tools (imgdump, unpak, bspinfo, musenc) into build/tools/
-#    make music       -> encode baseq2/music/trackNN.wav into the trackNN.adp files the game streams
+#    make tools       -> build host tools (unpak, musenc, symbolize) into build/tools/
+#    make music       -> encode id1/music/trackNN.wav into the trackNN.adp files the game streams
 #    make clean       -> remove build artifacts (both configs)
 #    make clean_vu    -> remove only assembled VU microprograms
 #
@@ -46,11 +46,11 @@ ifeq ($(filter $(BUILD),debug release),)
 endif
 
 # Strip the linked ELF - in BOTH configs, since the debug build is what gets
-# iterated on and DWARF dominates its size (7.7 MB -> 1.7 MB). Costs nothing at
-# runtime: the PS2 loader only reads program headers, which strip leaves alone.
-# The symbols are not lost, they stay in quake2_unstripped.elf beside it (feed
-# that one to addr2line to resolve a crash address). STRIP_ELF=0 turns this off
-# and ships the unstripped ELF as quake2.elf instead.
+# iterated on and DWARF dominates its size. Costs nothing at runtime: the PS2
+# loader only reads program headers, which strip leaves alone. The symbols are
+# not lost, they stay in quake_unstripped.elf beside it (feed that one to
+# addr2line to resolve a crash address). STRIP_ELF=0 turns this off and ships
+# the unstripped ELF as quake.elf instead.
 STRIP_ELF ?= 1
 
 SRC_DIR    = src
@@ -59,139 +59,46 @@ OUTPUT_DIR = $(BUILD_DIR)/$(BUILD)
 
 # The SDK link rule (Makefile.eeglobal_cpp) produces $(EE_BIN) with full symbols;
 # $(GAME_ELF) is the binary that actually runs, stripped out of it below.
-EE_BIN   = $(OUTPUT_DIR)/quake2_unstripped.elf
-GAME_ELF = $(OUTPUT_DIR)/quake2.elf
+EE_BIN   = $(OUTPUT_DIR)/quake_unstripped.elf
+GAME_ELF = $(OUTPUT_DIR)/quake.elf
 
 # ----------------------------------------------------------------------------
 #  Source files
 # ----------------------------------------------------------------------------
 
 # New PS2 backend, modern C++:
-PS2_CXX_SRC =                         \
-	ps2/system/main.cpp               \
-	ps2/system/sys.cpp                \
-	ps2/system/iop_boot.cpp           \
-	ps2/system/heap.cpp               \
-	ps2/math/vec_mat.cpp              \
-	ps2/net/net.cpp                   \
-	ps2/input/input.cpp               \
-	ps2/input/keyboard.cpp            \
-	ps2/input/pad.cpp                 \
-	ps2/input/rumble.cpp              \
-	ps2/audio/snd.cpp                 \
-	ps2/audio/audsrv_device.cpp       \
-	ps2/audio/mix_ring.cpp            \
-	ps2/audio/music_stream.cpp        \
-	ps2/audio/cd_audio.cpp            \
-	ps2/save/save_api.cpp             \
-	ps2/save/working_set.cpp          \
-	ps2/save/slot_archive.cpp         \
-	ps2/save/save_device.cpp          \
-	ps2/save/memcard.cpp              \
-	ps2/save/mc_icon.cpp              \
-	ps2/renderer/gs.cpp               \
-	ps2/renderer/vram.cpp             \
-	ps2/renderer/texture.cpp          \
-	ps2/renderer/image_load.cpp       \
-	ps2/renderer/model.cpp            \
-	ps2/renderer/model_load.cpp       \
-	ps2/renderer/lightmap.cpp         \
-	ps2/renderer/scrap_atlas.cpp      \
-	ps2/renderer/cinematic.cpp        \
-	ps2/renderer/view.cpp             \
-	ps2/renderer/md2.cpp              \
-	ps2/renderer/sky.cpp              \
-	ps2/renderer/profile.cpp          \
-	ps2/renderer/vid.cpp              \
-	ps2/renderer/ref.cpp              \
-	ps2/renderer/vu1.cpp              \
-	ps2/renderer/cmd_buffer.cpp       \
-	ps2/renderer/render_system.cpp    \
-	ps2/renderer/clip.cpp             \
-	ps2/tests/draw_cube.cpp           \
-	ps2/tests/cinematics.cpp          \
-	ps2/tests/map_cycle.cpp           \
-	ps2/tests/perf_run.cpp            \
-	ps2/tests/save_test.cpp           \
-	ps2/debug/scr_print.cpp           \
-	ps2/debug/stack_trace.cpp         \
-	ps2/debug/pipeline_dump.cpp       \
-	ps2/debug/exception_handler.cpp   \
-	ps2/debug/profile.cpp             \
-	ps2/builtin/palette.cpp           \
-	ps2/builtin/conchars.cpp          \
-	ps2/builtin/conback.cpp           \
-	ps2/builtin/backtile.cpp
+PS2_CXX_SRC =
 
 # Doug Lea's allocator: vendored third-party C, left as C on purpose (see the
 # note at the top of dlmalloc.c). Everything else of ours is C++.
 PS2_C_SRC = ps2/system/dlmalloc/dlmalloc.c
 
-# Stock Quake II engine / game / server - untouched C, statically linked.
-# Sound output and the CD audio module are implemented in the backend, see ps2/audio/:
-# with no CDVD path in this port (game data comes from host: or mass:), the CD tracks
-# are streamed from baseq2/music/trackNN.adp files instead (cd_audio.cpp).
+# QuakeSpasm's C, statically linked. Its OpenGL renderer is not here: the PS2
+# backend implements the renderer's public surface (draw.h, render.h,
+# gl_texmgr.h, vid.h) instead. The gl_*/r_* files listed are the ones that hold
+# engine logic - gl_model.c's BSP loading feeds the server too - built with
+# their OpenGL halves cut out.
 ENGINE_C_SRC = \
-	client/cl_cin.c    client/cl_ents.c   client/cl_fx.c     client/cl_input.c \
-	client/cl_inv.c    client/cl_main.c   client/cl_newfx.c  client/cl_parse.c \
-	client/cl_pred.c   client/cl_scrn.c   client/cl_tent.c   client/cl_view.c  \
-	client/console.c   client/keys.c      client/menu.c      client/qmenu.c    \
-	client/snd_dma.c   client/snd_mem.c   client/snd_mix.c                     \
-	common/cmd.c       common/cmodel.c    common/common.c    common/crc.c      \
-	common/cvar.c      common/filesys.c   common/md4.c       common/net_chan.c \
-	common/pmove.c                                                             \
-	game/g_ai.c        game/g_chase.c     game/g_cmds.c      game/g_combat.c   \
-	game/g_func.c      game/g_items.c     game/g_main.c      game/g_misc.c     \
-	game/g_monster.c   game/g_phys.c      game/g_save.c      game/g_spawn.c    \
-	game/g_svcmds.c    game/g_target.c    game/g_trigger.c   game/g_turret.c   \
-	game/g_utils.c     game/g_weapon.c    game/q_shared.c    game/p_weapon.c   \
-	game/m_actor.c     game/m_berserk.c   game/m_boss2.c     game/m_boss3.c    \
-	game/m_boss31.c    game/m_boss32.c    game/m_brain.c     game/m_chick.c    \
-	game/m_flash.c     game/m_flipper.c   game/m_float.c     game/m_flyer.c    \
-	game/m_gladiator.c game/m_gunner.c    game/m_hover.c     game/m_infantry.c \
-	game/m_insane.c    game/m_medic.c     game/m_move.c      game/m_mutant.c   \
-	game/m_parasite.c  game/m_soldier.c   game/m_supertank.c game/m_tank.c     \
-	game/p_client.c    game/p_hud.c       game/p_trail.c     game/p_view.c     \
-	server/sv_ccmds.c  server/sv_ents.c   server/sv_game.c   server/sv_init.c  \
-	server/sv_main.c   server/sv_send.c   server/sv_user.c   server/sv_world.c
+	quake/chase.c      quake/cl_demo.c    quake/cl_input.c   quake/cl_main.c   \
+	quake/cl_parse.c   quake/cl_tent.c    quake/cmd.c        quake/common.c    \
+	quake/console.c    quake/crc.c        quake/cvar.c       quake/cfgfile.c   \
+	quake/host.c       quake/host_cmd.c   quake/keys.c       quake/mathlib.c   \
+	quake/menu.c       quake/net_main.c   quake/net_loop.c   quake/pr_cmds.c   \
+	quake/pr_edict.c   quake/pr_exec.c    quake/sbar.c       quake/snd_dma.c   \
+	quake/snd_mem.c    quake/snd_mix.c    quake/sv_main.c    quake/sv_move.c   \
+	quake/sv_phys.c    quake/sv_user.c    quake/view.c       quake/wad.c       \
+	quake/world.c      quake/zone.c       quake/strlcat.c    quake/strlcpy.c   \
+	quake/gl_model.c   quake/gl_refrag.c  quake/gl_rlight.c  quake/gl_screen.c \
+	quake/gl_fog.c     quake/r_part.c
 
 C_SRC   = $(PS2_C_SRC) $(ENGINE_C_SRC)
 CXX_SRC = $(PS2_CXX_SRC)
 
 # Backend sources that run at load time or not at all in a normal frame: asset
 # parsing, IOP module boot, device setup, the debug screen printer. None of them
-# are on the per-frame path, so they are built for size instead of speed - worth
-# ~9 KB of .text, which is RAM the levels get to use instead.
-#
-# The hot renderer (view/md2/sky/gs/vu1/vram/lightmap/ref),
-# the math backend and the whole stock engine keep $(EE_OPTFLAGS).
-SIZE_OPT_CXX_SRC =                    \
-	ps2/renderer/model_load.cpp       \
-	ps2/renderer/image_load.cpp       \
-	ps2/renderer/texture.cpp          \
-	ps2/renderer/model.cpp            \
-	ps2/renderer/scrap_atlas.cpp      \
-	ps2/system/iop_boot.cpp           \
-	ps2/audio/audsrv_device.cpp       \
-	ps2/input/keyboard.cpp            \
-	ps2/input/pad.cpp                 \
-	ps2/input/rumble.cpp              \
-	ps2/renderer/vid.cpp              \
-	ps2/save/save_api.cpp             \
-	ps2/save/slot_archive.cpp         \
-	ps2/save/save_device.cpp          \
-	ps2/save/memcard.cpp              \
-	ps2/save/mc_icon.cpp              \
-	ps2/tests/draw_cube.cpp           \
-	ps2/tests/cinematics.cpp          \
-	ps2/tests/map_cycle.cpp           \
-	ps2/tests/perf_run.cpp            \
-	ps2/tests/save_test.cpp           \
-	ps2/debug/scr_print.cpp           \
-	ps2/debug/stack_trace.cpp         \
-	ps2/debug/pipeline_dump.cpp       \
-	ps2/debug/exception_handler.cpp   \
-	ps2/debug/profile.cpp
+# are on the per-frame path, so they are built for size instead of speed, which
+# is RAM the levels get to use instead.
+SIZE_OPT_CXX_SRC =
 
 SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.o))
 
@@ -229,22 +136,15 @@ VCLPP_PARSE_UTILS = $(VCLPP_PATH)/external/parse-utils
 VCLPP             = $(BUILD_DIR)/tools/vclpp
 
 # miniz (https://github.com/richgel999/miniz), the deflate codec the save games are
-# compressed with (ps2/save/working_set.cpp). A git submodule like vclpp; only the raw
-# deflate/inflate and CRC-32 sources are built, straight from the submodule. Its headers
-# include a miniz_export.h that miniz's CMake would generate: the one in MINIZ_CFG_PATH
-# stands in for it and also carries the build configuration, so the library and every
-# file including miniz.h agree on it (struct sizes depend on TDEFL_LESS_MEMORY).
+# compressed with. A git submodule like vclpp; only the raw deflate/inflate and
+# CRC-32 sources are built, straight from the submodule. Its headers include a
+# miniz_export.h that miniz's CMake would generate: the one in MINIZ_CFG_PATH stands
+# in for it and also carries the build configuration, so the library and every file
+# including miniz.h agree on it (struct sizes depend on TDEFL_LESS_MEMORY).
 MINIZ_PATH     = $(SRC_DIR)/tools/miniz
 MINIZ_CFG_PATH = $(SRC_DIR)/ps2/save/miniz_cfg
 MINIZ_SRC      = miniz.c miniz_tdef.c miniz_tinfl.c
 MINIZ_OBJS     = $(addprefix $(OUTPUT_DIR)/miniz/, $(MINIZ_SRC:.c=.o))
-
-# The name tables the game saves function and mmove_t pointers through (game/g_save.c),
-# generated from the compiled game objects - see the script for the details.
-SAVE_TABLES_GEN = $(SRC_DIR)/tools/scripts/gen_save_tables.py
-SAVE_TABLES_C   = $(OUTPUT_DIR)/gen/g_save_tables.c
-SAVE_TABLES_O   = $(OUTPUT_DIR)/gen/g_save_tables.o
-GAME_C_OBJS     = $(filter $(OUTPUT_DIR)/$(SRC_DIR)/game/%.o, $(C_OBJS))
 
 # Standalone command line tools: the C++ ones under src/tools/host, built with the
 # HOST C++ compiler (not the EE toolchain) since they run on the development
@@ -252,7 +152,7 @@ GAME_C_OBJS     = $(filter $(OUTPUT_DIR)/$(SRC_DIR)/game/%.o, $(C_OBJS))
 # are config-independent, so they live outside build/<config>/.
 HOST_TOOLS_PATH = $(SRC_DIR)/tools/host
 SCRIPTS_PATH    = $(SRC_DIR)/tools/scripts
-TOOLS_CXX_BINS  = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo musenc)
+TOOLS_CXX_BINS  = $(addprefix $(BUILD_DIR)/tools/, unpak musenc)
 TOOLS_PY_BINS   = $(addprefix $(BUILD_DIR)/tools/, symbolize)
 TOOLS_BINS      = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
 HOST_CXX       ?= c++
@@ -269,7 +169,7 @@ IRX_FILES = iomanX.irx fileXio.irx \
 
 IRX_OBJS  = $(addprefix $(OUTPUT_DIR)/irx/, $(IRX_FILES:.irx=.o))
 
-EE_OBJS = $(C_OBJS) $(CXX_OBJS) $(VU_OBJS) $(IRX_OBJS) $(MINIZ_OBJS) $(SAVE_TABLES_O)
+EE_OBJS = $(C_OBJS) $(CXX_OBJS) $(VU_OBJS) $(IRX_OBJS) $(MINIZ_OBJS)
 DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d) $(MINIZ_OBJS:.o=.d)
 
 # ----------------------------------------------------------------------------
@@ -292,34 +192,27 @@ else
     CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=1 -DPS2_QUAKE_ASSERTS=1 -DPS2_QUAKE_PROFILE=1
 endif
 
-COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS)
+COMMON_DEFS = -DPS2_QUAKE $(CONFIG_DEFS)
 
 EE_INCS += -I$(SRC_DIR)
 
-# The C side of the build is now just id's C89 engine sources, the vendored
-# dlmalloc and the bin2c IRX blobs - everything of ours is C++. Under GCC 15
-# that C needs C89 forced, -fcommon restored, and the constructs GCC 14+
-# promoted to hard errors downgraded so the untouched engine still compiles.
+# The C side of the build is QuakeSpasm, the vendored dlmalloc and the bin2c IRX
+# blobs - everything of ours is C++. QuakeSpasm is C11: common.h's q_min/q_max/CLAMP
+# use _Generic there, and GCC 15 would otherwise compile it as C23. It keeps the
+# SDK's -Wall and is not held to the backend's -Werror set.
 #
-# -fsingle-precision-constant: id's code writes its float constants unsuffixed (x * 0.5),
-# which C makes double - and the EE has no double FPU, so every one of those turned a float
-# expression into libgcc soft-float calls. The backend's C++ needs no such flag: it uses f
-# suffixes, and -Wdouble-promotion enforces them.
+# -fsingle-precision-constant: QuakeSpasm writes its float constants unsuffixed
+# (x * 0.5), which C makes double - and the EE has no double FPU, so every one of
+# those would turn a float expression into libgcc soft-float calls. The backend's
+# C++ needs no such flag: it uses f suffixes, and -Wdouble-promotion enforces them.
 #
-# -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast: Allow integer<=>pointer conversions,
-# PS2 has 32bit pointers so sizeof(int) == sizeof(void*).
-#
-EE_CFLAGS += -std=gnu89 -fcommon -fno-strict-aliasing -fsingle-precision-constant $(COMMON_DEFS) \
-	-Wno-implicit-function-declaration -Wno-missing-braces -Wno-int-conversion \
-	-Wno-pointer-sign -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
-	-Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function \
-	-Wno-switch -MMD -MP
+EE_CFLAGS += -std=gnu11 -fno-strict-aliasing -fsingle-precision-constant $(COMMON_DEFS) -MMD -MP
 
 # Strict, portable, warnings-as-errors for the new C++ backend (applies ONLY to
-# our .cpp - the untouched engine C above stays lenient). The set targets
-# portability and undefined behaviour: value-changing/alignment/format hazards,
-# accidental float->double promotion (the EE has no hardware doubles), shadowing,
-# VLAs, and GCC's near-zero-false-positive logic/duplicate-branch checks.
+# our .cpp - QuakeSpasm's C above stays lenient). The set targets portability and
+# undefined behaviour: value-changing/alignment/format hazards, accidental
+# float->double promotion (the EE has no hardware doubles), shadowing, VLAs, and
+# GCC's near-zero-false-positive logic/duplicate-branch checks.
 # -Wconversion/-Wsign-conversion flag every implicit value-, sign- or precision-
 # changing conversion (all backend code must cast intentionally); SDK/STL library
 # conversions are silenced via -isystem below, so only our own code is enforced.
@@ -385,11 +278,16 @@ endif
 # generic %.o rules from Makefile.eeglobal so objects land under build/<config>/
 # mirroring the src/ tree. ($(EE_BIN) link rule comes from Makefile.eeglobal_cpp.)
 #
-# One rule per language: the C one is only reached by the engine and dlmalloc,
+# One rule per language: the C one is only reached by QuakeSpasm and dlmalloc,
 # every backend source goes through the C++ one.
 $(C_OBJS): $(OUTPUT_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
+
+# dlmalloc is configured with MORECORE_CANNOT_TRIM (see dlmalloc.c), which leaves its
+# sYSTRIm helper unused. Vendored code: the warning is silenced for that one file
+# rather than for QuakeSpasm as well.
+$(OUTPUT_DIR)/$(SRC_DIR)/ps2/system/dlmalloc/dlmalloc.o: EE_CFLAGS += -Wno-unused-function
 
 $(CXX_OBJS): $(OUTPUT_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
@@ -403,26 +301,15 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
 # miniz, straight out of the submodule. Always -O3, in the debug config too: deflating
 # a level's state is a few hundred KB of work on a slow CPU, done while the player waits.
-# It is C99 (the engine's C is built as C89), and its warnings are not ours to fix.
+# Its warnings are not ours to fix.
 $(MINIZ_OBJS): $(OUTPUT_DIR)/miniz/%.o: $(MINIZ_PATH)/%.c
 	@mkdir -p $(dir $@)
-	$(EE_CC) $(EE_CFLAGS) -std=gnu11 -O3 -w -I$(MINIZ_PATH) -I$(MINIZ_CFG_PATH) -c $< -o $@
+	$(EE_CC) $(EE_CFLAGS) -O3 -w -I$(MINIZ_PATH) -I$(MINIZ_CFG_PATH) -c $< -o $@
 
 # A clone without the submodule has no miniz sources, so the rule above has nothing to
 # build from; this one stops with the fix instead. It never runs while the files exist.
 $(MINIZ_PATH)/%.c:
 	@echo "$(MINIZ_PATH) is empty - run 'git submodule update --init'"; exit 1
-
-# The save tables list every function and mmove_t the game defines, so they are made
-# again whenever a game object changes. They include no game headers (see the script),
-# so they build like any other engine C file.
-$(SAVE_TABLES_C): $(GAME_C_OBJS) $(SAVE_TABLES_GEN)
-	@mkdir -p $(dir $@)
-	@echo "gen_save_tables -> $@"
-	@python3 $(SAVE_TABLES_GEN) --nm $(EE_TOOL_PREFIX)nm --src $(SRC_DIR)/game -o $@ $(GAME_C_OBJS)
-
-$(SAVE_TABLES_O): $(SAVE_TABLES_C)
-	$(EE_CC) $(EE_CFLAGS) -c $< -o $@
 
 # The vclpp submodule, through its own Makefile. That one recompiles on every
 # run, so the up-to-date check is made here instead: it runs again only when the
@@ -485,7 +372,7 @@ $(BUILD_DIR)/tools/musenc: $(SRC_DIR)/ps2/audio/spu_adpcm.h
 # MUSIC_DIR, any case, is encoded to a lowercase trackNN.adp beside it, skipping the ones
 # already newer than both their .wav and the encoder. The .wav files are only the source;
 # the game never reads them, so they needn't go onto the USB stick.
-MUSIC_DIR ?= baseq2/music
+MUSIC_DIR ?= id1/music
 
 music: $(BUILD_DIR)/tools/musenc
 	@found=0; \
@@ -506,12 +393,12 @@ $(TOOLS_PY_BINS): $(BUILD_DIR)/tools/%: $(SCRIPTS_PATH)/%.py
 	@chmod +x $@
 
 # PCSX2 exposes the ELF's directory as host:, so the game data must be reachable
-# as build/<config>/baseq2. A symlink back to the repo's baseq2/ does it.
-$(OUTPUT_DIR)/baseq2:
+# as build/<config>/id1. A symlink back to the repo's id1/ does it.
+$(OUTPUT_DIR)/id1:
 	@mkdir -p $(dir $@)
-	ln -sfn $(abspath baseq2) $@
+	ln -sfn $(abspath id1) $@
 
-run: all $(OUTPUT_DIR)/baseq2
+run: all $(OUTPUT_DIR)/id1
 	$(PCSX2) -batch -elf $(abspath $(GAME_ELF))
 
 # Regenerate compile_commands.json so the editor's IntelliSense uses the exact

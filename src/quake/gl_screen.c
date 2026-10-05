@@ -742,95 +742,11 @@ SCREEN SHOTS
 ==============================================================================
 */
 
-static void SCR_ScreenShot_Usage (void)
-{
-	Con_Printf ("usage: screenshot <format> <quality>\n");
-	Con_Printf ("   format must be \"png\" or \"tga\" or \"jpg\"\n");
-	Con_Printf ("   quality must be 1-100\n");
-	return;
-}
-
-/*
-==================
-SCR_ScreenShot_f -- johnfitz -- rewritten to use Image_WriteTGA
-==================
-*/
+// [PS2_QUAKE]: no screenshots on the PS2. SCR_ScreenShot_f read the GL back buffer and wrote it
+// out as PNG/TGA/JPG, and the PS2 has neither the readback nor the image writers.
 void SCR_ScreenShot_f (void)
 {
-	byte	*buffer;
-	char	ext[4];
-	char	imagename[16];  //johnfitz -- was [80]
-	char	checkname[MAX_OSPATH];
-	int	i, quality;
-	qboolean	ok;
-
-	Q_strncpy (ext, "png", sizeof(ext));
-
-	if (Cmd_Argc () >= 2)
-	{
-		const char	*requested_ext = Cmd_Argv (1);
-
-		if (!q_strcasecmp ("png", requested_ext)
-		    || !q_strcasecmp ("tga", requested_ext)
-		    || !q_strcasecmp ("jpg", requested_ext))
-			Q_strncpy (ext, requested_ext, sizeof(ext));
-		else
-		{
-			SCR_ScreenShot_Usage ();
-			return;
-		}
-	}
-
-// read quality as the 3rd param (only used for JPG)
-	quality = 90;
-	if (Cmd_Argc () >= 3)
-		quality = Q_atoi (Cmd_Argv(2));
-	if (quality < 1 || quality > 100)
-	{
-		SCR_ScreenShot_Usage ();
-		return;
-	}
-	
-// find a file name to save it to
-	for (i=0; i<10000; i++)
-	{
-		q_snprintf (imagename, sizeof(imagename), "spasm%04i.%s", i, ext);	// "fitz%04i.tga"
-		q_snprintf (checkname, sizeof(checkname), "%s/%s", com_gamedir, imagename);
-		if (Sys_FileType(checkname) == FS_ENT_NONE)
-			break;	// file doesn't exist
-	}
-	if (i == 10000)
-	{
-		Con_Printf ("SCR_ScreenShot_f: Couldn't find an unused filename\n");
-		return;
-	}
-
-//get data
-	if (!(buffer = (byte *) malloc(glwidth*glheight*3)))
-	{
-		Con_Printf ("SCR_ScreenShot_f: Couldn't allocate memory\n");
-		return;
-	}
-
-	glPixelStorei (GL_PACK_ALIGNMENT, 1);/* for widths that aren't a multiple of 4 */
-	glReadPixels (glx, gly, glwidth, glheight, GL_RGB, GL_UNSIGNED_BYTE, buffer);
-
-// now write the file
-	if (!q_strncasecmp (ext, "png", sizeof(ext)))
-		ok = Image_WritePNG (imagename, buffer, glwidth, glheight, 24, false);
-	else if (!q_strncasecmp (ext, "tga", sizeof(ext)))
-		ok = Image_WriteTGA (imagename, buffer, glwidth, glheight, 24, false);
-	else if (!q_strncasecmp (ext, "jpg", sizeof(ext)))
-		ok = Image_WriteJPG (imagename, buffer, glwidth, glheight, 24, quality, false);
-	else
-		ok = false;
-
-	if (ok)
-		Con_Printf ("Wrote %s\n", imagename);
-	else
-		Con_Printf ("SCR_ScreenShot_f: Couldn't create %s\n", imagename);
-
-	free (buffer);
+	Con_Printf ("screenshot is not supported on the PS2\n");
 }
 
 

@@ -88,6 +88,15 @@ COMPILE_TIME_ASSERT(sockaddr, offsetof(struct sockaddr, sa_family) == SA_FAM_OFF
 #endif	/* end of unix stuff */
 
 
+/* [PS2_QUAKE]: no sockets on the PS2, where only the loopback driver is built. net_defs.h still
+ * declares the LAN driver interface in terms of a socket handle, so the type has to exist. */
+#if defined(PLATFORM_PS2)
+typedef int	sys_socket_t;
+#define	INVALID_SOCKET	(-1)
+#define	SOCKET_ERROR	(-1)
+#endif	/* PLATFORM_PS2 */
+
+
 /* amiga includes and compatibility macros */
 #if defined(PLATFORM_AMIGA) /* Amiga bsdsocket.library */
 

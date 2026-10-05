@@ -44,6 +44,12 @@ Some files with GL names hold engine logic and stay, with only their GL halves c
 the loading plaque), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation) and
 `gl_fog.c` (its message parsing must run, or the stream desyncs).
 
+Two PS2 headers sit at the seam. `src/ps2/renderer/gl_types.h` gives quakedef.h the GL type
+names QuakeSpasm's headers are written with, and nothing else: with no GL function declared,
+a stray GL call fails to compile. `src/ps2/engine_hooks.h` declares what engine files call in
+the backend that no QuakeSpasm header declares (the status bar's alpha and scissor, the view
+blend) and the engine state the backend reads (`active_particles`).
+
 ## Known engine quirks
 
 Record QuakeSpasm quirks here as they are found.

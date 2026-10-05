@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sbar.c -- status bar code
 
 #include "quakedef.h"
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]
 
 static int		sb_updates;		// if >= vid.numpages, no update needed
 
@@ -281,13 +282,7 @@ Sbar_DrawPicAlpha -- johnfitz
 */
 void Sbar_DrawPicAlpha (int x, int y, qpic_t *pic, float alpha)
 {
-	glDisable (GL_ALPHA_TEST);
-	glEnable (GL_BLEND);
-	glColor4f(1,1,1,alpha);
-	Draw_Pic (x, y + 24, pic);
-	glColor4f(1,1,1,1); // ericw -- changed from glColor3f to work around intel 855 bug with "r_oldwater 0" and "scr_sbaralpha 0"
-	glDisable (GL_BLEND);
-	glEnable (GL_ALPHA_TEST);
+	PS2_DrawPicAlpha (x, y + 24, pic, alpha); // [PS2_QUAKE]: was a GL blend bracket around Draw_Pic
 }
 
 /*
@@ -327,8 +322,7 @@ void Sbar_DrawScrollString (int x, int y, int width, const char *str)
 	if (cl.gametype != GAME_DEATHMATCH)
 		left += (((float)glwidth - 320.0 * scale) / 2);
 
-	glEnable (GL_SCISSOR_TEST);
-	glScissor (left, 0, width * scale, glheight);
+	PS2_SetScissor2D (left, 0, width * scale, glheight); // [PS2_QUAKE]: was glScissor
 
 	len = strlen(str)*8 + 40;
 	ofs = ((int)(realtime*30))%len;
@@ -338,7 +332,7 @@ void Sbar_DrawScrollString (int x, int y, int width, const char *str)
 	Sbar_DrawCharacter (x - ofs + len - 16, y, '/');
 	Sbar_DrawString (x - ofs + len, y, str);
 
-	glDisable (GL_SCISSOR_TEST);
+	PS2_ResetScissor2D (); // [PS2_QUAKE]
 }
 
 /*

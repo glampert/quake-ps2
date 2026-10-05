@@ -78,6 +78,12 @@
 #	define	PLATFORM_HAIKU		1
 #   endif
 
+#elif defined(_EE)	/* [PS2_QUAKE]: the PlayStation 2's Emotion Engine (ps2dev toolchain) */
+
+#   if !defined(PLATFORM_PS2)
+#	define	PLATFORM_PS2		1
+#   endif
+
 #else	/* here goes the unix platforms */
 
 #if defined(__unix) || defined(__unix__) || defined(unix)	|| \
@@ -167,6 +173,8 @@
 #	define	PLATFORM_STRING	"GNU/Hurd"
 #elif defined(PLATFORM_HAIKU)
 #	define	PLATFORM_STRING	"Haiku"
+#elif defined(PLATFORM_PS2)	/* [PS2_QUAKE] */
+#	define	PLATFORM_STRING	"PlayStation 2"
 #elif defined(PLATFORM_UNIX)
 #	define	PLATFORM_STRING	"Unix"
 #else

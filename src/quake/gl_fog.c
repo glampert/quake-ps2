@@ -295,72 +295,9 @@ float Fog_GetDensity (void)
 		return fog_density;
 }
 
-/*
-=============
-Fog_SetupFrame
-
-called at the beginning of each frame
-=============
-*/
-void Fog_SetupFrame (void)
-{
-	glFogfv(GL_FOG_COLOR, Fog_GetColor());
-	glFogf(GL_FOG_DENSITY, Fog_GetDensity() / 64.0);
-}
-
-/*
-=============
-Fog_EnableGFog
-
-called before drawing stuff that should be fogged
-=============
-*/
-void Fog_EnableGFog (void)
-{
-	if (Fog_GetDensity() > 0)
-		glEnable(GL_FOG);
-}
-
-/*
-=============
-Fog_DisableGFog
-
-called after drawing stuff that should be fogged
-=============
-*/
-void Fog_DisableGFog (void)
-{
-	if (Fog_GetDensity() > 0)
-		glDisable(GL_FOG);
-}
-
-/*
-=============
-Fog_StartAdditive
-
-called before drawing stuff that is additive blended -- sets fog color to black
-=============
-*/
-void Fog_StartAdditive (void)
-{
-	vec3_t color = {0,0,0};
-
-	if (Fog_GetDensity() > 0)
-		glFogfv(GL_FOG_COLOR, color);
-}
-
-/*
-=============
-Fog_StopAdditive
-
-called after drawing stuff that is additive blended -- restores fog color
-=============
-*/
-void Fog_StopAdditive (void)
-{
-	if (Fog_GetDensity() > 0)
-		glFogfv(GL_FOG_COLOR, Fog_GetColor());
-}
+// [PS2_QUAKE]: Fog_SetupFrame, Fog_EnableGFog/Fog_DisableGFog and Fog_StartAdditive/Fog_StopAdditive
+// set OpenGL fog state around the GL renderer's draws. The PS2 renderer reads Fog_GetColor and
+// Fog_GetDensity and programs the GS itself.
 
 //==============================================================================
 //
@@ -410,18 +347,6 @@ void Fog_Init (void)
 	fog_red = DEFAULT_GRAY;
 	fog_green = DEFAULT_GRAY;
 	fog_blue = DEFAULT_GRAY;
-
-	Fog_SetupState ();
 }
 
-/*
-=============
-Fog_SetupState
- 
-ericw -- moved from Fog_Init, state that needs to be setup when a new context is created
-=============
-*/
-void Fog_SetupState (void)
-{
-	glFogi(GL_FOG_MODE, GL_EXP2);
-}
+// [PS2_QUAKE]: Fog_SetupState set the OpenGL fog mode; there is no OpenGL on the PS2.
