@@ -1,0 +1,858 @@
+/* ================================================================================================
+ * File: ref.cpp - the "refresh" module. Glue between the PS2 renderer and Quake 2.
+ * Brief: The refexport_t implementation - the functions the Quake II client calls
+ *        to draw. Implements the full 2D overlay path (console, HUD, menus) -
+ *        pics, glyphs, tile fills, solid fills and fades - plus cinematic
+ *        playback (cinematic.cpp) and the image/model registration cycle
+ *        (assets load from disk on first use and are freed when a level stops
+ *        referencing them). RenderFrame draws the 3D world geometry (view.cpp)
+ *
+ * This source code is released under the GNU GPL v2 license.
+ * ================================================================================================ */
+
+#include "ps2/common.h"
+#include "ps2/renderer/gs.h"
+#include "ps2/renderer/vram.h"
+#include "ps2/renderer/vu1.h"
+#include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/render_system.h"
+#include "ps2/renderer/model.h"
+#include "ps2/renderer/model_load.h"
+#include "ps2/renderer/texture.h"
+#include "ps2/renderer/lightmap.h"
+#include "ps2/renderer/cinematic.h"
+#include "ps2/renderer/view.h"
+#include "ps2/renderer/md2.h"
+#include "ps2/renderer/sky.h"
+#include "ps2/renderer/profile.h"
+#include "ps2/tests/draw_cube.h"
+#include "ps2/tests/cinematics.h"
+#include "ps2/tests/map_cycle.h"
+#include "ps2/tests/save_test.h"
+#include "ps2/tests/perf_run.h"
+#include "ps2/builtin/builtin.h"
+
+#include <algorithm>
+#include <cstdio>
+
+namespace {
+
+// Size in pixels of one console font glyph (conchars is a 16x16 grid of these).
+constexpr int kGlyphSize = 8;
+
+// Vertex colour applied to textured 2D (GS modulate: 128 = texels unchanged).
+constexpr u8 kUiBrightness[3] = { 128, 128, 128 };
+constexpr u8 kYellow[3]       = { 128, 128, 0   };
+constexpr u8 kGreen[3]        = { 0,   128, 0   };
+constexpr u8 kRed[3]          = { 128, 0,   0   };
+
+static const cvar_t * s_showDebugOverlays = nullptr; // Master switch that turns all overlays on/off.
+static const cvar_t * s_showFpsCount      = nullptr;
+static const cvar_t * s_showMemStats      = nullptr;
+static const cvar_t * s_showVramStats     = nullptr;
+static const cvar_t * s_showDrawStats     = nullptr;
+static const cvar_t * s_showProfileStats  = nullptr;
+
+// How the frame is steered, sampled every frame and handed to rs::Begin/EndFrame so both can be
+// flipped live and judged on hardware.
+//
+// ps2_gs_latency leaves the frame drawing at EndFrame and shows it at the next one, at the cost of
+// one frame of input lag. ps2_fb_dither hides the banding a 16-bit framebuffer shows on gradients
+// (the skybox looks worse with it on, which is why it is off by default).
+static const cvar_t * s_gsLatency    = nullptr;
+static const cvar_t * s_enableDither = nullptr;
+
+// ps2_mipmaps: whether walls load with the mip levels their WAL files carry. Read when a map
+// loads, not live, since it decides what loads: 0 is exactly the renderer before mipmapping, in
+// memory and VRAM as well as on screen.
+static const cvar_t * s_wallMipmaps = nullptr;
+
+// Built-ins used every frame, cached at init to skip the name lookup.
+static const ps2::tex::Texture * s_texConchars = nullptr;
+static const ps2::tex::Texture * s_texBacktile = nullptr;
+
+// A missing image draws as the pink/black checkerboard instead of crashing or
+// silently vanishing - obvious on screen, and callers get sane dimensions.
+const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2::tex::ImageType type)
+{
+    const ps2::tex::Texture * texture = ps2::tex::Find(name, type);
+    if (texture == nullptr)
+    {
+        // A touch-only pass returns nothing for what is not cached yet, which is not missing.
+        if (!ps2::tex::IsTouchOnly())
+        {
+            Com_DPrintf("Missing texture '%s', using placeholder.\n", name);
+        }
+        texture = &ps2::tex::DebugTexture();
+    }
+    return *texture;
+}
+
+void DrawGlyph(int x, int y, int c, const u8 color[3])
+{
+    // Draws one 8x8 graphics character with 0 being transparent.
+    // It can be clipped to the top of the screen to allow the console
+    // to be smoothly scrolled off. Based on Draw_Char() from ref_gl.
+
+    c &= 255;
+
+    if ((c & 127) == ' ')
+    {
+        return; // Whitespace
+    }
+    if (y <= -kGlyphSize)
+    {
+        return; // Totally off screen
+    }
+
+    const int row = (c >> 4) * kGlyphSize;
+    const int col = (c & 15) * kGlyphSize;
+
+    ps2::rs::DrawTexturedRect(*s_texConchars, x, y, kGlyphSize, kGlyphSize,
+                              col, row, col + kGlyphSize, row + kGlyphSize,
+                              color);
+}
+
+void DrawInternalString(int x, int y, const char * str, const u8 color[3] = kUiBrightness)
+{
+    const int initialX = x;
+    for (; *str != '\0'; ++str)
+    {
+        DrawGlyph(x, y, *str, color);
+        x += kGlyphSize;
+        if (*str == '\n')
+        {
+            y += kGlyphSize + 2; // 2 pixels of spacing between lines.
+            x = initialX;
+        }
+    }
+}
+
+// Frames-per-second counter at the top-right corner of the screen.
+//
+// Read off gs::PresentClock rather than a clock sampled here. Its stamps sit on the vsyncs the
+// frames went up on, so the rate comes out exact; a sample taken here lands after however much of
+// the frame came first, which moved enough between frames - on top of Sys_Milliseconds' whole
+// milliseconds - that a 4-frame average read 61 on a third of its updates and 59 on one in twenty
+// with every frame on time at 59.94 Hz. Each reading averages half a second, and is replaced as
+// often.
+//
+// The colour counts missed vsyncs instead of comparing against 60, which NTSC's 59.94 Hz sits just
+// under and PAL's 50 Hz never reaches: green while every frame went up on the field after the
+// last, yellow once one did not, red at half the refresh rate or below.
+void DrawFpsCounter()
+{
+    // Restarted each time the counter is switched on, so the time it spent hidden never lands in
+    // an average.
+    static struct
+    {
+        bool                  active;
+        bool                  published;
+        ps2::gs::PresentClock windowStart;
+        int                   fps;
+        const u8 *            color;
+    } s_fps;
+
+    if (s_showFpsCount->value == 0.0f)
+    {
+        s_fps.active = false;
+        return;
+    }
+
+    const ps2::gs::PresentClock & clock = ps2::gs::GetPresentClock();
+
+    // A window opens on a present, so both its ends are vsyncs. None has happened yet when the
+    // counter comes on at boot, so it waits for the first.
+    if (!s_fps.active || s_fps.windowStart.frames == 0)
+    {
+        s_fps.active      = true;
+        s_fps.published   = false;
+        s_fps.windowStart = clock;
+    }
+
+    const u32 elapsed = clock.lastTicks - s_fps.windowStart.lastTicks;
+    if (elapsed >= (ps2::gs::kPresentTicksPerSec / 2u))
+    {
+        const u32 frames = clock.frames - s_fps.windowStart.frames;
+        const u32 fields = clock.fields - s_fps.windowStart.fields;
+
+        // 32-bit, like Sys_Milliseconds: the R5900 has no 64-bit multiply or divide. A window holds
+        // a few dozen frames at most, nowhere near overflowing frames * 576000.
+        s_fps.fps         = static_cast<int>(((frames * ps2::gs::kPresentTicksPerSec) + (elapsed / 2u)) / elapsed);
+        s_fps.color       = (fields == frames) ? kGreen : (fields >= (2u * frames)) ? kRed : kYellow;
+        s_fps.published   = true;
+        s_fps.windowStart = clock;
+    }
+
+    char text[32] = "FPS --"; // until the first window closes
+    const u8 * color = kUiBrightness;
+    if (s_fps.published)
+    {
+        std::snprintf(text, sizeof(text), "FPS %d", s_fps.fps);
+        color = s_fps.color;
+    }
+
+    // A black background to give the text more contrast.
+    ps2::rs::FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
+    DrawInternalString(viddef.width - 64, 4, text, color);
+}
+
+// Per-event frame time overlay, stacked under the FPS counter in the top-right
+// corner: one line per PS2_PROFILE_SCOPEDPS2_PROFILE_SCOPED_EVENT site flagged
+// kScreenOverlay, showing what that site cost over one frame.
+//
+// The numbers are the previous frame's, not a running total or an average:
+// PS2_BeginFrame rolls the accumulators over, so the frame being reported is
+// complete by the time this draws - down to the probes that only close after
+// it (VSync, Frame). A site that never ran in that frame (RenderAlphaSurfaces
+// with nothing translucent in view, say) reads 0.000, and one that ran several
+// times shows the sum of its calls.
+void DrawProfileOverlay()
+{
+#if PS2_QUAKE_PROFILE
+
+    if (s_showProfileStats->value == 0.0f)
+    {
+        return;
+    }
+
+    // Cap the panel so a heavily instrumented build can't run off the screen.
+    // 24 overlay events today; the slack is for probes added while chasing a
+    // specific frame cost. At 32 the panel is 338px tall, which still clears
+    // the bottom of a 448-line NTSC field.
+    constexpr int kMaxRows = 32;
+
+    const ps2::debug::ProfileEvent * rows[kMaxRows];
+    int numRows = 0;
+
+    for (const auto * ev = ps2::debug::ProfileEventList();
+         ev != nullptr && numRows < kMaxRows;
+         ev = ev->next)
+    {
+        if (ev->flags & ps2::debug::kScreenOverlay)
+        {
+            rows[numRows++] = ev;
+        }
+    }
+
+    std::sort(rows, rows + numRows,
+        [](const ps2::debug::ProfileEvent * a, const ps2::debug::ProfileEvent * b) -> bool
+        {
+            return a->sortKey < b->sortKey;
+        });
+
+    if (numRows == 0)
+    {
+        return; // Nothing instrumented has been reached yet.
+    }
+
+    constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
+    constexpr int kPanelWidth = 148;
+    constexpr int kPadding    = 4;
+
+    const int panelHeight = ((numRows + 1) * kLineHeight) + (kPadding * 2); // Header + one per event.
+
+    // Right edge aligned with the FPS counter above.
+    const int panelX = viddef.width - kPanelWidth;
+    const int panelY = 16; // Clears the 12px FPS box at y = 2.
+
+    // A black background to give the text more contrast.
+    ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+
+    const int textX = panelX + kPadding;
+    int textY = panelY + kPadding;
+
+    DrawInternalString(textX, textY, "FRAME TIMES (ms)");
+    textY += kLineHeight;
+
+    char line[64];
+    char millisec[16];
+    for (int i = 0; i < numRows; ++i)
+    {
+        const auto * const ev = rows[i];
+        std::snprintf(line, sizeof(line), "%-10s %6s", ev->name,
+                      ps2::debug::ProfileFormatMillisec(ev->lastFrameCycles, millisec, sizeof(millisec)));
+
+        const u8* color = kUiBrightness;
+        if (ev == &ps2::prof_evt::Frame) // Sort key 0 = the "Frame" root
+        {
+            const auto ms = ev->FrameMilliseconds();
+            color = kGreen;
+            if (ms > 16) // below 60fps
+            {
+                color = kYellow;
+            }
+            if (ms > 33) // below 30fps
+            {
+                color = kRed;
+            }
+        }
+
+        DrawInternalString(textX, textY, line, color);
+        textY += kLineHeight;
+    }
+
+#endif // PS2_QUAKE_PROFILE
+}
+
+// Memory usage overlay in the lower-right corner: one line per PS2MemTag with
+// its running byte total, followed by the grand total across all tags.
+void DrawMemUsageOverlay()
+{
+    if (s_showMemStats->value == 0.0f)
+    {
+        return;
+    }
+
+    constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
+    constexpr int kNumLines   = static_cast<int>(ps2::heap::MemTag::TagCount) + 4; // Header + one per tag + total + peak + sbrk left.
+    constexpr int kPanelWidth = 176;
+    constexpr int kPadding    = 4;
+
+    const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
+    const int panelX = viddef.width  - kPanelWidth;
+    const int panelY = viddef.height - panelHeight;
+
+    // A black background to give the text more contrast.
+    ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+
+    const int textX = panelX + kPadding;
+    int textY = panelY + kPadding;
+
+    DrawInternalString(textX, textY, "MEM USAGE");
+    textY += kLineHeight;
+
+    char line[64];
+    char unit[ps2::heap::kMemUnitStrSize];
+    size_t totalBytes = 0;
+    for (int i = 0; i < static_cast<int>(ps2::heap::MemTag::TagCount); ++i)
+    {
+        const auto tag = static_cast<ps2::heap::MemTag>(i);
+        const size_t tagBytes = ps2::heap::GetStatsForMemTag(tag).totalBytes;
+        totalBytes += tagBytes;
+
+        std::snprintf(line, sizeof(line), "%-10s %s",
+                      ps2::heap::GetNameForMemTag(tag),
+                      ps2::heap::FormatMemoryUnit(tagBytes, true, unit, sizeof(unit)));
+
+        DrawInternalString(textX, textY, line);
+        textY += kLineHeight;
+    }
+
+    std::snprintf(line, sizeof(line), "%-10s %s", "Total",
+                  ps2::heap::FormatMemoryUnit(totalBytes, true, unit, sizeof(unit)));
+    DrawInternalString(textX, textY, line);
+    textY += kLineHeight;
+
+    // The high-water of Total, which is the number that decides whether a map
+    // change fits: the transient where the old map is still resident while the new
+    // one loads is long gone by the time anyone reads Total off the screen.
+    std::snprintf(line, sizeof(line), "%-10s %s", "Peak",
+                  ps2::heap::FormatMemoryUnit(ps2::heap::GetPeakMemBytes(), true, unit, sizeof(unit)));
+    DrawInternalString(textX, textY, line);
+    textY += kLineHeight;
+
+    std::snprintf(line, sizeof(line), "%-10s %s", "Sbrk Left",
+                  ps2::heap::FormatMemoryUnit(ps2::heap::GetAvailableMemBytes(), true, unit, sizeof(unit)));
+    DrawInternalString(textX, textY, line);
+}
+
+// GS VRAM texture-heap overlay in the lower-left corner: how much of the heap is
+// committed, the number of resident textures, the texture uploads done so far
+// this frame (streaming pressure - high or spiking means the heap is thrashing)
+// and the GS drains a full heap forced this frame (see rs::EnsureTextureResident;
+// anything but zero means the frame's working set does not fit).
+void DrawVramUsageOverlay()
+{
+    if (s_showVramStats->value == 0.0f)
+    {
+        return;
+    }
+
+    constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
+    constexpr int kNumLines   = 5;              // Header + four stats.
+    constexpr int kPanelWidth = 174;
+    constexpr int kPadding    = 4;
+
+    const ps2::vram::Stats stats = ps2::vram::GetStats();
+
+    const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
+    const int panelX = 0;                            // flush to the left edge
+    const int panelY = viddef.height - panelHeight;  // ...and the bottom
+
+    // A black background to give the text more contrast.
+    ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+
+    const int textX = panelX + kPadding;
+    int textY = panelY + kPadding;
+
+    DrawInternalString(textX, textY, "VRAM USAGE");
+    textY += kLineHeight;
+
+    char line[64];
+    char unit[ps2::heap::kMemUnitStrSize];
+
+    std::snprintf(line, sizeof(line), "%-10s %s", "Used",
+                  ps2::heap::FormatMemoryUnit(static_cast<size_t>(stats.totalWords - stats.freeWords) * 4u,
+                                              true, unit, sizeof(unit)));
+    DrawInternalString(textX, textY, line);
+    textY += kLineHeight;
+
+    std::snprintf(line, sizeof(line), "%-10s %s", "Total",
+                  ps2::heap::FormatMemoryUnit(static_cast<size_t>(stats.totalWords) * 4u,
+                                              true, unit, sizeof(unit)));
+    DrawInternalString(textX, textY, line);
+    textY += kLineHeight;
+
+    std::snprintf(line, sizeof(line), "%-10s %d", "Resident", stats.residentTextures);
+    DrawInternalString(textX, textY, line);
+    textY += kLineHeight;
+
+    // Uploads and heap-full drains share a line to keep the panel compact; the
+    // drain count is the one to watch, since it is zero on a healthy frame.
+    std::snprintf(line, sizeof(line), "%-10s %d (%d sync)", "Uploads",
+                  stats.uploadsThisFrame, stats.oomSyncsThisFrame);
+    DrawInternalString(textX, textY, line);
+}
+
+// 3D draw statistics overlay in the top-left corner: what the last rendered
+// frame's view pass walked, culled, clipped and submitted to VU1.
+void DrawDrawStatsOverlay()
+{
+#if PS2_QUAKE_PROFILE
+
+    if (s_showDrawStats->value == 0.0f)
+    {
+        return;
+    }
+
+    const ps2::view::DrawStats & stats = ps2::view::GetStats();
+    const ps2::rs::DrawStats & rcStats = ps2::rs::GetStats();
+    const ps2::lm::Stats & lmStats = ps2::lm::GetStats();
+
+    const struct { const char * label; int value; } rows[] = {
+        { "Nodes",    stats.nodesWalked    },
+        { "Surfs",    stats.surfaces       },
+        { "Alpha",    stats.surfacesAlpha  },
+        { "Turb",     stats.surfacesTurb   },
+        { "Sky",      stats.skyFaces       },
+        { "Tris",     rcStats.trisDrawn    },
+        { "Ents",     stats.entities       },
+        { "Prts",     rcStats.particles    },
+        { "DLights",  stats.dlights        },
+        { "Batches",  rcStats.drawBatches  },
+        { "Clipped",  rcStats.trisClipped  },
+        { "ClipMaxV", rcStats.clipMaxVerts },
+        { "Culled",   rcStats.trisCulled   },
+        { "BoxCull",  stats.boxesCulled    },
+        // Lightmap rebuilds this frame. LmDyn tracks moving dynamic lights and
+        // LmRest the surfaces they have just left; both should fall back to
+        // zero once the lights stop moving. A stuck LmRest means the restore
+        // path is not settling.
+        { "LmAtlas", lmStats.atlases        },
+        { "LmStyle", lmStats.styleUpdates   },
+        { "LmDyn",   lmStats.dynamicUpdates },
+        { "LmRest",  lmStats.restoreUpdates },
+        // Most qwords one GIF block in the frame chain has ever held - the 2D
+        // overlay in practice, since the clear is a fixed ~30. It is a slice of
+        // ChainCap below rather than a budget of its own, so what it says is how
+        // much of a chain half a full console wants on top of the world.
+        { "Gif2DPk", ps2::rs::Gif2DPeakQwords() },
+        // The frame DMA chain: high-water in KB against its capacity, how many
+        // times it was kicked last frame, and how many of those kicks were the
+        // overflow emergency rather than the end of the frame. One kick and zero
+        // emergency drains is the target; a drain firing every frame means
+        // cmdbuf::kHalfBytes is too small for the level.
+        { "ChainKB",  static_cast<int>(ps2::cmdbuf::PeakBytes() / 1024u) },
+        { "ChainKck", ps2::cmdbuf::KicksLastFrame()                      },
+        { "ChainDrn", ps2::cmdbuf::EmergencyDrainsLastFrame()            },
+    };
+
+    constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
+    constexpr int kPanelWidth = 136;
+    constexpr int kPadding    = 4;
+    constexpr int kNumLines   = ps2::ArrayLength(rows) + 1; // Header + one per counter.
+
+    const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
+
+    // A black background to give the text more contrast.
+    ps2::rs::FillRect(0, 0, kPanelWidth, panelHeight, 0, 0, 0, 255);
+
+    const int textX = kPadding;
+    int textY = kPadding;
+
+    DrawInternalString(textX, textY, "DRAW STATS");
+    textY += kLineHeight;
+
+    char line[64];
+    for (const auto & row : rows)
+    {
+        std::snprintf(line, sizeof(line), "%-8s %6d", row.label, row.value);
+        DrawInternalString(textX, textY, line);
+        textY += kLineHeight;
+    }
+
+#endif // PS2_QUAKE_PROFILE
+}
+
+void DrawDebugOverlays()
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Overlay);
+
+    // FPS counter can be toggled separately from the debug overlays.
+    DrawFpsCounter();
+
+    if (s_showDebugOverlays->value != 0.0f)
+    {
+        DrawProfileOverlay();
+        DrawMemUsageOverlay();
+        DrawVramUsageOverlay();
+        DrawDrawStatsOverlay();
+    }
+}
+
+} // namespace
+
+extern "C" {
+
+// ------------------------------------------------------------------------------------------------
+// Lifecycle
+// ------------------------------------------------------------------------------------------------
+
+qboolean PS2_RefInit(void * hinstance, void * wndproc)
+{
+    (void)hinstance;
+    (void)wndproc;
+
+    s_gsLatency         = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
+    s_enableDither      = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+    s_wallMipmaps       = Cvar_Get("ps2_mipmaps",    "1", CVAR_ARCHIVE);
+    s_showDebugOverlays = Cvar_Get("ps2_debug_overlays", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showFpsCount      = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showMemStats      = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showVramStats     = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showDrawStats     = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showProfileStats  = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    ps2::test::RegisterPerfTestCvar(); // Archived, so registered in every build; see perf_run.h.
+
+    const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
+    const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "448", CVAR_ARCHIVE);
+
+    // The cvars the GS and the texture cache are configured with. Both are latched here: the
+    // framebuffer format fixes the whole VRAM layout, and the intensity is baked into a CLUT the
+    // GS may only have rewritten while it is idle, so a change to either takes effect next run.
+    const cvar_t * const fb16Bit   = Cvar_Get("ps2_fb_16bit",  "1", CVAR_ARCHIVE);
+    const cvar_t * const intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
+
+    // Below 1 would darken rather than brighten, which is not what the cvar is for
+    // - ref_gl floors it at 1 too.
+    const float intensityScale = (intensity->value < 1.0f) ? 1.0f : intensity->value;
+
+    ps2::mod::Init();
+    ps2::tex::Init(intensityScale);
+    ps2::lm::Init();
+    ps2::view::Init();
+
+    const auto scratch = ps2::mod::WorldScratchBlock();
+    const ps2::gs::Config gsConfig = {
+        .palette          = global_palette,
+        .intensity        = intensityScale,
+        .width            = static_cast<int>(fbWidth->value),
+        .height           = static_cast<int>(fbHeight->value),
+        .framebuffer16Bit = (fb16Bit->value != 0.0f)
+    };
+    ps2::rs::Init(gsConfig, scratch.base, scratch.sizeBytes);
+
+    s_texConchars = ps2::tex::Find("conchars", ps2::tex::ImageType::Pic);
+    s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);
+    PS2_Assert(s_texConchars != nullptr && s_texBacktile != nullptr);
+
+    // Seed the cinematic palette from the game palette (the engine normally
+    // sets a real one before the first frame; this covers stray draws).
+    ps2::cin::SetPalette(nullptr);
+
+    viddef.width  = ps2::gs::Width();
+    viddef.height = ps2::gs::Height();
+
+#if !PS2_QUAKE_DEBUG
+    // Default clear color to black in release builds.
+    ps2::rs::SetClearColor(0, 0, 0);
+#endif // PS2_QUAKE_DEBUG
+
+    Com_DPrintf("PS2 refresh initialised: %dx%d\n", viddef.width, viddef.height);
+    Com_DPrintf("Debug: %s, Asserts: %s\n",
+                PS2_QUAKE_DEBUG   ? "yes" : "no",
+                PS2_QUAKE_ASSERTS ? "yes" : "no");
+
+    return true;
+}
+
+void PS2_RefShutdown() {}
+void PS2_AppActivate(qboolean activate) { (void)activate; }
+
+// ------------------------------------------------------------------------------------------------
+// Registration: textures load from disk on first use (PCX/WAL/TGA); the
+// Begin/End pair brackets a level change and frees the level assets it no
+// longer references. Same for models.
+// ------------------------------------------------------------------------------------------------
+
+// Called by the server just before it builds the next map's collision model,
+// so the old world's hunk and lightmap atlases are not still held through
+// the whole of server init.
+//
+// The atlases go if and only if the world went. ReleaseWorldModel keeps the world
+// when the new map is the one already loaded (a restart, or a savegame load),
+// and then LoadWorldModel finds it in the cache and never needs to reload it.
+void PS2_ReleaseWorldModel(const char * bspName)
+{
+    if (ps2::mod::ReleaseWorldModel(bspName))
+    {
+        ps2::lm::ReleaseAtlases();
+    }
+}
+
+void PS2_BeginRegistration(const char * mapName)
+{
+    ps2::debug::FrameLogMarkMap(mapName);
+    ps2::tex::BeginRegistration();
+
+    // A ps2_mipmaps change applies from here. The walls cached so far loaded the other way, so
+    // they all go, and the world with them - its surfaces point at them. Releasing it is also
+    // what makes the change reach a restart or savegame load of the same map, which would
+    // otherwise keep its world and walls as they are. Nothing reuses the memory before the world
+    // load drains the GS, the same interlock the server's own release relies on.
+    const bool wallMipmaps = (s_wallMipmaps->value != 0.0f);
+    if (wallMipmaps != ps2::tex::WallMipmaps())
+    {
+        PS2_ReleaseWorldModel(nullptr);
+        ps2::tex::SetWallMipmaps(wallMipmaps);
+    }
+
+    ps2::mod::BeginRegistration(mapName);
+    ps2::view::BeginRegistration();
+    ps2::sky::BeginRegistration();
+}
+
+void PS2_EndRegistration()
+{
+    ps2::mod::EndRegistration();
+    ps2::tex::EndRegistration();
+}
+
+// Free-before-load registration, driven by the client's CL_PrepRefresh. Registration used to keep
+// every asset of the level being left resident until EndRegistration, all the while the new level
+// loaded on top of it - ~3 MB of textures and models at the worst transitions, and the largest
+// single term of a map change's peak. So the client first runs its registration calls in
+// touch-only mode, which stamps what is already cached and loads nothing; PS2_FreeUnregistered
+// then frees whatever was left unstamped, and only then does the registration proper load what
+// is missing into the room that made.
+//
+// A name the touch pass misses is freed and loaded again - a disk read, never a wrong result -
+// and asserts builds report each one (see the texture and model caches).
+void PS2_SetRegistrationTouchOnly(const qboolean enable)
+{
+    ps2::mod::SetTouchOnly(enable != 0);
+    ps2::tex::SetTouchOnly(enable != 0);
+}
+
+void PS2_FreeUnregistered()
+{
+    // Models first, as EndRegistration does: a model's skins are stamped only if the model was.
+    ps2::mod::FreeUnregistered();
+    ps2::tex::FreeUnregistered();
+}
+
+void PS2_SetSky(const char * name, float rotate, vec3_t axis)
+{
+    ps2::sky::SetSky(name, rotate, axis);
+}
+
+struct model_s * PS2_RegisterModel(const char * name)
+{
+    return const_cast<struct model_s*>(
+        reinterpret_cast<const struct model_s *>(ps2::mod::Find(name)));
+}
+
+struct image_s * PS2_RegisterSkin(const char * name)
+{
+    return const_cast<struct image_s*>(
+        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Skin)));
+}
+
+struct image_s * PS2_RegisterPic(const char * name)
+{
+    return const_cast<struct image_s*>(
+        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic)));
+}
+
+// ------------------------------------------------------------------------------------------------
+// 2D overlay
+// ------------------------------------------------------------------------------------------------
+
+// Every entry point below charges the shared "Ui" event, so the overlay and the
+// frame log show one figure for the whole 2D pass the engine draws over the
+// world - HUD, console, menus - rather than nothing at all. None of them nest
+// (the debug overlays in PS2_EndFrame go straight to gs::, not through here), so
+// the total is a sum of disjoint scopes and can be compared against Frame.
+
+void PS2_DrawGetPicSize(int * w, int * h, const char * name)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    // Callable outside Begin/EndFrame. Placeholder dimensions keep the
+    // callers' centering math sane when the pic is missing.
+    const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    *w = texture.width;
+    *h = texture.height;
+}
+
+void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    ps2::rs::DrawTexturedRect(texture, x, y, w, h, 0, 0,
+                              texture.width, texture.height, kUiBrightness);
+}
+
+void PS2_DrawPic(int x, int y, const char * name)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    ps2::rs::DrawTexturedRect(texture, x, y, texture.width, texture.height,
+                              0, 0, texture.width, texture.height, kUiBrightness);
+}
+
+void PS2_DrawChar(int x, int y, int c)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+    DrawGlyph(x, y, c, kUiBrightness);
+}
+
+void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    // Tiles the image over the given screen rectangle: texels are addressed in
+    // screen space and wrap via the REPEAT mode set up in gs::Init().
+    (void)name; // Quake only ever tiles "backtile" here.
+    ps2::rs::DrawTexturedRect(*s_texBacktile, x, y, w, h, x, y, x + w, y + h, kUiBrightness);
+}
+
+void PS2_DrawFill(int x, int y, int w, int h, int c)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    const u32 p = global_palette[c & 0xFF];
+    const u8  r = static_cast<u8>(p & 0xFFu);
+    const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
+    const u8  b = static_cast<u8>((p >> 16) & 0xFFu);
+    ps2::rs::FillRect(x, y, w, h, r, g, b, 255);
+}
+
+void PS2_DrawFadeScreen()
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+    ps2::rs::FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Cinematics
+// ------------------------------------------------------------------------------------------------
+
+void PS2_DrawStretchRaw(int x, int y, int w, int h, int cols, int rows, const byte * data)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    // Called every frame while a cinematic plays; the movie quad is a 2D draw,
+    // so it joins the deferred overlay batch (opened lazily) like any other.
+    ps2::cin::DrawFrame(x, y, w, h, cols, rows, data);
+}
+
+void PS2_CinematicSetPalette(const unsigned char * palette)
+{
+    ps2::cin::SetPalette(palette);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Frame rendering
+// ------------------------------------------------------------------------------------------------
+
+void PS2_BeginFrame(float cameraSeparation)
+{
+    (void)cameraSeparation;
+
+    // Close the frame the profile probes have been charging into, before any of
+    // this frame's work is measured, and before rs::BeginFrame below opens the
+    // vsync probe. This has to happen here rather than at the end of
+    // PS2_EndFrame: the Frame scope around Qcommon_Frame closes after it, and
+    // would otherwise be charged to the frame after the one it measured,
+    // pairing each frame's view cost with the previous frame's wait. Rolling
+    // over here keeps that scope and the vsync spin it contains in the same
+    // bucket, which is what makes "EE work = Frame - VSync" hold.
+    ps2::debug::ProfileNewFrame();
+
+    // Snapshot that finished frame for the CSV log. Must sit between the
+    // rollover above and rs::BeginFrame below, which is where the draw-stat and
+    // submitted-byte counters it reads get cleared.
+    ps2::debug::FrameLogCapture();
+
+    // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
+    // open the deferred overlay batch lazily and it flushes automatically at
+    // each 2D->3D boundary and in rs::EndFrame().
+    ps2::rs::BeginFrame(/*dither=*/s_enableDither->value != 0.0f);
+}
+
+void PS2_EndFrame()
+{
+#if PS2_QUAKE_DEBUG
+    // Cinematic playback test: the movie quad is a 2D draw, run at frame's end
+    // so it lands over the fullscreen console but under the FPS counter. Enable
+    // with cvar "ps2_testcin 1".
+    ps2::test::RunCinematics();
+
+    // VU1 bring-up scene (cvar "ps2_testcube 1"): a 3D draw, so it flushes the
+    // 2D overlay accumulated above and lands on top - staying visible over the
+    // fullscreen console Quake forces while disconnected (its batch programs
+    // its own z-test). rs::EndFrame() then sends any remaining 2D and flips.
+    ps2::test::DrawRotatingCube();
+
+    // Memory smoke test (cvar "ps2_testmaps 1"): loads every stock map in unit
+    // order and logs what each one costs. Draws nothing - it only queues console
+    // commands - but it lives here because this is the one place guaranteed to
+    // be reached once per frame.
+    ps2::test::RunMapCycle();
+
+    // Save game test (cvar "ps2_testsaves 1", or 2 to include the memory card): saves,
+    // loads and changes level through the console commands and checks what comes back.
+    ps2::test::RunSaveTest();
+#endif // PS2_QUAKE_DEBUG
+
+#if PS2_QUAKE_PROFILE
+    // Unattended performance run (cvar "ps2_perftest 1"): plays the attract loop
+    // demos with the profiling cvars forced on and quits at the end, so a capture
+    // is reproducible and needs nobody watching it. Draws nothing either - it is
+    // here for the same reason as the map cycle above. Gated on the profiler rather
+    // than the debug build, since the frame log is all it exists to produce: a
+    // release build with the profiler on can take a capture too.
+    ps2::test::RunPerfTest();
+#endif // PS2_QUAKE_PROFILE
+
+    // The backend's own debug overlays, kept out of "Ui" so the engine's 2D pass
+    // and our instrumentation can be told apart - the whole point of measuring
+    // them is to know how much of a capture is the thing doing the measuring.
+    // Each is cvar gated and returns immediately when off, so this reads near
+    // zero in a release-style configuration.
+    DrawDebugOverlays();
+
+    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f);
+}
+
+void PS2_RenderFrame(refdef_t * viewDef)
+{
+    PS2_Assert(viewDef != nullptr);
+    ps2::view::RenderFrame(*viewDef);
+}
+
+} // extern "C"

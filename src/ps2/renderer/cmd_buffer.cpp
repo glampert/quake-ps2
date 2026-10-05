@@ -1,0 +1,609 @@
+/* ================================================================================================
+ * File: cmd_buffer.cpp
+ * Brief: The frame's single DMA source chain. See cmd_buffer.h for the layout and for why the
+ *        two halves live inside the world loader's lump scratch.
+ *
+ * This source code is released under the GNU GPL v2 license.
+ * ================================================================================================ */
+
+#include "ps2/common.h"
+#include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/profile.h"
+#include "ps2/debug/pipeline_dump.h"
+
+#include <cstdint>
+#include <dma.h>
+#include <kernel.h> // FlushCache
+#include <packet2_chain.h>
+#include <packet2_utils.h>
+#include <packet2_vif.h>
+#include <gif_tags.h>       // PACK_GIFTAG, GIF_SET_TAG
+#include <gs_gp.h>          // GS_REG_FINISH
+#include <gs_privileged.h>  // GS_REG_CSR
+#include <ee_regs.h>        // R_EE_D1_CHCR
+
+namespace ps2::cmdbuf {
+namespace {
+
+// ------------------------------------------------------------------------------------------------
+// Internal state
+// ------------------------------------------------------------------------------------------------
+
+static bool s_initialized = false;
+
+// The most recent *committable* allocation - what AllocMax handed out - and the NEXT tag that
+// carries the DMAC over it, which Commit has to re-aim once the real size is known.
+//
+// An exact Alloc clears both, which is what makes Commit's check do double duty: it fires on a
+// Commit of a block that was never committable, and on one something else has allocated on top
+// of since - two gathers open at once, where the first one's commit would silently cut the
+// second one's span away, with no assert firing on the pointer arithmetic alone and the
+// corruption surfacing later as a mangled DMA tag.
+static dma_tag_t * s_allocSkipTag = nullptr;
+static void *      s_lastAlloc    = nullptr;
+
+// Where the last Reserve said the chain may be built up to. Alloc must stay inside it: the
+// contract is that a caller reserves its whole sequence up front, precisely so no allocation
+// can rewind.
+//
+// Survives a Drain, because a reservation does: a drain empties the pipeline without moving the
+// chain, so what was reserved is still reserved and still where it was. Only a rewind clears it,
+// and the zero that leaves behind is what trips an Alloc with no Reserve in front of it at all.
+static int s_reserveEnd = 0;
+
+// True once a Kick has gone out that nothing has waited on yet. Kept rather than polling the
+// DMAC: reading CHCR goes over the bus and interrupts the transfer in progress, which is the
+// reason both reference implementations (ps2gl, ps2stuff) double-buffer instead of chasing it.
+//
+// It now outlives the frame that set it: under rs::EndFrame's deferred path a frame is kicked
+// and left to draw while the EE builds the next one, so this is the flag that says "the GS is
+// still working on an earlier frame" to everything that has to care - see WaitIdle.
+static bool s_kickInFlight = false;
+
+// How much of the current half has already been submitted. The write cursor never goes back
+// within a frame, so a kick sends the slice from here to the cursor and moves this up to meet
+// it - each segment a self-contained chain, ending in its own terminator, with the next one
+// starting at the qword after it.
+static int s_kickedQwords = 0;
+
+// The two halves, alternating per frame. Both are packet2 headers over memory we do not own -
+// packet2_create_from takes the base rather than allocating one - so neither is ever passed to
+// packet2_free, which would try to free the loader's arena out from under it.
+static packet2_t * s_packets[2] = {};
+static int s_half = 0;
+
+#if PS2_QUAKE_PROFILE
+// High-water across both halves, and the per-frame counters the overlay reads. The 'last frame'
+// copies exist because the debug overlay is drawn during the 2D pass, before EndFrame has run.
+struct Stats
+{
+    u32 peakQwords;
+    u32 frameQwords; // built this frame, across any rewind
+    u32 frameQwordsLastFrame;
+    int kicks;
+    int kicksLastFrame;
+    int emergencyDrains;
+    int emergencyDrainsLasFrame;
+};
+static Stats s_stats = {};
+#endif // PS2_QUAKE_PROFILE
+
+// ------------------------------------------------------------------------------------------------
+// Local helpers
+// ------------------------------------------------------------------------------------------------
+
+Q_ALWAYS_INLINE packet2_t * Current()
+{
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
+    return s_packets[s_half];
+}
+
+// Points the inline accessors in the header at the half s_half selects. Must run wherever
+// s_half changes, which is Init and BeginFrame.
+void PublishCurrent()
+{
+    detail::g_packet = s_packets[s_half];
+}
+
+// Aims an allocation's skip tag at the first qword past its payload.
+//
+// Masked explicitly: the DMAC wants a physical address and packet2_chain_set_dma_tag stores
+// whatever it is handed (dma_channel_send_chain masks the chain's start address, but nothing
+// masks the addresses inside tags). The chain is in the normal cached segment today, so this
+// changes nothing - it is here so a move to UCAB cannot quietly send the DMAC off the end of
+// RAM instead.
+Q_ALWAYS_INLINE void AimSkipTag(dma_tag_t * const tag, const qword_t * const target)
+{
+    tag->ADDR = static_cast<u64>(reinterpret_cast<std::uintptr_t>(target) & 0x0FFFFFFFu);
+}
+
+// Throws the current half away and starts it over. Everything the frame has built so far goes
+// with it, so this may only run where nothing is live: the top of a frame, an overflow that has
+// already drained, and the world load that is about to take the memory back.
+//
+// The high-water goes in here rather than only at EndFrame, or a frame that overflowed would
+// report the size of its last segment instead of the size that made it overflow.
+void Rewind()
+{
+    packet2_t * const pkt = Current();
+
+#if PS2_QUAKE_PROFILE
+    const u32 used = static_cast<u32>(packet2_get_qw_count(pkt));
+    if (used > s_stats.peakQwords)
+    {
+        s_stats.peakQwords = used;
+    }
+
+    // Banked before the reset, so a frame that overflowed still reports what it built rather
+    // than only the segment it happened to end on. BeginFrame zeroes this after its own rewind.
+    s_stats.frameQwords += used;
+#endif // PS2_QUAKE_PROFILE
+
+    packet2_reset(pkt, /*clear_mem=*/0);
+    s_kickedQwords = 0;
+    s_allocSkipTag = nullptr;
+    s_lastAlloc    = nullptr;
+    s_reserveEnd   = 0;
+}
+
+} // namespace
+
+packet2_t * detail::g_packet = nullptr;
+
+// ------------------------------------------------------------------------------------------------
+// Lifecycle
+// ------------------------------------------------------------------------------------------------
+
+void Init(void * memory, const u32 memorySizeBytes)
+{
+    PS2_AssertMsg(!s_initialized, "cmdbuf::Init called twice!");
+    PS2_AssertMsg(memory != nullptr, "cmdbuf::Init before the world arena was reserved!");
+    PS2_AssertMsg(memorySizeBytes >= 2u * kHalfBytes, "cmdbuf memory cannot hold both chain halves!");
+
+    // 64-byte aligned because that is a cache line: the whole buffer is written by the EE and
+    // read by the DMAC, and a half that started mid-line would share its first line with the
+    // other half. ReserveWorldArena aligns the arena and kWorldHunkCapacity is a multiple of 64,
+    // so the scratch base inherits it - assert rather than assume, since both are easy to change.
+    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(memory) & 63u) == 0, "cmdbuf memory must be 64-byte aligned for the frame chain!");
+    static_assert((kHalfBytes & 63u) == 0, "Chain halves must be a whole number of cache lines");
+
+    dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
+    dma_channel_fast_waits(DMA_CHANNEL_VIF1);
+
+    u8 * const base = static_cast<u8 *>(memory);
+
+    for (int i = 0; i < 2; ++i)
+    {
+        // Through void*: the compiler cannot see that 'base' is 64-byte aligned, and
+        // -Wcast-align refuses a straight u8* -> qword_t* on that basis. The alignment is
+        // asserted above instead.
+        void * const halfMem = base + (static_cast<size_t>(i) * kHalfBytes);
+        qword_t * const half = static_cast<qword_t *>(halfMem);
+
+        // Source-chain mode with tags transferred inline (tte=1), matching the recorder: the VIFcode
+        // for each transfer rides in the upper 64 bits of its own DMA tag.
+        s_packets[i] = packet2_create_from(half, half, static_cast<u16>(kHalfQwords),
+                                           P2_TYPE_NORMAL, P2_MODE_CHAIN, /*tte=*/1);
+        PS2_AssertMsg(s_packets[i] != nullptr, "packet2_create_from failed!");
+    }
+
+    // Only the two packet2 headers are ours; the qword buffers belong to the world arena and are
+    // already booked against MemTag::WorldMdl, so counting them here would double count them.
+    ps2::heap::TagsAddMem(ps2::heap::MemTag::Renderer, 2u * sizeof(packet2_t));
+
+    s_initialized = true;
+    PublishCurrent();
+
+    Com_DPrintf("Frame chain: 2 x %u KB inside the world lump scratch (%u KB), no heap of its own.\n",
+                kHalfBytes / 1024u, memorySizeBytes / 1024u);
+}
+
+void BeginFrame()
+{
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
+
+    // Nothing may be left un-kicked at the end of a frame: the half is about to be reused two
+    // frames from now and whatever was built and never submitted would simply not have drawn.
+    // Through Current() rather than the inline QwordCount(): EndFrame unpublished the pointer
+    // that one reads, and this runs before the swap republishes it.
+    PS2_AssertMsg(static_cast<int>(packet2_get_qw_count(Current())) == s_kickedQwords,
+                  "cmdbuf::BeginFrame with work in the half nothing ever kicked!");
+
+    // A no-op in practice, and deliberately not relied on to be: rs::BeginFrame fences the
+    // previous frame before it gets here, because the framebuffer flip has to happen before
+    // anything of this frame reaches the GS. This is the backstop for that - the half about to
+    // be rewound must not be one the DMAC is still walking.
+    WaitIdle();
+
+    s_half ^= 1;
+    PublishCurrent();
+    Rewind();
+
+#if PS2_QUAKE_PROFILE
+    s_stats.frameQwords = 0; // after Rewind, which banked the stale half it just reset
+    s_stats.kicks = 0;
+    s_stats.emergencyDrains = 0;
+#endif // PS2_QUAKE_PROFILE
+}
+
+void EndFrame()
+{
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
+
+#if PS2_QUAKE_PROFILE
+    const u32 used = packet2_get_qw_count(Current());
+    if (used > s_stats.peakQwords)
+    {
+        s_stats.peakQwords = used;
+    }
+
+    s_stats.frameQwordsLastFrame = s_stats.frameQwords + used;
+    s_stats.kicksLastFrame = s_stats.kicks;
+    s_stats.emergencyDrainsLasFrame = s_stats.emergencyDrains;
+#endif // PS2_QUAKE_PROFILE
+
+    // Unpublish the half. Packet() carries no assert - it is called hundreds of times a frame -
+    // so this is what makes a use outside Begin/EndFrame fail: a null here is a TLB fault at the
+    // first emission, rather than a write into a half that is still mapped and still looks
+    // plausible until the frame it belongs to draws it.
+    detail::g_packet = nullptr;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Building
+// ------------------------------------------------------------------------------------------------
+
+bool Reserve(const int qwords)
+{
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
+    PS2_Assert(qwords >= 0);
+
+    const int capacity = QwordCapacity();
+    if (QwordCount() + qwords <= capacity) [[likely]]
+    {
+        s_reserveEnd = QwordCount() + qwords;
+        return false;
+    }
+
+    // A request that does not fit an *empty* chain will never fit, so draining first would just
+    // add a pipeline stall to the error. Say so before doing anything else - silently truncating
+    // it would send the DMAC through a half-written tag, which fails with no message attached.
+    if (qwords > capacity) [[unlikely]]
+    {
+        Sys_Error("Frame chain: a single %d qword reservation does not fit the %d qwords a half "
+                  "can hold. Raise cmdbuf::kHalfBytes (and kWorldScratchCapacity with it).",
+                  qwords, capacity);
+    }
+
+    // Everything built so far still has to reach the GS, so send it and wait, then hand the
+    // caller an empty chain. The rewind is what makes this different from an ordinary Drain,
+    // and what costs the caller everything it had built.
+    Drain();
+    Rewind();
+
+    s_reserveEnd = QwordCount() + qwords;
+    PS2_PROFILE_ONLY(++s_stats.emergencyDrains);
+    return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Payload storage
+// ------------------------------------------------------------------------------------------------
+
+void * detail::AllocQwords(const int qwords, const bool committable)
+{
+    PS2_Assert(qwords > 0);
+
+    packet2_t * const pkt = Current();
+
+    // The reservation is what guarantees this cannot need to drain. Debug only - the capacity
+    // check below is the one that has to be live - but it is the check that catches the real
+    // mistake, which is reserving for the payload and forgetting the tags that follow it.
+    PS2_AssertMsg(QwordCount() + qwords + kAllocOverheadQwords <= s_reserveEnd,
+                  "cmdbuf::Alloc outside a reservation that covers it!");
+
+    // An allocation fronts itself with a NEXT tag, which has to be part of the tag stream
+    // rather than of somebody else's payload - so nothing may have a tag open here. In practice
+    // that means a pending 2D batch: rc's FlushPending2D closes it, and the rule is that whoever
+    // claims the buffer calls it first (see rs::TriangleStream), not that the draw eventually will.
+    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                  "cmdbuf::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
+
+    // Live in release, unlike the recorder's own EnsureSpace: the overrun would run off
+    // the end of this half and into the other one, and the failure would surface a frame or two
+    // later as corruption with nothing to connect it back to here.
+    if (QwordCount() + qwords + kAllocOverheadQwords > QwordCapacity()) [[unlikely]]
+    {
+        Sys_Error("Frame chain: a %d qword allocation does not fit the %d qwords left in the "
+                  "half. Alloc never drains - the caller has to Reserve its worst case first.",
+                  qwords, QwordCapacity() - QwordCount());
+    }
+
+    // The chain is a tag stream: the qword after a tag's payload is read as the next tag, so
+    // raw storage cannot simply be left sitting in it - the DMAC would walk into the gathered
+    // vertices and hand them to VIF1 as VIFcodes. Front the allocation with a NEXT tag whose
+    // QWC is zero: transfer nothing, and continue at ADDR - which points past the payload.
+    // Through void*: -Wcast-align will not take qword_t* -> dma_tag_t* directly, and the
+    // cursor is qword aligned by construction (packet2 asserts it on every tag it adds).
+    void * const skipMem = pkt->next;
+    dma_tag_t * const skip = static_cast<dma_tag_t *>(skipMem);
+    packet2_chain_add_dma_tag(pkt, 0, 0, P2_DMA_TAG_NEXT, 0, nullptr, 0);
+
+    // TTE is on, so the tag's upper 64 bits reach VIF1 as two VIFcodes whatever the tag id is.
+    // They have to be NOPs, and they are also what pads the tag out to the whole qword.
+    packet2_vif_nop(pkt, 0);
+    packet2_vif_nop(pkt, 0);
+
+    qword_t * const mem = pkt->next;
+    pkt->next = mem + qwords;
+    AimSkipTag(skip, pkt->next);
+
+    // Only a committable block is worth remembering: an exact one is already the size it will
+    // stay, and forgetting it here is what makes a stray Commit on it assert.
+    s_allocSkipTag = committable ? skip : nullptr;
+    s_lastAlloc    = committable ? static_cast<void *>(mem) : nullptr;
+    return mem;
+}
+
+void detail::CommitQwords(void * const base, const int usedQwords)
+{
+    PS2_Assert(usedQwords >= 0);
+
+    packet2_t * const pkt = Current();
+    qword_t * const mem = static_cast<qword_t *>(base);
+
+    // Catches both ways this goes wrong, and they are the two invariants the whole scheme rests
+    // on: something appended to the chain since the Alloc (so cutting back would eat into it),
+    // or the chain was rewound underneath the allocation (so the pointer is stale and the gather
+    // wrote into memory that has since been handed to somebody else).
+    PS2_AssertMsg(mem >= pkt->base && (mem + usedQwords) <= pkt->next,
+                  "cmdbuf::Commit on a stale allocation - the chain moved underneath it!");
+    PS2_AssertMsg(base == s_lastAlloc,
+                  "cmdbuf::Commit on a block that was not the last AllocMax - committing an "
+                  "exact Alloc, or two gathers open at once?");
+
+    // The cursor is about to move down, and it may not move down past work the DMAC has already
+    // been pointed at: the terminator a kick writes sits at the cursor, so a commit that reached
+    // back over one would rewrite a tag in a segment already submitted.
+    PS2_AssertMsg(static_cast<int>(mem - pkt->base) >= s_kickedQwords,
+                  "cmdbuf::Commit on a block that has already been kicked!");
+
+    pkt->next = mem + usedQwords;
+    AimSkipTag(s_allocSkipTag, pkt->next);
+
+    s_allocSkipTag = nullptr;
+    s_lastAlloc    = nullptr;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Submission
+// ------------------------------------------------------------------------------------------------
+
+void Kick()
+{
+    packet2_t * const pkt = Current();
+    if (packet2_get_qw_count(pkt) == static_cast<u32>(s_kickedQwords))
+    {
+        return; // nothing built since the last one
+    }
+
+    // One chain at a time on the channel: the segment about to go out would otherwise overwrite
+    // TADR under a transfer still walking the previous one. Free when the caller is Drain(),
+    // which has already waited.
+    WaitIdle();
+
+    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                  "cmdbuf::Kick with a tag still open - the segment has no valid end!");
+
+    // The terminator, and the two halves of what it means for a chain to be "done".
+    //
+    // The FLUSH stalls VIF1 until the last microprogram has ended and its XGKICKs have drained to
+    // the GS, so waiting on this chain's DMA covers the VU work. It does not cover the GS: the
+    // rasteriser can still be most of a frame behind when the transfer reports complete. So the
+    // FLUSH is followed by a DIRECT block of two qwords - a PACKED A+D giftag and a write of 1 to
+    // the FINISH register, byte for byte what draw_finish emits - and the GS raises CSR's FINISH
+    // bit once it has drawn everything ahead of it. That is the fence WaitIdle waits on.
+    //
+    // FLUSH and DIRECT are the two VIFcodes riding the CNT tag's own qword (tte=1), so the opening
+    // is one qword and the payload starts on the next - the same shape rc's own DIRECT
+    // blocks have, and what makes the manual qword count of 2 below come out right.
+    packet2_chain_open_cnt(pkt, 0, 0, 0);
+    packet2_vif_flush(pkt, 0);
+    packet2_vif_open_direct(pkt, 0);
+
+    PACK_GIFTAG(pkt->next, GIF_SET_TAG(1, 1, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
+    ++pkt->next;
+    PACK_GIFTAG(pkt->next, 1, GS_REG_FINISH);
+    ++pkt->next;
+
+    packet2_vif_close_direct_manual(pkt, 2);
+    packet2_chain_close_tag(pkt);
+    packet2_utils_vu_add_end_tag(pkt);
+
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaSend);
+        {
+            // Writes the chain back to memory so the DMAC reads what the EE just built. Whole-cache
+            // rather than a targeted SyncDCache on purpose: half a megabyte is 8192 cache lines
+            // against the 128 that exist in the whole 8 KB D-cache, so per-line sync work would
+            // cost more than flushing everything. It also cannot be skipped - packet2's send path
+            // passes qwc = 0 into dma_channel_send_chain, so the SDK's implicit SyncDCache is a
+            // no-op here and this is the only thing making the chain coherent.
+            PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaFlush);
+            FlushCache(0);
+        }
+
+        // dma_channel_send_packet2 in all but the start address: it always sends from the
+        // packet's base, and this has to start at the first qword the last kick did not cover.
+        // Same masking it does (the DMAC wants a physical address) and the same TTE flag, taken
+        // from the packet rather than assumed, since that is what decides whether the upper half
+        // of every tag reaches VIF1 as VIFcodes.
+        void * const segment = reinterpret_cast<void *>(
+            reinterpret_cast<std::uintptr_t>(pkt->base + s_kickedQwords) & 0x0FFFFFFFu);
+
+        // Arm the fence: clear CSR's FINISH so the bit WaitIdle looks for can only have been
+        // raised by the terminator above. A stale one - a chain armed and then abandoned, which
+        // any Sys_Error path between here and the wait can leave behind - would make the next
+        // wait return immediately and hand out a frame the GS has not drawn. Written rather than
+        // OR'd so only FINISH is cleared: the other event bits are write-1-to-clear too, and
+        // graph_wait_vsync is watching one of them.
+        *GS_REG_CSR = 2;
+
+        dma_channel_send_chain(DMA_CHANNEL_VIF1, segment, 0,
+                               pkt->tte ? DMA_FLAG_TRANSFERTAG : 0, 0);
+
+        s_kickedQwords = static_cast<int>(packet2_get_qw_count(pkt));
+        s_kickInFlight = true;
+        PS2_PROFILE_ONLY(++s_stats.kicks);
+    }
+}
+
+namespace {
+
+// DMA channel control: STR is raised when a transfer starts and clears when it ends.
+constexpr u32 kDmaChcrStr = 1u << 8;
+
+#if PS2_QUAKE_DEBUG
+
+// How long a wait runs before it is called a hang rather than slow hardware. A frame's drawing is
+// tens of microseconds and the whole frame is 16ms, so a second is four orders of magnitude past
+// anything legitimate - and well inside the ~14.5s the 32-bit COP0 Count takes to wrap, of which
+// the unsigned subtraction below tolerates exactly one.
+constexpr debug::CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
+
+// Nothing on this side of the fence explains a stall. It is nearly always a microprogram that did
+// not end or a GS packet that never reached EOP, and neither is visible without the VIF, GIF and
+// DMA registers - so print them before dying, while they still hold the stalled state.
+static HangReportFn s_hangReportHook = nullptr;
+
+Q_COLD_FUNC void ReportPipelineHang(const char * const what)
+{
+    debug::DumpPipelineState(what);
+
+    if (s_hangReportHook != nullptr)
+    {
+        s_hangReportHook();
+    }
+
+    Sys_Error("Render pipeline hang: %s. See the pipeline dump above.", what);
+}
+
+#endif // PS2_QUAKE_DEBUG
+
+// Spins until 'ready'. In debug a wait that outlasts the timeout dumps the pipeline and dies; in
+// release it is the bare spin it has always been, and 'what' costs nothing.
+template<typename ReadyFn>
+Q_ALWAYS_INLINE void SpinUntilReady(ReadyFn && ready, const char * const what)
+{
+#if PS2_QUAKE_DEBUG
+    const debug::CpuCycles start = debug::ReadCycles();
+
+    while (!ready())
+    {
+        if ((debug::ReadCycles() - start) > kHangTimeoutCycles)
+        {
+            ReportPipelineHang(what);
+            return; // Sys_Error is not marked noreturn, so do not spin on it.
+        }
+    }
+#else // PS2_QUAKE_DEBUG
+    (void)what;
+    while (!ready()) { }
+#endif // PS2_QUAKE_DEBUG
+}
+
+} // namespace
+
+void WaitIdle()
+{
+    if (!s_kickInFlight)
+    {
+        return;
+    }
+
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+
+        // The transfer first: VIF1 has swallowed the whole chain, and the FLUSH in its terminator
+        // has let the microprograms finish and their XGKICKs reach the GIF.
+        //
+        // Watched here rather than left to dma_channel_wait, which has no way to say why it never
+        // came back. CHCR's STR bit clears when the channel is done, so on the way out of this the
+        // call below returns at once and the sdk keeps whatever bookkeeping it does.
+        SpinUntilReady([] { return (*R_EE_D1_CHCR & kDmaChcrStr) == 0; },
+                       "the VIF1 chain never drained");
+        dma_channel_wait(DMA_CHANNEL_VIF1, 0);
+
+        // Then the GS. Everything above only says the work was *handed over*; this is where it has
+        // actually been drawn, which is what the framebuffer flip needs before it shows the buffer
+        // and what keeps two frames from meeting in the one z-buffer they share.
+        SpinUntilReady([] { return (*GS_REG_CSR & 2) != 0; },
+                       "the GS never raised FINISH");
+        *GS_REG_CSR = 2; // write 1 to clear, leaving the other event bits alone
+    }
+
+    s_kickInFlight = false;
+}
+
+bool KickInFlight()
+{
+    return s_kickInFlight;
+}
+
+#if PS2_QUAKE_DEBUG
+void SetHangReportHook(const HangReportFn hook)
+{
+    s_hangReportHook = hook;
+}
+#endif // PS2_QUAKE_DEBUG
+
+bool Drain()
+{
+    const bool hadWork = (packet2_get_qw_count(Current()) != static_cast<u32>(s_kickedQwords))
+                       || s_kickInFlight;
+
+    Kick();
+    WaitIdle();
+    return hadWork;
+}
+
+void DrainBeforeWorldLoad()
+{
+    if (!s_initialized)
+    {
+        return; // a load before the renderer is up cannot be racing anything
+    }
+
+    // The rewind is the point of this one: the half is about to become the .bsp lump staging
+    // buffer, so whatever the abandoned frame left in it has to stop being chain.
+    Drain();
+    Rewind();
+}
+
+// ------------------------------------------------------------------------------------------------
+// Debug overlay counters
+// ------------------------------------------------------------------------------------------------
+
+#if PS2_QUAKE_PROFILE
+u32 PeakBytes()
+{
+    return s_stats.peakQwords * 16u;
+}
+
+u32 BytesLastFrame()
+{
+    return s_stats.frameQwordsLastFrame * 16u;
+}
+
+int KicksLastFrame()
+{
+    return s_stats.kicksLastFrame;
+}
+
+int EmergencyDrainsLastFrame()
+{
+    return s_stats.emergencyDrainsLasFrame;
+}
+#endif // PS2_QUAKE_PROFILE
+
+} // namespace ps2::cmdbuf

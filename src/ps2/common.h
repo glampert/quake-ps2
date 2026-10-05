@@ -1,0 +1,60 @@
+#pragma once
+/* ================================================================================================
+ * File: common.h
+ * Brief: The single seam between the modern C++ PS2 backend and the untouched C
+ *        Quake II engine. Backend .cpp files include THIS rather than reaching
+ *        into the engine headers directly, so the C-linkage wrapping and the few
+ *        legacy-header workarounds live in exactly one place.
+ *
+ * This source code is released under the GNU GPL v2 license.
+ * ================================================================================================ */
+
+// C++ standard headers must be included OUTSIDE the extern "C" block below.
+#include <cstddef>
+#include <cstdint>
+
+// ps2::heap / MemTags (shared with common.c's Z_Malloc)
+#include "ps2/system/heap.h"
+
+// The C engine/game/client API plus the kept C "coupling" headers, given C
+// linkage so the statically-linked engine (compiled as C) and this backend
+// (compiled as C++) agree on unmangled symbol names.
+extern "C" {
+    #include "common/q_common.h" // Pulls in game/q_shared.h
+    #include "client/ref.h"      // refexport_t / refimport_t / refdef_t
+    #include "client/vid.h"      // VID_* + viddef
+    #include "client/keys.h"     // Key_Event + key codes
+}
+
+namespace ps2 {
+
+template<typename T, size_t N>
+constexpr int ArrayLength(const T (&)[N])
+{
+    return static_cast<int>(N);
+}
+
+} // namespace ps2
+
+// Helper assert macros that display the error on screen and halt.
+// Prefer these over standard assert().
+#if PS2_QUAKE_ASSERTS
+    #define PS2_Assert(cond)                               \
+        do {                                               \
+            if (!(cond)) [[unlikely]]                      \
+            {                                              \
+                Sys_Error("Assert Failed: %s", #cond);     \
+            }                                              \
+        } while (0)
+
+    #define PS2_AssertMsg(cond, message)                   \
+        do {                                               \
+            if (!(cond)) [[unlikely]]                      \
+            {                                              \
+                Sys_Error("Assert Failed: %s", (message)); \
+            }                                              \
+        } while (0)
+#else // PS2_QUAKE_ASSERTS
+    #define PS2_Assert(cond)             (void)sizeof(cond)
+    #define PS2_AssertMsg(cond, message) (void)sizeof(cond)
+#endif // PS2_QUAKE_ASSERTS
