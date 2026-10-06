@@ -8,7 +8,9 @@
 - `~/Library/Application Support/PCSX2/inis/PCSX2.ini` needs `[EmuCore] HostFs = true`
   (otherwise "No game data found"). Game stdout needs `[Logging] EnableIOPConsole = true`,
   because ps2sdk stdout goes through IOP fio, plus `EnableFileLogging = true` to land in
-  `~/Library/Application Support/PCSX2/logs/emulog.txt`. Engine lines carry a `[Q1]` prefix.
+  `~/Library/Application Support/PCSX2/logs/emulog.txt`. Engine lines carry a `[Q1]` prefix,
+  one per line however QuakeSpasm split the print, and Quake's console glyphs come out as
+  ASCII (the separator bar as `-----`).
 - **Edit PCSX2.ini only while PCSX2 is closed.** It rewrites the file on exit.
 - Every launch overwrites `emulog.txt`. Copy it out before the next launch if you need it.
 - PCSX2 memory card slot 1: `~/Library/Application Support/PCSX2/memcards/Mcd001.ps2`.
@@ -30,12 +32,17 @@
   **Back it up before a scripted or perf run and restore it after.** Start every run of a
   comparison from the same config.
 
-## Scripting a session (unverified on the PS2 until the game-data phase)
+## Scripting a session
 
 - `quake.rc` runs `exec default.cfg`, `exec config.cfg`, `exec autoexec.cfg`, then `stuffcmds`
-  (the command line's `+cmd` arguments). So `id1/autoexec.cfg` (gitignored) is the place for
-  a scripted session, e.g. `map e1m1`. `startdemos` comes after it and does nothing once a map
-  is running.
+  (the command line's `+cmd` arguments). So `id1/autoexec.cfg` (gitignored, a loose file next
+  to the pak) is the place for a scripted session, e.g. `map e1m1`. `startdemos` comes after
+  it and does nothing once a map or a demo is running. Delete the file after the run.
+- `timedemo demo1` plays demo1 as fast as the engine goes and prints `N frames S seconds F
+  fps`. With nothing rendered it measured 970 fps (about 1 ms of EE time per frame) on
+  2026-10-06; PCSX2 doesn't model the EE cache, so treat it as a rough baseline.
+- `path` lists the search path and `mods` the directories next to the ELF (on `host:` that
+  is `build/<config>/`: `id1`, `irx`, `miniz`, `src`), which shows `opendir` works.
 - `-dedicated` in the argv `main.cpp` builds skips every client subsystem and runs
   `map start`: a headless check of the filesystem, the QuakeC VM and physics.
 - Record the traps here as they turn up. The Quake II port's (a 128-char `COM_Parse` overrun,

@@ -60,3 +60,7 @@ Record QuakeSpasm quirks here as they are found.
 - QuakeSpasm's own `default.cfg`, with gamepad binds (`LSHOULDER`, `RTRIGGER`, ...), is
   embedded as `default_cfg.h` but used only when no `default.cfg` exists. id's `pak0.pak` has
   one without them, so the pad's keys start unbound unless the input layer seeds binds.
+- `Cmd_AddCommand` after `Host_Init` has finished is a `Sys_Error` ("Cmd_AddCommand after
+  host_initialized"). Anything that registers commands must run inside `Host_Init`.
+- `Host_Init` queues `vid_unlock` to run after the configs; the backend registers it as a
+  no-op, since the PS2 has one fixed video mode.

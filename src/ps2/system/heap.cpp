@@ -1,8 +1,8 @@
 /* ================================================================================================
  * File: heap.cpp
- * Brief: C++ side of the program-wide dlmalloc heap. Provides operator new/delete
- *        (routed to the dlmalloc-backed global malloc from dlmalloc.c) and the
- *        tag-accounting layer, which common.c's Z_Malloc and the renderer allocate through.
+ * Brief: The program-wide dlmalloc heap. Provides operator new/delete (routed to the
+ *        dlmalloc-backed global malloc from dlmalloc.c) and the tag-accounting layer the
+ *        backend allocates through - QuakeSpasm's hunk included, as one block (see main.cpp).
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -76,7 +76,7 @@ static MemStats s_memTagCounts[kMemTagCount] = {};
 static const char * const s_memTagNames[kMemTagCount] = {
     "ELF_Sys",
     "OpNew",
-    "Quake",
+    "Hunk",
     "Renderer",
     "TexImage",
     "Alias",
@@ -338,9 +338,9 @@ void TagsAddSystemMem()
     {
         const size_t totalUsedBytes = totalBytes - availBytes;
 
-        Sys_ConsoleOutput(va("RAM available: %.2f MB, used by ELF + system: %.2f MB\n",
-                             static_cast<double>(availBytes) / 1024.0 / 1024.0,
-                             static_cast<double>(totalUsedBytes) / 1024.0 / 1024.0));
+        Sys_Printf("RAM available: %.2f MB, used by ELF + system: %.2f MB\n",
+                   static_cast<double>(availBytes) / 1024.0 / 1024.0,
+                   static_cast<double>(totalUsedBytes) / 1024.0 / 1024.0);
 
         TagsAddMem(MemTag::ElfSys, totalUsedBytes);
     }
@@ -497,31 +497,3 @@ const char * DumpMemTags(char * const outBuffer, size_t const outBufferSize)
 }
 
 } // namespace ps2::heap
-
-// ------------------------------------------------------------------------------------------------
-// ps2::heap C wrappers called by the Quake 2 code
-// ------------------------------------------------------------------------------------------------
-
-extern "C" {
-
-void * PS2Quake_ZMalloc(size_t sizeBytes)
-{
-    return ps2::heap::Alloc(sizeBytes, ps2::heap::MemTag::Quake);
-}
-
-void PS2Quake_ZFree(void * ptr, size_t sizeBytes)
-{
-    ps2::heap::Free(ptr, sizeBytes, ps2::heap::MemTag::Quake);
-}
-
-void * PS2Quake_AudioMalloc(size_t sizeBytes)
-{
-    return ps2::heap::Alloc(sizeBytes, ps2::heap::MemTag::Audio);
-}
-
-void PS2Quake_AudioFree(void * ptr, size_t sizeBytes)
-{
-    ps2::heap::Free(ptr, sizeBytes, ps2::heap::MemTag::Audio);
-}
-
-} // extern "C"

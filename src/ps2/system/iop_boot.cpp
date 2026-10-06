@@ -13,6 +13,7 @@
 
 #include "ps2/common.h"
 #include "ps2/system/iop_boot.h"
+#include "ps2/system/sys.h"
 
 #include <cstdio>
 #include <cstring>
@@ -70,7 +71,8 @@ constexpr int kMaxRomModules = 8;
 static RomModule s_romModules[kMaxRomModules];
 static int       s_numRomModules = 0;
 
-// The file probed for under "<base>/baseq2/" to decide a base path works.
+// The file probed for under "<base>/id1/" to decide a base path works. The shareware
+// game and the registered one both have it.
 constexpr const char * kProbeFile = "pak0.pak";
 
 // How long to wait for the USB drive: enumeration + FAT mount happen
@@ -100,14 +102,14 @@ void ExecIopModule(const char * name, void * image, u32 sizeBytes)
     {
         Sys_Error("IOP boot: module '%s' failed (id %d, result %d)", name, id, moduleResult);
     }
-    std::printf("IOP boot: started '%s' (id %d)\n", name, id);
+    Sys_Printf("IOP boot: started '%s' (id %d)\n", name, id);
 }
 
 // Crude millisecond wait; fine for boot-time polling.
 void BusyWaitMsec(int msec)
 {
-    const int until = Sys_Milliseconds() + msec;
-    while (Sys_Milliseconds() < until) {}
+    const int until = Milliseconds() + msec;
+    while (Milliseconds() < until) {}
 }
 
 // Prerequisites for SifExecModuleBuffer, for drivers started after boot.
@@ -124,7 +126,7 @@ bool EnsureModuleLoaderReady()
     // already; the host: fast path skipped the whole bring-up, so do it here.
     if (!s_usbStackStarted && sbv_patch_enable_lmb() != 0)
     {
-        Com_Printf("WARNING: sbv_patch_enable_lmb failed - no IOP module can be loaded!\n");
+        Con_Printf("WARNING: sbv_patch_enable_lmb failed - no IOP module can be loaded!\n");
         return false;
     }
 
@@ -137,7 +139,7 @@ bool EnsureModuleLoaderReady()
 const char * DetectBasePathAndBootIop()
 {
     // host: fast path (PCSX2). Probe exactly the paths the Quake filesystem
-    // will build from each base ("<base>/baseq2/..."): PCSX2 builds have
+    // will build from each base ("<base>/id1/..."): PCSX2 builds have
     // differed on whether "host:/" is ELF-relative or host-absolute, so try
     // the explicitly relative form too. Skips the IOP reset entirely.
     struct HostCandidate
@@ -146,26 +148,26 @@ const char * DetectBasePathAndBootIop()
         const char * basePath;
     };
     const HostCandidate hostCandidates[] = {
-        { "host:/baseq2/pak0.pak",  "host:"  },
-        { "host:./baseq2/pak0.pak", "host:." },
+        { "host:/id1/pak0.pak",  "host:"  },
+        { "host:./id1/pak0.pak", "host:." },
     };
 
     for (const HostCandidate & candidate : hostCandidates)
     {
         if (CanOpen(candidate.probePath))
         {
-            std::printf("IOP boot: game data on %s/baseq2 (emulator host filesystem).\n", candidate.basePath);
+            Sys_Printf("IOP boot: game data on %s/id1 (emulator host filesystem).\n", candidate.basePath);
 
             // host: is served by the ROM's FILEIO module here, whose remove() is missing a
             // break and runs a mkdir() of the same path after it. The save code deletes files.
             SifInitRpc(0);
             s_fileIoRemovePatched = (sbv_patch_fileio() == 0);
-            std::printf("IOP boot: FILEIO remove() patch %s.\n", s_fileIoRemovePatched ? "applied" : "not applicable");
+            Sys_Printf("IOP boot: FILEIO remove() patch %s.\n", s_fileIoRemovePatched ? "applied" : "not applicable");
             return candidate.basePath;
         }
     }
 
-    std::printf("IOP boot: no host: game data; bringing up USB mass storage...\n");
+    Sys_Printf("IOP boot: no host: game data; bringing up USB mass storage...\n");
 
     // Reboot the IOP into a clean state and patch in support for loading
     // EE-embedded modules. The pad driver's rom0: modules load later (IN_Init),
@@ -193,18 +195,17 @@ const char * DetectBasePathAndBootIop()
 
     for (int waited = 0; waited <= kUsbWaitTotalMsec; waited += kUsbWaitStepMsec)
     {
-        if (CanOpen("mass:/baseq2/pak0.pak"))
+        if (CanOpen("mass:/id1/pak0.pak"))
         {
-            std::printf("IOP boot: game data on mass:/baseq2 (USB, ready after ~%d ms).\n", waited);
+            Sys_Printf("IOP boot: game data on mass:/id1 (USB, ready after ~%d ms).\n", waited);
             return "mass:";
         }
         BusyWaitMsec(kUsbWaitStepMsec);
     }
 
     Sys_Error("No game data found!\n"
-              "Emulator: enable the host filesystem and put baseq2/ next to the ELF.\n"
-              "Console: USB drive with a baseq2/ folder (%s etc).", kProbeFile);
-    return nullptr; // unreachable; Sys_Error halts
+              "Emulator: enable the host filesystem and put id1/ next to the ELF.\n"
+              "Console: USB drive with an id1/ folder (%s etc).", kProbeFile);
 }
 
 bool UsbStackStarted()
@@ -228,11 +229,11 @@ bool LoadRomModuleOnce(const char * path)
 
     if (loaded)
     {
-        Com_Printf("IOP module '%s' started (id %d).\n", path, id);
+        Con_Printf("IOP module '%s' started (id %d).\n", path, id);
     }
     else
     {
-        Com_Printf("WARNING: IOP module '%s' failed to load (%d).\n", path, id);
+        Con_Printf("WARNING: IOP module '%s' failed to load (%d).\n", path, id);
     }
 
     if (s_numRomModules < kMaxRomModules)
@@ -261,11 +262,11 @@ bool StartIopModuleFromBuffer(const char * name, void * image, u32 sizeBytes)
     // out (NO_RESIDENT_END) - either way the driver is not running.
     if (id < 0 || moduleResult == 1)
     {
-        Com_Printf("WARNING: IOP module '%s' failed (id %d, result %d).\n", name, id, moduleResult);
+        Con_Printf("WARNING: IOP module '%s' failed (id %d, result %d).\n", name, id, moduleResult);
         return false;
     }
 
-    Com_Printf("IOP module '%s' started (id %d).\n", name, id);
+    Con_Printf("IOP module '%s' started (id %d).\n", name, id);
     return true;
 }
 

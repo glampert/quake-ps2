@@ -67,7 +67,23 @@ GAME_ELF = $(OUTPUT_DIR)/quake.elf
 # ----------------------------------------------------------------------------
 
 # New PS2 backend, modern C++:
-PS2_CXX_SRC =
+PS2_CXX_SRC =                         \
+	ps2/system/main.cpp               \
+	ps2/system/sys.cpp                \
+	ps2/system/iop_boot.cpp           \
+	ps2/system/heap.cpp               \
+	ps2/net/net.cpp                   \
+	ps2/input/input.cpp               \
+	ps2/audio/snd.cpp                 \
+	ps2/audio/cd_audio.cpp            \
+	ps2/renderer/vid.cpp              \
+	ps2/renderer/draw.cpp             \
+	ps2/renderer/texmgr.cpp           \
+	ps2/renderer/refresh.cpp          \
+	ps2/debug/scr_print.cpp           \
+	ps2/debug/stack_trace.cpp         \
+	ps2/debug/exception_handler.cpp   \
+	ps2/debug/profile.cpp
 
 # Doug Lea's allocator: vendored third-party C, left as C on purpose (see the
 # note at the top of dlmalloc.c). Everything else of ours is C++.
@@ -98,7 +114,13 @@ CXX_SRC = $(PS2_CXX_SRC)
 # parsing, IOP module boot, device setup, the debug screen printer. None of them
 # are on the per-frame path, so they are built for size instead of speed, which
 # is RAM the levels get to use instead.
-SIZE_OPT_CXX_SRC =
+SIZE_OPT_CXX_SRC =                    \
+	ps2/system/iop_boot.cpp           \
+	ps2/renderer/vid.cpp              \
+	ps2/debug/scr_print.cpp           \
+	ps2/debug/stack_trace.cpp         \
+	ps2/debug/exception_handler.cpp   \
+	ps2/debug/profile.cpp
 
 SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.o))
 

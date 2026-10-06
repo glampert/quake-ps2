@@ -1,7 +1,6 @@
 /* ================================================================================================
  * File: heap.h
- * Brief: C/C++ memory allocation and stats.
- *        NOTE: Shared header between C and C++.
+ * Brief: The program-wide heap: tagged allocation and memory stats.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -11,7 +10,6 @@
 
 #include <stddef.h>
 
-#ifdef __cplusplus
 namespace ps2::heap {
 
 // NOTE: Be sure to update s_memTagNames[] in heap.cpp when changing this enum!
@@ -19,7 +17,7 @@ enum class MemTag : size_t
 {
     ElfSys,    // Memory used by the system/kernel and the estimate size of the ELF executable.
     OpNew,     // C++ operator new/new[].
-    Quake,     // Game allocations: Z_Malloc/Z_TagMalloc/etc.
+    Hunk,      // QuakeSpasm's hunk: one block holding its hunk, zone and cache (see zone.c).
     Renderer,  // Things related to rendering / the refresh module.
     TexImage,  // Allocs related to images/textures/palettes.
     AliasMdl,  // MD2/Alias models.
@@ -120,21 +118,5 @@ constexpr int kMemTagsDumpSize = 2048;
 const char * DumpMemTags(char * outBuffer, size_t outBufferSize);
 
 } // namespace ps2::heap
-#endif // __cplusplus
-
-// ps2::heap C wrappers called by the Quake 2 code.
-#ifdef __cplusplus
-extern "C" {
-#endif // __cplusplus
-
-void * PS2Quake_ZMalloc(size_t sizeBytes);
-void PS2Quake_ZFree(void * ptr, size_t sizeBytes);
-
-void * PS2Quake_AudioMalloc(size_t sizeBytes);
-void PS2Quake_AudioFree(void * ptr, size_t sizeBytes);
-
-#ifdef __cplusplus
-} // extern "C"
-#endif // __cplusplus
 
 #endif // PS2_SYSTEM_HEAP_H

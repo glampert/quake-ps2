@@ -21,10 +21,13 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 
 ### Status
 
-**Early bring-up: nothing runs on the PS2 yet.** The port is brought up in phases, each checked in PCSX2:
+**Early bring-up.** QuakeSpasm boots on the PS2 and runs its game loop headless: in PCSX2 it
+finds the game data on `host:`, initializes, and plays the attract-mode demos through, logging
+the console to stdout, with nothing drawn yet. The port is brought up in phases, each checked
+in PCSX2:
 
-1. Compile QuakeSpasm with the EE toolchain.
-2. Link and boot, rendering nothing and logging to stdout.
+1. Compile QuakeSpasm with the EE toolchain. *Done.*
+2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless.
 4. 2D: console, menus, HUD.
 5. Input: DualShock and USB keyboard.

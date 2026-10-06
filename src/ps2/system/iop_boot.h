@@ -1,10 +1,10 @@
 #pragma once
 /* ================================================================================================
  * File: iop_boot.h
- * Brief: Boot-time IOP bring-up and game-data location. Finds where the baseq2/ data
+ * Brief: Boot-time IOP bring-up and game-data location. Finds where the id1/ data
  *        lives - host: under PCSX2 (no IOP modules needed) or USB mass storage on a
  *        real console (full IOP reset + BDM driver stack) - and returns the filesystem
- *        base path to hand to FS_SetDefaultBasePath.
+ *        base path QuakeSpasm's host_parms->basedir is set to.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -20,9 +20,9 @@ namespace ps2::sys {
 // USB drive to enumerate. Returns the base path ("host:.", "host:" or
 // "mass:"); Sys_Errors when no game data can be found anywhere.
 //
-// Must run from main() BEFORE Qcommon_Init: FS_InitFilesystem opens pak files
-// during Qcommon_Init (before Sys_Init), and the pad driver loads its rom0:
-// modules later at IN_Init - after the IOP reset, which is the required order.
+// Must run from main() BEFORE Host_Init: COM_InitFilesystem opens the pak files
+// during Host_Init, and the pad driver loads its rom0: modules later, at IN_Init -
+// after the IOP reset, which is the required order.
 const char * DetectBasePathAndBootIop();
 
 // True once the call above has taken the USB route: the IOP was reset, the sbv

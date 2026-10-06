@@ -1,49 +1,41 @@
 /* ================================================================================================
  * File: sys.cpp
- * Brief: Sys_* platform seam for the PS2 - timing, fatal-error handling, console
- *        output and the (static) game-module hookup. Filesystem enumeration and
- *        console input are not available on the target and are stubbed. The save
- *        game hooks (Sys_Save*) live in ps2/save/save_api.cpp.
+ * Brief: QuakeSpasm's Sys_* platform seam for the PS2 - timing, fatal errors, console output and
+ *        file handles - plus the PL_* stubs and the backend's clock (sys.h). There is no console
+ *        input on the target, and no window, so those parts are stubbed.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/system/sys.h"
+#include "ps2/system/iop_boot.h"
 #include "ps2/debug/scr_print.h"
 #include "ps2/debug/profile.h"
-#include "ps2/system/iop_boot.h"
-#include "ps2/save/save_system.h"
 
-#include <cstdio>
+#include <cerrno>
 #include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
-
-#include <sys/stat.h> // mkdir
+#include <cstring>
+#include <ctime>      // nanosleep
+#include <sys/stat.h> // stat, mkdir
 
 #include <kernel.h> // SleepThread
-#include <timer.h>  // GetTimerSystemTime / kBUSCLKBY256
-
-extern "C" {
-
-// Globals the engine expects the platform layer to own:
-int curtime = 0;             // ms of the last Sys_Milliseconds (q_shared.h)
-unsigned sys_frame_time = 0; // ms timestamp of the current input frame (cl_input.c)
-
-// The Quake II game module is statically linked; call its entry point directly.
-// Declared with void* here (ABI-compatible with game_export_t*(game_import_t*))
-// to avoid pulling game/game.h into this C++ translation unit.
-extern void * GetGameAPI(void * import);
+#include <timer.h>  // GetTimerSystemTime / kBUSCLK / kBUSCLKBY256
 
 // ------------------------------------------------------------------------------------------------
-// Timing
+// The backend's clock
 // ------------------------------------------------------------------------------------------------
+
+namespace ps2::sys {
 
 // Deliberately not clock(): the R5900 has no DMULT/DDIV, so every 64-bit
 // multiply or divide - even by a constant - becomes a libgcc __muldi3 /
 // __udivdi3 call. clock() pays two of those inside TimerBusClock2USec before
 // we get a number, then the microseconds-to-milliseconds conversion pays a
 // third. Reading the system timer directly and converting in 32-bit costs none.
-int Sys_Milliseconds()
+int Milliseconds()
 {
     // The EE system timer (T2) is clocked at BUSCLK/256, and GetTimerSystemTime
     // scales its count back up into BUSCLK units, so the low 8 bits are always
@@ -73,34 +65,38 @@ int Sys_Milliseconds()
     s_millisecs     += static_cast<int>(s_tickRemainder / kTicksPerMillisec);
     s_tickRemainder %= kTicksPerMillisec;
 
-    curtime = s_millisecs;
-    return curtime;
+    return s_millisecs;
 }
 
-// ------------------------------------------------------------------------------------------------
-// Lifecycle
-// ------------------------------------------------------------------------------------------------
-
-void Sys_Init()
+double Seconds()
 {
-    // Nothing to do: IOP bring-up (reset + USB mass-storage modules when
-    // needed) happens in main() via ps2::sys::DetectBasePathAndBootIop -
-    // FS_InitFilesystem runs before Sys_Init and already needs file IO - and
-    // the pad driver loads its rom0: modules later, at IN_Init.
-    Com_Printf("------- Sys_Init (PS2) -------\n");
+    // A soft-float conversion and multiply per call, which is fine for what calls it -
+    // QuakeSpasm reads the time a handful of times per frame. The 64-bit BUSCLK count
+    // wraps after nearly four thousand years.
+    constexpr double kSecondsPerBusClk = 1.0 / static_cast<double>(kBUSCLK);
 
+    static u64  s_startBusClk = 0;
+    static bool s_initialized = false;
+
+    const u64 nowBusClk = GetTimerSystemTime();
+    if (!s_initialized)
+    {
+        s_startBusClk = nowBusClk;
+        s_initialized = true;
+    }
+
+    return static_cast<double>(nowBusClk - s_startBusClk) * kSecondsPerBusClk;
+}
+
+void RegisterCommands()
+{
     Cmd_AddCommand("ps2_dump_iop_mods", []() {
-        ps2::sys::PrintLoadedIopModules(40, &Com_Printf);
+        PrintLoadedIopModules(40, &Con_Printf);
     });
 
-    ps2::save::Init();
-
 #if PS2_QUAKE_PROFILE
-    // Learn the real COP0 Count rate before any probe can fire (~8ms spin).
-    ps2::debug::ProfileCalibrate();
-
     Cmd_AddCommand("ps2_profile", []() {
-        ps2::debug::ProfileDump(&Com_Printf);
+        ps2::debug::ProfileDump(&Con_Printf);
     });
 
     Cmd_AddCommand("ps2_profile_reset", []() {
@@ -109,27 +105,195 @@ void Sys_Init()
 #endif // PS2_QUAKE_PROFILE
 }
 
-Q_COLD_FUNC void Sys_Quit()
+} // namespace ps2::sys
+
+namespace {
+
+// ------------------------------------------------------------------------------------------------
+// Console output
+// ------------------------------------------------------------------------------------------------
+
+// The engine's text, prefixed for the log, in as few writes as it takes: stdout reaches the
+// PCSX2 log (or ps2client) through the IOP, one SIF RPC per write.
+class LogWriter final
 {
-    Qcommon_Shutdown();
+public:
+    void Put(const char c)
+    {
+        if (m_length == static_cast<int>(sizeof(m_buffer)))
+        {
+            Flush();
+        }
+        m_buffer[m_length++] = c;
+    }
+
+    void Flush()
+    {
+        if (m_length > 0)
+        {
+            std::fwrite(m_buffer, 1, static_cast<size_t>(m_length), stdout);
+            m_length = 0;
+        }
+    }
+
+private:
+    char m_buffer[512];
+    int  m_length = 0;
+};
+
+// Quake's console font has glyphs below 32 - and again, coloured, above 127 - that a log can't
+// show. This maps them to the nearest ASCII: the separator bar to '-', the bracket and digit
+// glyphs to themselves, the rest to '.'. A leading 1 or 2 only marks a line as coloured, so those
+// two are dropped ('\0').
+char LogChar(const unsigned char glyph)
+{
+    const unsigned char c = glyph & 0x7Fu;
+    if (c >= ' ' || c == '\n' || c == '\t')
+    {
+        return static_cast<char>(c);
+    }
+    if (c == 1 || c == 2)
+    {
+        return '\0';
+    }
+    if (c == 0x10 || c == 0x11)
+    {
+        return (c == 0x10) ? '[' : ']';
+    }
+    if (c >= 0x12 && c <= 0x1B)
+    {
+        return static_cast<char>('0' + (c - 0x12));
+    }
+    return (c >= 0x1D) ? '-' : '.'; // 0x1D-0x1F are the bar's left end, middle and right end
+}
+
+// Writes 'text' to stdout with "[Q1] " at the start of every line, so engine output can be told
+// from the emulator's in the PCSX2 log. QuakeSpasm often prints a line in several pieces, so the
+// prefix goes where a line starts, not once per call.
+void PrintToLog(const char * text)
+{
+    static bool s_atLineStart = true;
+
+    LogWriter writer;
+    for (const char * s = text; *s != '\0'; ++s)
+    {
+        if (s_atLineStart)
+        {
+            for (const char * prefix = "[Q1] "; *prefix != '\0'; ++prefix)
+            {
+                writer.Put(*prefix);
+            }
+            s_atLineStart = false;
+        }
+
+        const char c = LogChar(static_cast<unsigned char>(*s));
+        if (c == '\0')
+        {
+            continue;
+        }
+        if (c == '\n')
+        {
+            s_atLineStart = true;
+        }
+        writer.Put(c);
+    }
+
+    writer.Flush();
+    if (s_atLineStart)
+    {
+        std::fflush(stdout);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// File handles
+// ------------------------------------------------------------------------------------------------
+
+// QuakeSpasm's handle-based file API over stdio, as its Unix backend did it. Slot 0 is never
+// handed out, so a zero handle can't be mistaken for an open file.
+constexpr int kMaxFileHandles = 32;
+std::FILE * s_fileHandles[kMaxFileHandles];
+
+int FindFileHandle()
+{
+    for (int i = 1; i < kMaxFileHandles; ++i)
+    {
+        if (s_fileHandles[i] == nullptr)
+        {
+            return i;
+        }
+    }
+    Sys_Error("out of file handles");
+}
+
+long FileLength(std::FILE * file)
+{
+    const long pos = std::ftell(file);
+    std::fseek(file, 0, SEEK_END);
+    const long end = std::ftell(file);
+    std::fseek(file, pos, SEEK_SET);
+    return end;
+}
+
+} // namespace
+
+extern "C" {
+
+// ------------------------------------------------------------------------------------------------
+// Globals QuakeSpasm expects the platform layer to own
+// ------------------------------------------------------------------------------------------------
+
+qboolean isDedicated = false; // set from -dedicated by main()
+
+// Registered by host.c. QuakeSpasm's desktop main loop sleeps while a frame is shorter than
+// this; the PS2 one never sleeps (the vsync wait paces it), but configs still set it.
+cvar_t sys_throttle = ps2::MakeCvar("sys_throttle", "0.02", CVAR_ARCHIVE);
+
+// ------------------------------------------------------------------------------------------------
+// Lifecycle
+// ------------------------------------------------------------------------------------------------
+
+void Sys_Init()
+{
+    // main() set basedir to wherever the game data was found (host: or mass:). There is
+    // no separate user directory on the PS2, and code elsewhere relies on userdir being
+    // the same pointer as basedir when that is so.
+    host_parms->userdir = host_parms->basedir;
+    host_parms->numcpus = 1;
+
+#if PS2_QUAKE_PROFILE
+    // Learn the real COP0 Count rate before any probe can fire (~8ms spin).
+    ps2::debug::ProfileCalibrate();
+#endif // PS2_QUAKE_PROFILE
+}
+
+void Sys_Quit()
+{
+    Host_Shutdown();
     std::fflush(stdout);
     std::exit(0);
 }
 
-Q_COLD_FUNC void Sys_Error(const char * error, ...)
+void Sys_Error(const char * error, ...)
 {
-    va_list argptr;
-    char tempbuff[2048];
+    char text[1024];
 
+    va_list argptr;
     va_start(argptr, error);
-    vsnprintf(tempbuff, sizeof(tempbuff), error, argptr);
-    tempbuff[sizeof(tempbuff) - 1] = '\0';
+    std::vsnprintf(text, sizeof(text), error, argptr);
     va_end(argptr);
+
+    // Also to the log, so a capture says why the run stopped. No Host_Shutdown, unlike
+    // QuakeSpasm's desktop Sys_Error: it would write config.cfg out of whatever state the
+    // error left the engine in.
+    PrintToLog("\nSys_Error: ");
+    PrintToLog(text);
+    PrintToLog("\n");
 
     ps2::debug::ScrInit();
     ps2::debug::ScrSetTextColor(0xFF0000FF); // red text
     ps2::debug::ScrPrintf("***************************************************************\n");
-    ps2::debug::ScrPrintf("Sys_Error:\n%s\n", tempbuff);
+    ps2::debug::ScrPrintf("Sys_Error:\n%s\n", text);
     ps2::debug::ScrPrintf("***************************************************************\n");
 
     // Draw the error to the screen and halt so the
@@ -140,65 +304,131 @@ Q_COLD_FUNC void Sys_Error(const char * error, ...)
     }
 }
 
-void * Sys_GetGameAPI(void * parms)
+void Sys_Printf(const char * fmt, ...)
 {
-    return GetGameAPI(parms);
+    char text[2048];
+
+    va_list argptr;
+    va_start(argptr, fmt);
+    std::vsnprintf(text, sizeof(text), fmt, argptr);
+    va_end(argptr);
+
+    PrintToLog(text);
 }
 
-void Sys_UnloadGame()
+double Sys_DoubleTime()
 {
-    // Statically linked - nothing to unload.
+    return ps2::sys::Seconds();
 }
 
-// ------------------------------------------------------------------------------------------------
-// Console I/O
-// ------------------------------------------------------------------------------------------------
-
-void Sys_ConsoleOutput(const char * string)
+const char * Sys_ConsoleInput()
 {
-    std::printf("[Q2] %s", string);
+    return nullptr; // no terminal to type into on the PS2
 }
 
-char * Sys_ConsoleInput()
+void Sys_Sleep(unsigned long msecs)
 {
-    return nullptr; // no interactive console on the PS2
+    timespec request;
+    request.tv_sec  = static_cast<time_t>(msecs / 1000u);
+    request.tv_nsec = static_cast<long>((msecs % 1000u) * 1000000u);
+    nanosleep(&request, nullptr);
 }
 
 void Sys_SendKeyEvents()
 {
-    // Controller polling will hook in here; for now just advance the input clock
-    // so cl_input's timing stays sane.
-    sys_frame_time = static_cast<unsigned>(Sys_Milliseconds());
+    IN_Commands();
+    IN_SendKeyEvents();
 }
 
 // ------------------------------------------------------------------------------------------------
-// Misc / stubs
+// File IO
 // ------------------------------------------------------------------------------------------------
 
-void Sys_AppActivate() {}
-void Sys_CopyProtect() {}
-char * Sys_GetClipboardData() { return nullptr; }
+int Sys_FileOpenRead(const char * path, int * hndl)
+{
+    const int handle = FindFileHandle();
+    std::FILE * file = std::fopen(path, "rb");
 
-// FS_CreatePath calls this for every directory along a path, the device root ("host:")
-// included, so failures - that one, and directories that already exist - are expected
-// and ignored. newlib's mkdir reaches host: through the ROM FILEIO and mass: through fileXio.
-void Sys_Mkdir(const char * path)
+    if (file == nullptr)
+    {
+        *hndl = -1;
+        return -1;
+    }
+
+    s_fileHandles[handle] = file;
+    *hndl = handle;
+    return static_cast<int>(FileLength(file));
+}
+
+int Sys_FileOpenWrite(const char * path)
+{
+    const int handle = FindFileHandle();
+    std::FILE * file = std::fopen(path, "wb");
+
+    if (file == nullptr)
+    {
+        Sys_Error("Error opening %s: %s", path, std::strerror(errno));
+    }
+
+    s_fileHandles[handle] = file;
+    return handle;
+}
+
+void Sys_FileClose(int handle)
+{
+    std::fclose(s_fileHandles[handle]);
+    s_fileHandles[handle] = nullptr;
+}
+
+void Sys_FileSeek(int handle, int position)
+{
+    std::fseek(s_fileHandles[handle], position, SEEK_SET);
+}
+
+int Sys_FileRead(int handle, void * dest, int count)
+{
+    return static_cast<int>(std::fread(dest, 1, static_cast<size_t>(count), s_fileHandles[handle]));
+}
+
+int Sys_FileWrite(int handle, const void * data, int count)
+{
+    return static_cast<int>(std::fwrite(data, 1, static_cast<size_t>(count), s_fileHandles[handle]));
+}
+
+int Sys_FileType(const char * path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+    {
+        return FS_ENT_NONE;
+    }
+    if (S_ISDIR(st.st_mode))
+    {
+        return FS_ENT_DIRECTORY;
+    }
+    if (S_ISREG(st.st_mode))
+    {
+        return FS_ENT_FILE;
+    }
+    return FS_ENT_NONE;
+}
+
+// COM_CreatePath calls this for every directory along a path, the device root ("host:")
+// included, so failures - that one, and directories that already exist - are expected and
+// ignored, where QuakeSpasm's desktop version stopped with a Sys_Error. newlib's mkdir reaches
+// host: through the ROM FILEIO and mass: through fileXio.
+void Sys_mkdir(const char * path)
 {
     mkdir(path, 0777);
 }
 
-char * Sys_FindFirst(const char * path, unsigned musthave, unsigned canthave)
-{
-    (void)path; (void)musthave; (void)canthave;
-    return nullptr;
-}
+// ------------------------------------------------------------------------------------------------
+// Platform stubs (platform.h): no window, no clipboard, no dialogs
+// ------------------------------------------------------------------------------------------------
 
-char * Sys_FindNext(unsigned musthave, unsigned canthave)
-{
-    (void)musthave; (void)canthave;
-    return nullptr;
-}
-
-void Sys_FindClose() {}
+void PL_SetWindowIcon() {}
+void PL_VID_Shutdown() {}
+char * PL_GetClipboardData() { return nullptr; }
+void PL_ErrorDialog(const char * text) { (void)text; } // Sys_Error prints to the screen itself
 
 } // extern "C"

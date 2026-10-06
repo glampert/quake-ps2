@@ -10,11 +10,20 @@ paths:
 
 - `-std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-strict-aliasing`, with
   the `-Werror` set in the Makefile's `EE_CXX_WARNFLAGS`. ps2sdk and miniz headers are
-  `-isystem`, so only our code is held to it. id's C is exempt. Don't apply any of this to it.
-- Reach the engine through `ps2/common.h`, not by including engine headers directly.
-- Seam functions keep their Quake names, because they are `extern "C"` symbols the C engine
-  links against: `Sys_*`, `NET_*`, `VID_*`, `IN_*`, `SNDDMA_*`, `CDAudio_*`, `Sys_Save*`, the
-  `PS2_*` refexport functions, `PS2_MemAlloc`.
+  `-isystem`, so only our code is held to it. QuakeSpasm's C is exempt. Don't apply any of this
+  to it.
+- Reach the engine through `ps2/common.h`, not by including engine headers directly. It
+  renames QuakeSpasm's BSP `texinfo_t` to `q1_texinfo_t` for C++, because libdraw's
+  `draw_buffers.h` defines its own `texinfo_t`; the renderer works from `mtexinfo_t` anyway.
+- Seam functions keep their QuakeSpasm names, because they are `extern "C"` symbols the C
+  engine links against: `Sys_*`, `PL_*`, `VID_*`, `IN_*`, `SNDDMA_*`, `CDAudio_*`, `BGM_*`,
+  the renderer surface (`Draw_*`, `R_*`, `TexMgr_*`, `Sky_*`, `GL_SetCanvas`, ...), the
+  `PS2_*` hooks in `engine_hooks.h`, and the `net_drivers[]` table.
+- QuakeSpasm's cvars are static `cvar_t`s linked in by `Cvar_RegisterVariable`; there is no
+  `Cvar_Get`. Define one with `ps2::MakeCvar(name, value, flags)` from `common.h`. It reads 0
+  until registered. Register cvars and commands during `Host_Init`: QuakeSpasm stops with a
+  `Sys_Error` on a `Cmd_AddCommand` after it, which is why the backend's commands register from
+  `VID_Init`.
 - Allocation goes through `ps2::heap` with a `MemTag`. Failure is a fatal `Sys_Error`, not an
   exception.
 - `alignas(N)` is the alignment idiom, not `__attribute__((aligned))`.
@@ -57,9 +66,10 @@ Only *implicit* conversions warn. An explicit `static_cast` is the fix almost ev
 - `-Wdouble-promotion`: float literals take the `f` suffix. Cast int operands to float in
   float math (`static_cast<float>(n)`), and keep constants float (`constexpr float`).
   `std::floor/ceil` on a float pick the float overload.
-- `-Wnull-dereference`: **`Sys_Error` is not `[[noreturn]]`** (it's in a game header; don't
-  change it), so neither it nor `PS2_Assert(p)` proves `p` non-null to GCC. After
-  `if (!p) { Sys_Error(...); }` add `return X; // unreachable; Sys_Error halts (it is not marked noreturn)`.
+- `-Wnull-dereference`: QuakeSpasm declares `Sys_Error` `FUNC_NORETURN`, so
+  `if (!p) { Sys_Error(...); }` and `PS2_Assert(p)` prove `p` non-null to GCC, and nothing is
+  needed after them. (Quake II's wasn't, which is why code ported from that port may carry a
+  dead `return X; // unreachable` after one: drop it.)
   If a helper has any path returning null (e.g. a "measure" mode), every dereference of its
   result warns. Remove that path, e.g. by splitting a sizer type from the allocator. This can
   surface when an int index becomes a pointer.
