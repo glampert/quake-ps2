@@ -22,15 +22,15 @@ namespace {
 constexpr int kDefaultHunkSizeBytes = 16 * 1024 * 1024;
 
 // Must outlive the program: host_parms points at it.
-quakeparms_t s_parms;
+static quakeparms_t s_parms;
 
 // The command line QuakeSpasm sees. Like any C program it takes argv[0] to be the program and
 // looks for options from argv[1] on, but launchers disagree on argv[0]: PCSX2's -gameargs hands
 // the ELF its arguments alone, so a lone "-dedicated" arrives as argv[0] and would be skipped.
 // A first argument that looks like an option or a +command gets a program name put in front.
-char   s_programName[] = "quake.elf";
-char * s_argv[MAX_NUM_ARGVS + 1];
-int    s_argc = 0;
+static char   s_programName[] = "quake.elf";
+static char * s_argv[MAX_NUM_ARGVS + 1];
+static int    s_argc = 0;
 
 void BuildArgv(const int argc, char ** const argv)
 {
@@ -80,12 +80,12 @@ int main(int argc, char ** argv)
 #ifdef PS2_FS_BASE_PATH
     const char * const basedir = PS2_FS_BASE_PATH;
 #else // PS2_FS_BASE_PATH
-    const char * const basedir = ps2::sys::DetectBasePathAndBootIop();
+    const char * const basedir = ps2::sys::DetectBasePathAndBootIop((argc > 0) ? argv[0] : nullptr);
 #endif // PS2_FS_BASE_PATH
 
     BuildArgv(argc, argv);
 
-    host_parms = &s_parms;
+    host_parms       = &s_parms;
     s_parms.basedir  = basedir;
     s_parms.argc     = s_argc;
     s_parms.argv     = s_argv;
@@ -95,12 +95,12 @@ int main(int argc, char ** argv)
     isDedicated = (COM_CheckParm("-dedicated") != 0);
 
     Sys_Init();
-    Sys_Printf("Initializing QuakeSpasm v%s\n", QUAKESPASM_VER_STRING);
+    Sys_Printf("==== Initializing PS2 QuakeSpasm v%s ====\n", QUAKESPASM_VER_STRING);
 
     s_parms.memsize = HunkSizeBytes();
     s_parms.membase = ps2::heap::Alloc(static_cast<size_t>(s_parms.memsize), ps2::heap::MemTag::Hunk);
 
-    Sys_Printf("Host_Init\n");
+    Sys_Printf("Calling Host_Init...\n");
     Host_Init();
 
     double oldtime = Sys_DoubleTime();
