@@ -13,9 +13,16 @@
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/math/vec_mat.h"
+#include "ps2/system/sys.h"
 
 namespace ps2::test {
 namespace {
+
+// The scene's switch, and its variants (see DrawRotatingCube).
+cvar_t s_testCube     = ps2::MakeCvar("ps2_testcube",                   "0", CVAR_NONE);
+cvar_t s_testTess     = ps2::MakeCvar("ps2_testcube_tess",              "8", CVAR_NONE);
+cvar_t s_testEviction = ps2::MakeCvar("ps2_testcube_vram_tex_eviction", "0", CVAR_NONE);
+cvar_t s_testVuLerp   = ps2::MakeCvar("ps2_testcube_vulerp",            "0", CVAR_NONE);
 
 constexpr float kCubeHalfSize = 20.0f;
 
@@ -212,17 +219,24 @@ math::Vec4 FaceShadeLight(const int corners[4])
 
 // Which debug texture a face samples. With ps2_testcube_vram_tex_eviction on the faces share a
 // 3-variant window that slides every 2 seconds instead of taking one each.
-int FaceVariant(const int face, const int tick, const cvar_t * const evictionCvar)
+int FaceVariant(const int face, const int tick)
 {
-    return (evictionCvar->value != 0.0f) ? (((face % 3) + tick) % tex::kNumDebugTextures) : face;
+    return (s_testEviction.value != 0.0f) ? (((face % 3) + tick) % tex::kNumDebugTextures) : face;
 }
 
 } // namespace
 
+void RegisterCvars()
+{
+    Cvar_RegisterVariable(&s_testCube);
+    Cvar_RegisterVariable(&s_testTess);
+    Cvar_RegisterVariable(&s_testEviction);
+    Cvar_RegisterVariable(&s_testVuLerp);
+}
+
 void DrawRotatingCube()
 {
-    static const cvar_t * s_testCube = Cvar_Get("ps2_testcube", "0", 0);
-    if (s_testCube->value == 0.0f)
+    if (s_testCube.value == 0.0f)
     {
         return;
     }
@@ -231,13 +245,12 @@ void DrawRotatingCube()
     // vertex counts past kMaxVertsPerBatch to exercise DrawTriangles' chunked
     // submission (tess 5 = 150 verts per face = 2 chunks; tess 8 = 384 = 4).
     // The cube looks identical at any setting - denser mesh, same surface.
-    static const cvar_t * s_testTess = Cvar_Get("ps2_testcube_tess", "8", 0);
-    int tess = static_cast<int>(s_testTess->value);
+    int tess = static_cast<int>(s_testTess.value);
     tess = (tess < 1) ? 1 : ((tess > kMaxTess) ? kMaxTess : tess);
 
     using namespace ps2::math;
 
-    const float t = MsecToSec(static_cast<float>(Sys_Milliseconds()));
+    const float t = MsecToSec(static_cast<float>(ps2::sys::Milliseconds()));
 
     const Mat4 model = RotationY(t) * RotationX(t * 0.7f);
     const Mat4 view  = LookAt(Vec3{ 0.0f, 25.0f, -80.0f },
@@ -262,7 +275,6 @@ void DrawRotatingCube()
     // re-uploads. Enable it together with the heap limit: the full 6-variant
     // set (26 pages with the fullscreen console) does not fit a heap that small.
     static_assert(tex::kNumDebugTextures >= 6, "One variant per cube face");
-    static const cvar_t * s_testEviction = Cvar_Get("ps2_testcube_vram_tex_eviction", "0", 0);
 
     // With ps2_testcube_vulerp on, the faces render through the MD2 keyframe
     // path instead: positions quantized to MD2-style bytes and decoded back
@@ -272,8 +284,7 @@ void DrawRotatingCube()
     // the lerp's 'move' term. Same cube, give or take 8-bit quantization -
     // a pixel-comparable smoke test of the V4_8 unpack, the itof0 conversion
     // and the lerp, with no model data in the loop.
-    static const cvar_t * s_testVuLerp = Cvar_Get("ps2_testcube_vulerp", "0", 0);
-    const bool vuLerp = (s_testVuLerp->value != 0.0f);
+    const bool vuLerp = (s_testVuLerp.value != 0.0f);
 
     Mat4 mvpLerp = {};
     Vec3 frontv  = {};
@@ -304,7 +315,7 @@ void DrawRotatingCube()
     // One stream for the whole cube, flushed per face by the texture change: six batches, as
     // before. A face fits one flush cycle whatever the tessellation, so its vertices go out in
     // one batch and only the draw itself chunks them.
-    const int tick     = Sys_Milliseconds() / 2000;
+    const int tick     = ps2::sys::Milliseconds() / 2000;
     const int numVerts = tess * tess * 6;
 
     if (vuLerp)
@@ -316,7 +327,7 @@ void DrawRotatingCube()
         for (int face = 0; face < 6; ++face)
         {
             lerpStream.SetTransform(mvpLerp);
-            lerpStream.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
+            lerpStream.SetTexture(tex::DebugTexture(FaceVariant(face, tick)));
             lerpStream.SetLerpParams(frontv, backv, FaceShadeLight(kFaces[face]));
             lerpStream.SetAttribSource(s_faceAttribs);
 
@@ -333,7 +344,7 @@ void DrawRotatingCube()
         for (int face = 0; face < 6; ++face)
         {
             trisStream.SetTransform(mvp);
-            trisStream.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
+            trisStream.SetTexture(tex::DebugTexture(FaceVariant(face, tick)));
 
             trisStream.BeginVerts(numVerts);
             EmitFace(trisStream, kFaces[face], tess);

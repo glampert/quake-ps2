@@ -73,7 +73,10 @@ PS2_PROFILE_DECLARE_EVENT(Music);
 // has the engine's own console output mixed in.
 namespace ps2::debug {
 
-// Records the frame that just completed. Call from PS2_BeginFrame right after
+// Registers the ps2_frame_log cvar that turns the log on. Call once, during Host_Init.
+void FrameLogInit();
+
+// Records the frame that just completed. Call from GL_BeginRendering right after
 // ProfileNewFrame(), and before rs::BeginFrame() resets the per-frame counters
 // this reads.
 void FrameLogCapture();
@@ -82,14 +85,15 @@ void FrameLogCapture();
 // from the main loop with the Frame profile scope closed.
 void FrameLogFlush();
 
-// Emits a marker row so a run can be split by map. Called from PS2_BeginRegistration.
+// Emits a marker row so a run can be split by map. Call from R_NewMap.
 void FrameLogMarkMap(const char * mapName);
 
 // Records a file being opened, written as an "FLOG#open,<row>,<name>" line with the next dump -
-// the row being the one whose columns are charged with the read. Called from FS_FOpenFile
-// through PS2Quake_FrameLogNoteOpen, so every mid-level load names itself in the log. Note that
-// SV_Frame and CL_ReadPackets, where most of those happen, run before the frame's rollover: the
-// read then stretches the Frame of the row after (see debug/engine_profile.h).
+// the row being the one whose columns are charged with the read. Meant to be called through
+// PS2Quake_FrameLogNoteOpen from the engine's file opens, so every mid-level load names itself
+// in the log. Note that the server frame and the client's packet reads, where most of those
+// happen, run before the frame's rollover: the read then stretches the Frame of the row after
+// (see debug/engine_profile.h).
 void FrameLogNoteOpen(const char * fileName);
 
 // Ends the log: writes whatever the batch still holds, rather than waiting for
@@ -100,6 +104,7 @@ void FrameLogFinish();
 
 #if !PS2_QUAKE_PROFILE
 // No-op stubs for when the profiler is disabled.
+inline void FrameLogInit() {}
 inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}

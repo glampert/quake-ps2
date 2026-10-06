@@ -24,10 +24,8 @@
  *  as it writes them (rs::AddLerpBatchChunk). A particle chunk is one REF of billboards. A 3D
  *  draw's GS packets are never in this buffer: the microprogram builds them in VU memory.
  *
- *  Both halves live inside the world loader's lump scratch (mod::WorldScratchBlock), which is
- *  claimed only while a .bsp is parsed and is dead for the whole of gameplay: no rendering
- *  during a load, no load during a frame, so the region serves two owners that never overlap
- *  and the renderer allocates nothing of its own. DrainBeforeWorldLoad is the interlock.
+ *  Both halves are one heap block, allocated once at video init (vid.cpp) and handed to
+ *  rs::Init, which the renderer keeps for the whole run.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -40,13 +38,13 @@
 
 namespace ps2::cmdbuf {
 
-// Bytes in each of the two halves, bounded by kWorldScratchCapacity / 2 (model_load.cpp
-// static_asserts the pair, so raising this means raising that).
+// Bytes in each of the two halves.
 //
-// A frame builds 420 KB of chain on average over the perf demos and 681 KB at p95, so this holds
-// most frames whole and the rest take one overflow rewind - about 1.5 kicks a frame. The numbers
-// to steer by are BytesLastFrame(), which counts what a rewind threw away and so says whether a
-// frame *fits*, and EmergencyDrainsLastFrame().
+// Sized on the Quake II port, where a frame built 420 KB of chain on average over the perf demos
+// and 681 KB at p95: this held most frames whole and the rest took one overflow rewind, about 1.5
+// kicks a frame. Quake's scenes are lighter. The numbers to steer by are BytesLastFrame(), which
+// counts what a rewind threw away and so says whether a frame *fits*, and
+// EmergencyDrainsLastFrame().
 constexpr u32 kHalfBytes  = 512u * 1024u;
 constexpr u32 kHalfQwords = kHalfBytes / 16u;
 
@@ -56,8 +54,8 @@ constexpr u32 kHalfQwords = kHalfBytes / 16u;
 // the next caller's budget.
 constexpr int kTerminatorQwords = 4;
 
-// Points the two halves at the loader scratch and opens the first one. Call once at renderer
-// init, after mod::Init() - the arena the halves live in is reserved from there.
+// Points the two halves at 'memory' - 2 * kHalfBytes, 64-byte aligned for the DMA - and opens the
+// first one. Call once, at renderer init.
 void Init(void * memory, u32 memorySizeBytes);
 
 // Swaps halves and rewinds the write cursor. Nothing written before this survives.
@@ -260,15 +258,8 @@ void SetHangReportHook(HangReportFn hook);
 //
 // Does **not** rewind: the pipeline empties, but everything built stays where it is and every
 // pointer into it stays good - which is what lets a draw's vertex data outlive its submission.
-// The chain is rewound at BeginFrame, by Reserve's overflow path and by DrainBeforeWorldLoad,
-// nowhere else.
+// The chain is rewound at BeginFrame and by Reserve's overflow path, nowhere else.
 bool Drain();
-
-// The interlock that lets the halves live in the loader's lump scratch: waits for anything in
-// flight - the GS included, since a frame left drawing is still reading out of a half - and
-// abandons whatever is half-built, because the memory underneath is about to become the .bsp lump
-// staging buffer. Called from LoadBrushModel before it claims the scratch.
-void DrainBeforeWorldLoad();
 
 // --------------------------------------------------------------------------------------------
 // Debug counters

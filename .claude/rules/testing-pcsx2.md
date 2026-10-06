@@ -44,9 +44,12 @@
 - `path` lists the search path and `mods` the directories next to the ELF (on `host:` that
   is `build/<config>/`: `id1`, `irx`, `miniz`, `src`), which shows `opendir` works.
 - `make run RUN_ARGS="..."` puts arguments on the game's command line through PCSX2's
-  `-gameargs`, e.g. `RUN_ARGS="+map e1m1"`. PCSX2 passes them without a program name in
+  `-gameargs`, e.g. `RUN_ARGS="-heapsize 20480"`. PCSX2 passes them without a program name in
   `argv[0]`; `main.cpp` adds one, since QuakeSpasm reads options from `argv[1]` on. For runs
   that shouldn't overwrite `emulog.txt`, launch PCSX2 directly with `-logfile <path>`.
+- **`+commands` do nothing with the shareware data.** `stuffcmds` reads the `cmdline` cvar,
+  and `COM_CheckRegistered` only fills it when `gfx/pop.lmp` (the registered pak1) is found,
+  as in id's Quake. `RUN_ARGS="+map e1m1"` boots into the demo loop. Use `id1/autoexec.cfg`.
 - `-dedicated` doesn't work: QuakeSpasm stops with "Network not available!" when no driver but
   loopback comes up. A normal run's `map e1m1` already exercises the server, QuakeC and
   physics, with the client attached.

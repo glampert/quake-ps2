@@ -35,10 +35,8 @@ struct Scrap final
 static Scrap s_scraps[kMaxScraps];
 static int   s_scrapCount = 0;
 
-// Brings the next scrap online. The atlases live outside the texture cache: they
-// are never looked up by name, and their lifetime is the whole session rather
-// than a registration sequence (Pics are never evicted either, so nothing would
-// be reclaimed by tying them to one).
+// Brings the next scrap online. The atlases live outside the texture pool: nothing
+// looks them up, and they last as long as the pics packed into them.
 bool NextScrap()
 {
     if (s_scrapCount == kMaxScraps)
@@ -56,7 +54,6 @@ bool NextScrap()
     tex::Texture & texture = scrap.texture;
     std::snprintf(texture.name, sizeof(texture.name), "*scrap%d", index);
 
-    texture.regSequence  = 0;
     texture.pixels       = scrap.pixels;
     texture.width        = kScrapWidth;
     texture.height       = kScrapHeight;
@@ -74,7 +71,6 @@ bool NextScrap()
     // bilinear taps at a packed image's edge would bleed in its neighbour.
     texture.magFilter    = tex::TexFilter::Nearest;
     texture.minFilter    = tex::TexFilter::Nearest;
-    texture.textureChain = nullptr;
     texture.atlas        = nullptr; // an atlas is not itself packed into one
     texture.atlasX       = 0;
     texture.atlasY       = 0;
@@ -144,8 +140,7 @@ void DumpUsage()
         return;
     }
 
-    static const cvar_t * s_developer = Cvar_Get("developer", PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    if (s_developer->value == 0.0f)
+    if (developer.value == 0.0f)
     {
         return;
     }
@@ -161,7 +156,7 @@ void DumpUsage()
             usedTexels += column;
         }
 
-        Com_DPrintf("Scrap %d: %dx%d, %d%% full.\n", i, kScrapWidth, kScrapHeight,
+        Con_DPrintf("Scrap %d: %dx%d, %d%% full.\n", i, kScrapWidth, kScrapHeight,
                     (usedTexels * 100) / kScrapTexels);
     }
 }

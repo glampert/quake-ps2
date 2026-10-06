@@ -390,7 +390,7 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
     if (addr == vram::Address::Invalid)
     {
 #if PS2_QUAKE_DEBUG
-        Com_DPrintf("VRAM: heap full mid-frame for '%s' (%d KB), fencing the GS to unpin.\n",
+        Con_DPrintf("VRAM: heap full mid-frame for '%s' (%d KB), fencing the GS to unpin.\n",
                     texture.name, sizeWords * 4 / 1024);
 #endif // PS2_QUAKE_DEBUG
 
@@ -555,7 +555,7 @@ void EnsureTextureResident(const tex::Texture & texture)
 
         texture.vramAddr = addr;
 
-        Com_DPrintf("VRAM: uploaded '%s' (%dx%d, %d KB)\n", texture.name,
+        Con_DPrintf("VRAM: uploaded '%s' (%dx%d, %d KB)\n", texture.name,
                     texture.width, texture.height, sizeWords * 4 / 1024);
     }
 
@@ -591,7 +591,7 @@ void Init(const gs::Config & gsConfig, void * memory, const u32 memorySizeBytes)
 {
     gs::Init(gsConfig);
 
-    // NOTE: Must happen after mod::Init since the chain halves live in the arena it reserves.
+    // The frame chain, in the block the caller allocated for it.
     cmdbuf::Init(memory, memorySizeBytes);
 
     // NOTE: Must happen after cmdbuf::Init since the microprogram upload goes out on the cmdbuf chain.

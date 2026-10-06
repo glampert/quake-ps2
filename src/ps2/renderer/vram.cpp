@@ -383,8 +383,8 @@ const char * PixelFormatName(tex::PixelFormat format)
 // total next to a small largest-free-block means fragmentation instead.
 void DumpAllBlocks()
 {
-    Com_Printf("---- GS VRAM texture heap dump (frame %u) ----\n", s_frame);
-    Com_Printf("idx  addrWords  sizeWords  sizeKB  lastBound  texture\n");
+    Con_Printf("---- GS VRAM texture heap dump (frame %u) ----\n", s_frame);
+    Con_Printf("idx  addrWords  sizeWords  sizeKB  lastBound  texture\n");
 
     int index            = 0;
     int usedBlocks       = 0;
@@ -403,7 +403,7 @@ void DumpAllBlocks()
                 largestFreeWords = block->sizeWords;
             }
 
-            Com_Printf("%3d  %9d  %9d  %6d  %9s  <free>\n",
+            Con_Printf("%3d  %9d  %9d  %6d  %9s  <free>\n",
                        index, addrWords, block->sizeWords, sizeKb, "-");
             continue;
         }
@@ -417,7 +417,7 @@ void DumpAllBlocks()
         }
 
         const tex::Texture & texture = *block->owner;
-        Com_Printf("%3d  %9d  %9d  %6d  %9u  %s (%dx%d, %s, %s)%s%s\n",
+        Con_Printf("%3d  %9d  %9d  %6d  %9u  %s (%dx%d, %s, %s)%s%s\n",
                    index, addrWords, block->sizeWords, sizeKb, block->lastBoundFrame,
                    texture.name, texture.width, texture.height,
                    PixelFormatName(texture.format), ImageTypeName(texture.type),
@@ -426,19 +426,19 @@ void DumpAllBlocks()
 
     const Stats stats = GetStats();
 
-    Com_Printf("Blocks   : %d used (%d pinned this frame), %d free, %d of %d descriptors\n",
+    Con_Printf("Blocks   : %d used (%d pinned this frame), %d free, %d of %d descriptors\n",
                usedBlocks,
                pinnedBlocks,
                s_blockCount - usedBlocks,
                s_blockCount, kBlockPoolCapacity);
 
-    Com_Printf("Heap     : %d KB total, %d KB used, %d KB free (largest free block %d KB)\n",
+    Con_Printf("Heap     : %d KB total, %d KB used, %d KB free (largest free block %d KB)\n",
                stats.totalWords * 4 / 1024,
                (stats.totalWords - stats.freeWords) * 4 / 1024,
                stats.freeWords * 4 / 1024,
                largestFreeWords * 4 / 1024);
 
-    Com_Printf("Textures : %d resident, %d uploads this frame, %d GS drains this frame\n",
+    Con_Printf("Textures : %d resident, %d uploads this frame, %d GS drains this frame\n",
                stats.residentTextures,
                stats.uploadsThisFrame,
                stats.oomSyncsThisFrame);
@@ -461,7 +461,7 @@ void Init(int heapBaseWords)
 
     ResetHeap();
 
-    Com_Printf("GS texture heap: %d KB of VRAM (%d block descriptors).\n",
+    Con_Printf("GS texture heap: %d KB of VRAM (%d block descriptors).\n",
                s_heapTotalWords * 4 / 1024, kBlockPoolCapacity);
 }
 
@@ -602,7 +602,7 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords)
             return Address::Invalid;
         }
 
-        Com_DPrintf("VRAM: evicting '%s' (%d KB)\n", victim->owner->name, victim->sizeWords * 4 / 1024);
+        Con_DPrintf("VRAM: evicting '%s' (%d KB)\n", victim->owner->name, victim->sizeWords * 4 / 1024);
 
         victim->owner->vramAddr = tex::Texture::kNotResident;
         victim->owner = nullptr;
@@ -707,7 +707,7 @@ bool Defragment()
     // Everything that was resident now is not, and its VRAM is about to be handed out again.
     s_reuseHazard |= (evicted > 0);
 
-    Com_DPrintf("VRAM: heap defragmented, %d resident textures evicted.\n", evicted);
+    Con_DPrintf("VRAM: heap defragmented, %d resident textures evicted.\n", evicted);
     return evicted > 0;
 }
 

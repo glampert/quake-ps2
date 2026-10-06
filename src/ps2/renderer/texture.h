@@ -1,11 +1,10 @@
 #pragma once
 /* ================================================================================================
  * File: texture.h
- * Brief: Texture/image objects for the PS2 renderer and the cache that owns them.
- *        The embedded built-in images (console font/background, HUD tiles) are
- *        registered up front; everything else loads from disk (PCX/TGA/WAL) on
- *        the first Find and is freed by the registration sequence when a level
- *        change stops referencing it.
+ * Brief: Texture/image objects for the PS2 renderer, and the pool they live in. The
+ *        engine's texture manager (texmgr.cpp, QuakeSpasm's TexMgr_* seam) creates them
+ *        from pixels already in memory and destroys them when their owner goes; GS VRAM
+ *        residency is managed underneath (vram.h), so a texture uploads on its first bind.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -18,17 +17,13 @@
 #include <draw_buffers.h>  // texbuffer_t
 #include <draw_sampling.h> // LOD_*
 
-namespace ps2::mod { struct ModelSurface; }
-
 namespace ps2::tex {
 
-// What a texture is used for by the game. Mirrors the image classes of the
-// original renderers and is part of the cache lookup key, so the same file
-// may be cached once per type; it also drives end-of-level eviction (level
-// asset types are freed when unused, Pics stick around - see EndRegistration).
+// What a texture is used for by the game. Mirrors the image classes of the original
+// renderers, and decides the default filtering (see Create).
 enum class ImageType : u8
 {
-    Null,   // Free slot in the cache.
+    Null,   // Free slot in the pool.
     Pic,    // 2D UI/HUD image.
     Skin,   // Model skin.
     Sprite, // Sprite frame.
@@ -88,12 +83,11 @@ enum class TexFunction : u8 { Modulate, Decal };
 // Texel filtering.
 enum class TexFilter : u8 { Nearest, Linear };
 
-// A texture or 2D image. Plain data; owned by the internal texture cache.
+// A texture or 2D image. Plain data; lives in the texture pool (Create/Destroy).
 struct Texture final
 {
-    char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx" (must be the first field - game code assumes this).
-    u32           regSequence;     // Registration sequence the texture was last found in; stale level assets are freed at EndRegistration().
-    const void *  pixels;          // Pixel data in EE RAM (static memory for built-ins, heap for file loads).
+    char          name[MAX_QPATH]; // The engine's name for it, e.g. "gfx.wad:conchars"; for logs and VRAM dumps.
+    const void *  pixels;          // Pixel data in EE RAM. Not owned: whoever created the texture keeps it alive.
     s16           width;           // Of 'pixels', in pixels, > 0.
     s16           height;          // Of 'pixels', in pixels, > 0.
     s16           srcWidth;        // Size the image had on disk. Tiling world textures are resampled to the next power of two on load, width/height
@@ -106,11 +100,6 @@ struct Texture final
     TexFunction   function;
     TexFilter     magFilter;
     TexFilter     minFilter;
-
-    // Head of this texture's world-surface draw chain. view.cpp threads
-    // the frame's visible surfaces here while walking the BSP, then draws each
-    // chain as one batch and resets it to null - it never outlives the frame.
-    mutable const mod::ModelSurface * textureChain;
 
     // Set when the image lives inside a shared scrap atlas (see scrap_atlas.h)
     // rather than owning VRAM: bind 'atlas' and shift the draw's texel
@@ -262,85 +251,33 @@ inline u8 Log2(u32 x)
     return static_cast<u8>(res);
 }
 
-// Registers the built-in images (they stream into GS VRAM on first bind).
-// 'intensity' (>= 1) is the brightening a lit true-colour image takes in its own
-// texels, since it has no CLUT to carry it - see TakesIntensity. Call once.
-void Init(float intensity);
+// Sets up the pool and the generated images (the debug checkerboards, the particle image).
+// Call once.
+void Init();
 
-// Level asset lifetimes, driven by the engine's registration sequence:
-// BeginRegistration starts a new sequence (level load); every texture found
-// or loaded afterwards is stamped with it. EndRegistration then frees the
-// level assets (Skin/Sprite/Wall/Sky) left with an older stamp - pixel memory,
-// GS VRAM and cache slot. Pics are exempt like in ref_gl (the client caches
-// pointers to them across levels), and built-ins are permanent.
-void BeginRegistration();
-void EndRegistration();
+// A new texture over 'pixels', which stay the caller's and must outlive it. Streams into GS
+// VRAM on its first bind. Pics and sprites filter nearest, the rest linear; the caller may
+// change any field before the first bind. Running out of slots is a Sys_Error.
+Texture & Create(const char * name, const void * pixels, int width, int height,
+                 PixelFormat format, TexComponents components, ImageType type,
+                 TexFlags flags = TexFlags::None);
 
-// Free-before-load registration (see PS2_SetRegistrationTouchOnly in ref.cpp). While touch-only
-// mode is on, Find stamps what is already cached as used this cycle and returns nullptr for
-// anything that is not, without loading it.
-void SetTouchOnly(bool enable);
-bool IsTouchOnly();
+// Gives the texture's VRAM back and frees its slot. Not its pixels: the caller owns those.
+void Destroy(const Texture & texture);
 
-// EndRegistration's sweep, run early: frees the level assets this cycle has not stamped, so the
-// previous level's leftovers are gone before the new level's loads rather than after them.
-// 'onlyType' limits it to one ImageType - the world load frees the old walls that way before
-// loading the new ones; Null means every type a level owns.
-void FreeUnregistered(ImageType onlyType = ImageType::Null);
-
-// Looks up a texture by game name and type, loading it from disk (PCX/WAL/TGA,
-// by extension) on a cache miss; the type is part of the cache key, so the same
-// file may live in the cache once per ImageType. Pic names follow the ref_gl
-// convention: bare names expand to "pics/<name>.pcx", a leading '/' or '\'
-// means the full path was given. Other types always give the full path.
-// Returns nullptr when the file is missing or fails to decode.
-const Texture * Find(const char * name, ImageType type);
-
-// Halve every ImageType::Sky image loaded from now on, both dimensions, and
-// keep doing it until switched back off. ref_gl's gl_skymip in the shape the
-// PS2 needs it: a sky face is the largest single texture the renderer binds
-// (256x256 = 64 KB of VRAM), and a rotating sky forces all six of them
-// resident at once, so a quarter of that is worth having on hand.
-//
-// A mode flag rather than a Find() parameter because it belongs to the sky
-// module's load loop, exactly as ref_gl bracketed its six GL_FindImage calls
-// with gl_picmip++/gl_picmip--. Note the cache keys on name and type only, so
-// a sky already resident from an earlier map keeps whichever size it loaded
-// at; sky.cpp reads the face's real width back rather than assuming.
-void SetSkyDownsample(bool enable);
-
-// Whether WAL walls load with their mip levels (ps2_mipmaps). Off, they load level 0 alone,
-// exactly as before mipmapping existed. Walls already cached keep the mode they loaded
-// with, so switching it frees every wall for the next world to load again the new way -
-// call it between BeginRegistration and the world load, with the old world already
-// released, since its surfaces point at them (see PS2_BeginRegistration).
-bool WallMipmaps();
-void SetWallMipmaps(bool enable);
-
-// Re-stamps an already-resolved texture as used in the current registration
-// cycle, so EndRegistration() won't evict it. The model cache calls this when
-// a model is found in-cache: its texture pointers are reused directly, without
-// a Find() to refresh their sequence number.
-void TouchTexture(const Texture & texture);
-
-// Capacity of the texture cache: world textures, model skins, HUD/menu pics.
-// Exported because view.cpp sizes its per-frame texture chain array to
-// the same bound - a chain can hold at most one entry per live texture.
+// Capacity of the texture pool: world textures, model skins, HUD/menu pics.
 // Running out is a Sys_Error telling you to bump this.
 constexpr u32 kMaxTextures = 640;
 
 // Number of built-in debug checkerboard variants (distinct colors).
 constexpr int kNumDebugTextures = PS2_QUAKE_DEBUG ? 6 : 1;
 
-// Checkerboard stand-ins ("pics/debug0..5.pcx"). Variant 0 is the pink/black
-// checker drawn wherever an image is missing; the others give test scenes
-// several distinct textures to exercise VRAM streaming.
+// Checkerboard stand-ins. Variant 0 is the pink/black checker drawn wherever an image is
+// missing; the others give test scenes several distinct textures to exercise VRAM streaming.
 const Texture & DebugTexture(int variant = 0);
 
-// The built-in particle image, generated at Init rather than loaded (Quake 2
-// ships neither as a file). Carries its shape in alpha with every texel's
-// colour at the modulate identity, so the particle's colour comes entirely
-// from its vertices.
+// The particle image, generated at Init. Carries its shape in alpha with every texel's
+// colour at the modulate identity, so the particle's colour comes entirely from its vertices.
 const Texture & ParticleTexture();
 
 // Converts image-normalized texture coordinates - 0..1 spanning the image,

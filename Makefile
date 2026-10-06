@@ -72,16 +72,28 @@ PS2_CXX_SRC =                         \
 	ps2/system/sys.cpp                \
 	ps2/system/iop_boot.cpp           \
 	ps2/system/heap.cpp               \
+	ps2/math/vec_mat.cpp              \
 	ps2/net/net.cpp                   \
 	ps2/input/input.cpp               \
 	ps2/audio/snd.cpp                 \
 	ps2/audio/cd_audio.cpp            \
+	ps2/renderer/gs.cpp               \
+	ps2/renderer/vram.cpp             \
+	ps2/renderer/texture.cpp          \
+	ps2/renderer/scrap_atlas.cpp      \
+	ps2/renderer/profile.cpp          \
+	ps2/renderer/vu1.cpp              \
+	ps2/renderer/cmd_buffer.cpp       \
+	ps2/renderer/render_system.cpp    \
+	ps2/renderer/clip.cpp             \
 	ps2/renderer/vid.cpp              \
 	ps2/renderer/draw.cpp             \
 	ps2/renderer/texmgr.cpp           \
 	ps2/renderer/refresh.cpp          \
+	ps2/tests/draw_cube.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
+	ps2/debug/pipeline_dump.cpp       \
 	ps2/debug/exception_handler.cpp   \
 	ps2/debug/profile.cpp
 
@@ -115,10 +127,14 @@ CXX_SRC = $(PS2_CXX_SRC)
 # are on the per-frame path, so they are built for size instead of speed, which
 # is RAM the levels get to use instead.
 SIZE_OPT_CXX_SRC =                    \
+	ps2/renderer/texture.cpp          \
+	ps2/renderer/scrap_atlas.cpp      \
 	ps2/system/iop_boot.cpp           \
 	ps2/renderer/vid.cpp              \
+	ps2/tests/draw_cube.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
+	ps2/debug/pipeline_dump.cpp       \
 	ps2/debug/exception_handler.cpp   \
 	ps2/debug/profile.cpp
 
@@ -420,8 +436,9 @@ $(OUTPUT_DIR)/id1:
 	@mkdir -p $(dir $@)
 	ln -sfn $(abspath id1) $@
 
-# The game's command line, handed to the ELF through PCSX2's -gameargs: make run RUN_ARGS=-dedicated,
-# or RUN_ARGS="+map e1m1" (QuakeSpasm runs +commands after the configs, as on the desktop).
+# The game's command line, handed to the ELF through PCSX2's -gameargs, e.g.
+# make run RUN_ARGS="-heapsize 20480". +commands need the registered data: on the shareware pak
+# QuakeSpasm ignores them, as id's Quake did, so script a session with id1/autoexec.cfg instead.
 RUN_ARGS ?=
 
 run: all $(OUTPUT_DIR)/id1

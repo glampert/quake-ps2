@@ -270,9 +270,9 @@ static u32          s_ticksPerField;
 // nearest: a stamp sits a few spin iterations past its field boundary, never half a field.
 void StampPresent()
 {
-    // GetTimerSystemTime scales T2's count up to BUSCLK units, so the low byte is always zero (see
-    // Sys_Milliseconds); shifting it off gives the timer's own 576 kHz ticks. The 32 bits kept wrap
-    // every two hours or so, which the unsigned difference below does not mind.
+    // GetTimerSystemTime scales T2's count up to BUSCLK units, so the low byte is always zero
+    // (see ps2::sys::Milliseconds); shifting it off gives the timer's own 576 kHz ticks. The 32
+    // bits kept wrap every two hours or so, which the unsigned difference below does not mind.
     const u32 now = static_cast<u32>(GetTimerSystemTime() >> 8);
 
     // Two presents are never less than a field apart - each spins for a vsync of its own - so a
@@ -387,8 +387,8 @@ void Init(const Config & cfg)
     wrap.minu = wrap.maxu = 0;
     wrap.minv = wrap.maxv = 0;
 
-    // On the upload packet, not the frame chain: gs::Init runs before mod::Init, and the
-    // chain's halves live in the arena that reserves (see PS2_RefInit's ordering note).
+    // On the upload packet, not the frame chain: gs::Init runs before cmdbuf::Init (see
+    // rs::Init's ordering).
     GifWriter & pkt = s_texUploadPacket.Begin();
     pkt.SetupEnvironment(Index(DrawContext::Ctx0), frames[0], zbuffer);
     pkt.TextureWrapping(Index(DrawContext::Ctx0), wrap);

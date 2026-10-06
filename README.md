@@ -29,7 +29,7 @@ cut down to fit the PS2's 32 MB. The port is brought up in phases, each checked 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless. *Done.*
-4. 2D: console, menus, HUD.
+4. 2D: console, menus, HUD. *In progress: the GS and VU1 layer builds, not yet driven.*
 5. Input: DualShock and USB keyboard.
 6. 3D: world, lightmaps, water, sky, models, sprites, particles.
 7. Sound, CD music, save games.
@@ -126,9 +126,10 @@ The engine's console output is prefixed with `[Q1]` in the log:
 tail -f ~/Library/Application\ Support/PCSX2/logs/emulog.txt | grep '\[Q1\]'
 ```
 
-`make run RUN_ARGS="+map e1m1"` puts arguments on the game's command line (PCSX2's
-`-gameargs`). An `id1/autoexec.cfg` runs at boot, as on the desktop, which is the easy way to
-script a session.
+`make run RUN_ARGS="-heapsize 20480"` puts arguments on the game's command line (PCSX2's
+`-gameargs`). `+commands` there do nothing with the shareware data: like id's Quake,
+QuakeSpasm only runs them for the registered version. An `id1/autoexec.cfg` runs at boot
+either way, as on the desktop, and is the way to script a session.
 
 ### Debugging commands
 

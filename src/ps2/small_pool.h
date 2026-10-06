@@ -96,6 +96,15 @@ public:
         return slot < MaxSize;
     }
 
+    // The slot an item handed out by this pool lives in.
+    u16 IndexOf(const T & item) const
+    {
+        PS2_AssertMsg(&item >= m_slots && &item < (m_slots + MaxSize), "Item not from this pool!");
+        const u16 slot = static_cast<u16>(&item - m_slots);
+        PS2_Assert(m_liveSlots[slot]);
+        return slot;
+    }
+
     T & Slot(u16 slot)
     {
         PS2_Assert(IsValid(slot) && m_liveSlots[slot]);

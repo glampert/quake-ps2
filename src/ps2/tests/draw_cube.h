@@ -10,6 +10,9 @@
 #if PS2_QUAKE_DEBUG
 namespace ps2::test {
 
+// Registers the ps2_testcube cvars. Call once, during Host_Init.
+void RegisterCvars();
+
 // Draws the 3D test cube for the current frame (a 3D draw, so it flushes any pending 2D
 // and lands on top). Call between gs::Begin/EndFrame, after vu1::Init(). Gated
 // by the "ps2_testcube" cvar; a no-op when it is 0.

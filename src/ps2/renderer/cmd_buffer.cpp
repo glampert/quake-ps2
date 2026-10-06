@@ -1,7 +1,7 @@
 /* ================================================================================================
  * File: cmd_buffer.cpp
- * Brief: The frame's single DMA source chain. See cmd_buffer.h for the layout and for why the
- *        two halves live inside the world loader's lump scratch.
+ * Brief: The frame's single DMA source chain. See cmd_buffer.h for the layout and for why it is
+ *        two halves.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -118,8 +118,8 @@ Q_ALWAYS_INLINE void AimSkipTag(dma_tag_t * const tag, const qword_t * const tar
 }
 
 // Throws the current half away and starts it over. Everything the frame has built so far goes
-// with it, so this may only run where nothing is live: the top of a frame, an overflow that has
-// already drained, and the world load that is about to take the memory back.
+// with it, so this may only run where nothing is live: the top of a frame, and an overflow that
+// has already drained.
 //
 // The high-water goes in here rather than only at EndFrame, or a frame that overflowed would
 // report the size of its last segment instead of the size that made it overflow.
@@ -157,13 +157,12 @@ packet2_t * detail::g_packet = nullptr;
 void Init(void * memory, const u32 memorySizeBytes)
 {
     PS2_AssertMsg(!s_initialized, "cmdbuf::Init called twice!");
-    PS2_AssertMsg(memory != nullptr, "cmdbuf::Init before the world arena was reserved!");
+    PS2_AssertMsg(memory != nullptr, "cmdbuf::Init without a block for the chain!");
     PS2_AssertMsg(memorySizeBytes >= 2u * kHalfBytes, "cmdbuf memory cannot hold both chain halves!");
 
     // 64-byte aligned because that is a cache line: the whole buffer is written by the EE and
     // read by the DMAC, and a half that started mid-line would share its first line with the
-    // other half. ReserveWorldArena aligns the arena and kWorldHunkCapacity is a multiple of 64,
-    // so the scratch base inherits it - assert rather than assume, since both are easy to change.
+    // other half. The caller allocates the block 64-byte aligned - assert rather than assume.
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(memory) & 63u) == 0, "cmdbuf memory must be 64-byte aligned for the frame chain!");
     static_assert((kHalfBytes & 63u) == 0, "Chain halves must be a whole number of cache lines");
 
@@ -187,15 +186,14 @@ void Init(void * memory, const u32 memorySizeBytes)
         PS2_AssertMsg(s_packets[i] != nullptr, "packet2_create_from failed!");
     }
 
-    // Only the two packet2 headers are ours; the qword buffers belong to the world arena and are
-    // already booked against MemTag::WorldMdl, so counting them here would double count them.
+    // Only the two packet2 headers are ours; the qword buffers are the block rs::Init was handed,
+    // booked by whoever allocated it, so counting them here would double count them.
     ps2::heap::TagsAddMem(ps2::heap::MemTag::Renderer, 2u * sizeof(packet2_t));
 
     s_initialized = true;
     PublishCurrent();
 
-    Com_DPrintf("Frame chain: 2 x %u KB inside the world lump scratch (%u KB), no heap of its own.\n",
-                kHalfBytes / 1024u, memorySizeBytes / 1024u);
+    Con_DPrintf("Frame chain: 2 x %u KB, in a %u KB block.\n", kHalfBytes / 1024u, memorySizeBytes / 1024u);
 }
 
 void BeginFrame()
@@ -271,7 +269,7 @@ bool Reserve(const int qwords)
     if (qwords > capacity) [[unlikely]]
     {
         Sys_Error("Frame chain: a single %d qword reservation does not fit the %d qwords a half "
-                  "can hold. Raise cmdbuf::kHalfBytes (and kWorldScratchCapacity with it).",
+                  "can hold. Raise cmdbuf::kHalfBytes.",
                   qwords, capacity);
     }
 
@@ -565,19 +563,6 @@ bool Drain()
     Kick();
     WaitIdle();
     return hadWork;
-}
-
-void DrainBeforeWorldLoad()
-{
-    if (!s_initialized)
-    {
-        return; // a load before the renderer is up cannot be racing anything
-    }
-
-    // The rewind is the point of this one: the half is about to become the .bsp lump staging
-    // buffer, so whatever the abandoned frame left in it has to stop being chain.
-    Drain();
-    Rewind();
 }
 
 // ------------------------------------------------------------------------------------------------

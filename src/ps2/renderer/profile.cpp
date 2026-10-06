@@ -1,6 +1,6 @@
 /* ================================================================================================
  * File: profile.cpp
- * Brief: Profile events shared by more than one renderer source file.
+ * Brief: Profile events shared by more than one source file, and the CSV frame log.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -10,10 +10,8 @@
 #include "ps2/debug/engine_profile.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
-#include "ps2/renderer/view.h"
 
 #include <cstdio>
 
@@ -115,14 +113,10 @@ struct FrameSample
     u32 frameIndex;
     u32 cycles[kNumEvents];
 
-    // view::DrawStats/rs::DrawStats
-    int nodes, surfs, surfsAlpha, surfsTurb, skyFaces;
-    int tris, trisClipped, trisCulled, boxesCulled;
+    // rs::DrawStats
+    int tris, trisClipped, trisCulled;
     int trisClipNearOnly, trisClipNoNear, trisClipMixed, trisClipFar, clipMaxVerts;
-    int batches, entities, particles, dlights;
-
-    // lm::Stats
-    int lmAtlases, lmStyle, lmDynamic, lmRestore;
+    int batches, particles;
 
     // vram::Stats. Uploads are bursty around map transitions and each one that
     // followed an eviction also forced a GS drain, so these are the first thing
@@ -143,7 +137,7 @@ static u32  s_frameIndex = 0;
 static bool s_skipNext   = false; // the frame a dump landed in is not representative
 static bool s_headerDone = false;
 
-static const cvar_t * s_frameLog = nullptr;
+cvar_t s_frameLog = ps2::MakeCvar("ps2_frame_log", "0", CVAR_NONE); // <-- ENABLE FRAME LOG HERE
 
 // Files opened since the last dump, written out with it. A file opened while a level runs is a
 // synchronous read inside whatever frame asked for it, and without a name the log can only show
@@ -173,11 +167,7 @@ u32 ToMicrosec(u32 cycles)
 
 bool Enabled()
 {
-    if (s_frameLog == nullptr)
-    {
-        s_frameLog = Cvar_Get("ps2_frame_log", "0", 0); // <-- ENABLE FRAME LOG HERE
-    }
-    return s_frameLog->value != 0.0f;
+    return s_frameLog.value != 0.0f;
 }
 
 // Writes every sample the batch holds and empties it. Callers decide whether a
@@ -191,10 +181,9 @@ void WriteBatch()
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
                     "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,"
-                    "nodes,surfs,surfsAlpha,surfsTurb,skyFaces,tris,trisClipped,trisCulled,"
+                    "tris,trisClipped,trisCulled,"
                     "clipNear,clipNoNear,clipMixed,clipFar,clipMaxV,"
-                    "boxesCulled,batches,entities,particles,dlights,"
-                    "lmAtlases,lmStyle,lmDynamic,lmRestore,"
+                    "batches,particles,"
                     "vramUploads,vramOomSyncs,vramResident,"
                     "chainKB,chainKicks,chainDrains\n");
         std::printf("FLOG#note,timings are microseconds\n");
@@ -220,14 +209,11 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-                          s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.skyFaces,
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.tris, s.trisClipped, s.trisCulled,
                           s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed,
-                          s.trisClipFar, s.clipMaxVerts, s.boxesCulled,
-                          s.batches, s.entities, s.particles, s.dlights,
-                          s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
+                          s.trisClipFar, s.clipMaxVerts,
+                          s.batches, s.particles,
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
                           s.chainKB, s.chainKicks, s.chainDrains);
         }
@@ -250,6 +236,11 @@ void WriteBatch()
 }
 
 } // namespace
+
+void FrameLogInit()
+{
+    Cvar_RegisterVariable(&s_frameLog);
+}
 
 void FrameLogCapture()
 {
@@ -292,19 +283,8 @@ void FrameLogCapture()
         s.cycles[i] = s_events[i]->lastFrameCycles;
     }
 
-    // All of these still hold the finished frame's values here: the view counters are cleared at
-    // the top of view::RenderFrame, the submission counters by rs::BeginFrame and the lightmap
-    // ones by lm::BeginFrame, none of which has run yet for the new frame.
-    const view::DrawStats & d = view::GetStats();
-    s.nodes          = d.nodesWalked;
-    s.surfs          = d.surfaces;
-    s.surfsAlpha     = d.surfacesAlpha;
-    s.surfsTurb      = d.surfacesTurb;
-    s.skyFaces       = d.skyFaces;
-    s.boxesCulled    = d.boxesCulled;
-    s.entities       = d.entities;
-    s.dlights        = d.dlights;
-
+    // These still hold the finished frame's values here: rs::BeginFrame, which clears the
+    // submission counters, has not run yet for the new frame.
     const rs::DrawStats & r = rs::GetStats();
     s.tris             = r.trisDrawn;
     s.trisClipped      = r.trisClipped;
@@ -316,12 +296,6 @@ void FrameLogCapture()
     s.clipMaxVerts     = r.clipMaxVerts;
     s.batches          = r.drawBatches;
     s.particles        = r.particles;
-
-    const lm::Stats & l = lm::GetStats();
-    s.lmAtlases = l.atlases;
-    s.lmStyle   = l.styleUpdates;
-    s.lmDynamic = l.dynamicUpdates;
-    s.lmRestore = l.restoreUpdates;
 
     const vram::Stats v = vram::GetStats();
     s.vramUploads  = v.uploadsThisFrame;
