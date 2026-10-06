@@ -59,4 +59,8 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   About 1.8 MB of it is fixed: zone, progs, sockets, particles, console.
 - The 16 MB hunk is a placeholder. The sound cache (which lives in the hunk) and the renderer
   aren't in yet; size it once they are.
+- Renderer, outside the hunk, so far: the frame's DMA chain, one 1 MB block
+  (`MemTag::Renderer`) that `VID_Init` allocates for the whole run, and the `ps2::tex` pool
+  (640 `Texture` slots) in `.bss`. Boot shows 3.10 MB for ELF + system with the renderer
+  infrastructure linked, up from 2.92 MB (2026-10-06).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

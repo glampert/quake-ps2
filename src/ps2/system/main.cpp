@@ -9,6 +9,7 @@
 
 #include "ps2/common.h"
 #include "ps2/system/iop_boot.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/debug/exception_handler.h"
 
 #include <cstdlib>
@@ -108,8 +109,18 @@ int main(int argc, char ** argv)
         const double newtime = Sys_DoubleTime();
 
         // Host_Frame adds the delta to realtime and runs a frame once enough has gone by
-        // (host_maxfps), so it is fed every pass, frame or not.
-        Host_Frame(static_cast<float>(newtime - oldtime));
+        // (host_maxfps), so it is fed every pass, frame or not. The scope charges the whole of
+        // it - server, client, renderer and the vsync wait - to the frame GL_BeginRendering
+        // rolls the profiler over at.
+        {
+            PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Frame);
+            Host_Frame(static_cast<float>(newtime - oldtime));
+        }
+
+        // Deliberately outside the scope above: the dump is tens of milliseconds of stdout and
+        // must not land in the timings it is reporting. The frame it stretches is dropped
+        // rather than logged (see FrameLogFlush).
+        ps2::debug::FrameLogFlush();
 
         oldtime = newtime;
     }

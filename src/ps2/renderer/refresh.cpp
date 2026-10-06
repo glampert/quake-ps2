@@ -14,6 +14,7 @@
 
 #include "ps2/common.h"
 #include "ps2/engine_hooks.h"
+#include "ps2/renderer/render_system.h"
 
 extern "C" {
 
@@ -52,6 +53,9 @@ cvar_t gl_clear          = ps2::MakeCvar("gl_clear",          "1", CVAR_NONE);
 cvar_t gl_polyblend      = ps2::MakeCvar("gl_polyblend",      "1", CVAR_NONE);
 cvar_t gl_flashblend     = ps2::MakeCvar("gl_flashblend",     "0", CVAR_ARCHIVE);
 
+// The colour the frame is cleared to, as a palette index: QuakeSpasm's dark grey by default.
+cvar_t r_clearcolor = ps2::MakeCvar("r_clearcolor", "2", CVAR_ARCHIVE);
+
 // The models gl_model.c flags as never lerped / never shadowed, by name.
 cvar_t r_nolerp_list = ps2::MakeCvar("r_nolerp_list",
     "progs/flame.mdl,progs/flame2.mdl,progs/braztall.mdl,progs/brazshrt.mdl,progs/longtrch.mdl,"
@@ -67,6 +71,14 @@ cvar_t gl_subdivide_size = ps2::MakeCvar("gl_subdivide_size", "128", CVAR_ARCHIV
 // Lifecycle
 // ------------------------------------------------------------------------------------------------
 
+// r_clearcolor's callback: QuakeSpasm's R_SetClearColor_f.
+static void ClearColorChanged(cvar_t * var)
+{
+    const u32 rgba = d_8to24table[static_cast<int>(var->value) & 0xFF];
+    ps2::rs::SetClearColor(static_cast<u8>(rgba & 0xFFu), static_cast<u8>((rgba >> 8) & 0xFFu),
+                           static_cast<u8>((rgba >> 16) & 0xFFu));
+}
+
 void R_Init()
 {
     Cvar_RegisterVariable(&r_lerpmodels);
@@ -77,8 +89,11 @@ void R_Init()
     Cvar_RegisterVariable(&gl_flashblend);
     Cvar_RegisterVariable(&r_nolerp_list);
     Cvar_RegisterVariable(&r_noshadow_list);
+    Cvar_RegisterVariable(&r_clearcolor);
+    Cvar_SetCallback(&r_clearcolor, ClearColorChanged);
 
     R_InitParticles();
+    ClearColorChanged(&r_clearcolor);
     Fog_Init();
 }
 

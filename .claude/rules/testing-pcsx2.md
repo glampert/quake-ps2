@@ -24,8 +24,13 @@
 ## Working with the user's machine
 
 - Claude can't screenshot PCSX2 (`screencapture` is denied) or send it keystrokes (`osascript`
-  is denied). Menus, popups, icons and anything visual need the user's eyes. Say so instead
-  of guessing.
+  is denied), **but the game can screenshot itself**: the `screenshot` command reads the last
+  finished frame out of GS VRAM into `id1/spasmNNNN.tga` (the first free number). Script it
+  from `autoexec.cfg` behind enough `wait`s for the scene to have drawn, then
+  `sips -s format png id1/spasm0000.tga --out <scratchpad>/shot.png` and Read the PNG.
+  Delete the TGAs afterwards. A 16-bit framebuffer reads back at 5 bits a channel (palette
+  grey 31 comes back as 24). Outside what the game draws (the PS2 BIOS, PCSX2's own UI),
+  anything visual still needs the user's eyes.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
 - Runs read and rewrite `id1/config.cfg` (gitignored; QuakeSpasm writes it on quit).
@@ -58,8 +63,11 @@
 
 ## Tests
 
-No built-in test cvars are ported yet; the Quake II port's `ps2_testcube` (VU1 smoke test)
-returns with the 2D phase. Until then, scripted runs:
+- **`ps2_testcube 1`** (debug builds) draws the VU1 test cube over every frame: the GS, VIF1,
+  VU1 microprogram and VRAM upload smoke test. With a `screenshot` it checks all of that
+  without anyone watching. Its variants are in [CVARS.md](../../CVARS.md).
+
+The rest are scripted runs:
 
 - **Map cycle**: an `autoexec.cfg` that, per map, runs `map <name>`, about 150 `wait`s (the
   client finishes connecting), `echo CYCLE <name>`, `hunk_print` and `ps2_memstats`, ending

@@ -204,6 +204,11 @@ void EndFrame(bool deferPresent);
 // Full sync/drain of the underlying cmdbuf. Kicks what has been recorded and waits for it.
 void KickAndWait();
 
+// Waits out the frame EndFrame left drawing, if it did, and shows it; then returns the drawing
+// context of the last finished frame, which is what a VRAM readback of the screen copies (see
+// gs::DownloadFramebufferRows). Outside Begin/EndFrame only.
+gs::DrawContext FinishFrameInFlight();
+
 // Makes the texture's pixels resident in GS VRAM, uploading on a miss and evicting the
 // least-recently-bound textures when the heap is full. A resident texture only has its LRU stamp
 // refreshed, unless its pixels are dirty, which re-uploads in place.

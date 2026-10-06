@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // screen.c -- master for refresh, status bar, console, chat, notify, etc
 
 #include "quakedef.h"
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]
 
 /*
 
@@ -742,11 +743,76 @@ SCREEN SHOTS
 ==============================================================================
 */
 
-// [PS2_QUAKE]: no screenshots on the PS2. SCR_ScreenShot_f read the GL back buffer and wrote it
-// out as PNG/TGA/JPG, and the PS2 has neither the readback nor the image writers.
+// [PS2_QUAKE]: TGA only - the PNG and JPG writers went with image.c - read back from the GS.
+static void SCR_ScreenShot_Usage (void)
+{
+	Con_Printf ("usage: screenshot [tga]\n");
+	return;
+}
+
+/*
+==================
+SCR_ScreenShot_f -- johnfitz -- rewritten to use Image_WriteTGA
+==================
+*/
 void SCR_ScreenShot_f (void)
 {
-	Con_Printf ("screenshot is not supported on the PS2\n");
+	byte	*buffer;
+	char	ext[4];
+	char	imagename[16];  //johnfitz -- was [80]
+	char	checkname[MAX_OSPATH];
+	int	i;
+	qboolean	ok;
+
+	Q_strncpy (ext, "tga", sizeof(ext)); // [PS2_QUAKE]: was "png"
+
+	if (Cmd_Argc () >= 2)
+	{
+		const char	*requested_ext = Cmd_Argv (1);
+
+		if (!q_strcasecmp ("tga", requested_ext)) // [PS2_QUAKE]: TGA only, and no JPG quality
+			Q_strncpy (ext, requested_ext, sizeof(ext));
+		else
+		{
+			SCR_ScreenShot_Usage ();
+			return;
+		}
+	}
+
+// find a file name to save it to
+	for (i=0; i<10000; i++)
+	{
+		q_snprintf (imagename, sizeof(imagename), "spasm%04i.%s", i, ext);	// "fitz%04i.tga"
+		q_snprintf (checkname, sizeof(checkname), "%s/%s", com_gamedir, imagename);
+		if (Sys_FileType(checkname) == FS_ENT_NONE)
+			break;	// file doesn't exist
+	}
+	if (i == 10000)
+	{
+		Con_Printf ("SCR_ScreenShot_f: Couldn't find an unused filename\n");
+		return;
+	}
+
+//get data
+	if (!(buffer = (byte *) malloc(glwidth*glheight*3)))
+	{
+		Con_Printf ("SCR_ScreenShot_f: Couldn't allocate memory\n");
+		return;
+	}
+
+	// [PS2_QUAKE]: the last finished frame, out of GS VRAM; it comes top row first, where
+	// glReadPixels' came bottom row first, so the TGA is written upside down from the GL one.
+	PS2_ReadPixels (buffer);
+
+// now write the file
+	ok = Image_WriteTGA (imagename, buffer, glwidth, glheight, 24, true);
+
+	if (ok)
+		Con_Printf ("Wrote %s\n", imagename);
+	else
+		Con_Printf ("SCR_ScreenShot_f: Couldn't create %s\n", imagename);
+
+	free (buffer);
 }
 
 

@@ -5,17 +5,24 @@ paths:
 
 # GS renderer facts
 
-The README's "Rendering" section is the architecture overview. The renderer files: `ref.cpp`
-(refexport), `view.cpp` (world pass, BSP walk, frame pass order), `md2.cpp` (alias models),
-`sky.cpp`, `render_system.*` (`ps2::rs`: VIF1 chains, batches, `DrawTriangles`, `Submit`),
-`cmd_buffer.*`, `gs.*` (GS front-end, register values, 2D), `vram.*` (texture heap),
-`texture.*` (`ps2::tex`), `lightmap.*`, `scrap_atlas.*`, `clip.*` (EE sky clipper), `vu1.*`
-(VU memory layout, microprogram declarations).
+The README's "Rendering" section is the architecture overview. QuakeSpasm's renderer surface
+is implemented by `vid.cpp` (GS bring-up, the `GL_BeginRendering`/`GL_EndRendering` frame
+bracket, the screenshot readback), `draw.cpp` (`Draw_*`), `texmgr.cpp` (`TexMgr_*`) and
+`refresh.cpp` (`R_*`). Under them, from the Quake II port: `render_system.*` (`ps2::rs`: VIF1
+chains, batches, `DrawTriangles`, `Submit`), `cmd_buffer.*`, `gs.*` (GS front-end, register
+values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap_atlas.*`,
+`clip.*` (EE sky clipper), `vu1.*` (VU memory layout, microprogram declarations). `view.cpp`,
+`md2.cpp`, `sky.cpp` and `lightmap.*` are still Quake II's, unbuilt until the 3D phase.
 
 ## Frame model: 2D and 3D interleave
 
-- The engine draws **2D → 3D → 2D** per frame (`SCR_TileClear`, then `V_RenderView`, then
-  HUD/console in `SCR_UpdateScreen`), with no hook at the boundaries.
+- `SCR_UpdateScreen` draws the 3D view first (`V_RenderView`), then all of the 2D (`GL_Set2D`,
+  tile clear, status bar, console, menus), all inside `GL_BeginRendering`/`GL_EndRendering`.
+  The backend's test scene and debug overlays go last, in `GL_EndRendering`.
+- **Never `Con_Printf` between `GL_BeginRendering` and `GL_EndRendering`.** While the client
+  isn't in a game (console, menus, loading), each `Con_Printf` redraws the screen through
+  `SCR_UpdateScreen`, which would open a frame inside the frame (`rs::BeginFrame` asserts).
+  `Con_DPrintf` and `Con_SafePrintf` hold that redraw off; `Sys_Printf` only logs.
 - `BeginFrame` clears color+depth. 2D primitives accumulate in a lazily opened pending batch
   (ALLPASS z-test). `FlushPending2D` sends it and is a no-op when empty. **Every 3D emitter
   calls it first**, and `EndFrame` calls it last. Never defer all 2D to frame end: the 2D
@@ -29,6 +36,11 @@ The README's "Rendering" section is the architecture overview. The renderer file
 
 ## GS and libdraw
 
+- **VRAM readback** (`gs::DownloadFramebufferRows`, ps2sdk's own sequence): BITBLTBUF, TRXPOS,
+  TRXREG, FINISH and TRXDIR=1 go down PATH2 (VIF1 DIRECT) behind MSKPATH3 and FLUSHA; wait for
+  FINISH and an empty VIF1 FIFO, set `VIF1_STAT.FDR` and `BUSDIR`, receive by VIF1 DMA, then
+  put both back and unmask PATH3. Nothing may be in flight (`rs::FinishFrameInFlight`), and
+  the target is whole 64-byte lines (sync before, invalidate after). Works in PCSX2.
 - **Alpha 0x80 = 1.0.** 0xFF is about 2× overbright under `(Cs-Cd)*As/128+Cd`. Scale
   engine-facing 0..255 alpha with `a >> 1`. In MODULATE, vertex colour 0x80 is identity.
 - The ALPHA register computes `(A - B) * C + D` where **C is a scalar alpha** (As/Ad/FIX), not

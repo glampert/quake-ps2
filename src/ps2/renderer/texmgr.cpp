@@ -12,6 +12,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/renderer/texmgr.h"
 
 #include <cstring>
 
@@ -53,6 +54,10 @@ void FreeTexturesWhere(Predicate shouldFree)
     }
 }
 
+} // namespace
+
+namespace ps2::texmgr {
+
 // gfx/palette.lmp as QuakeSpasm keeps it: one RGBA word per index, little-endian, with index 255
 // transparent. gl_model.c reads it when it flood-fills a model skin's background.
 void LoadPalette()
@@ -74,7 +79,7 @@ void LoadPalette()
     }
 }
 
-} // namespace
+} // namespace ps2::texmgr
 
 extern "C" {
 
@@ -95,10 +100,9 @@ QS_PFNGENERATEMIPMAP GL_GenerateMipmap = nullptr;
 // TexMgr_*
 // ------------------------------------------------------------------------------------------------
 
+// The palette is already in: VID_Init loaded it for the GS.
 void TexMgr_Init()
 {
-    LoadPalette();
-
     notexture   = TexMgr_LoadImage(nullptr, "notexture",   2, 2, SRC_RGBA, nullptr, "", 0, TEXPREF_PERSIST);
     nulltexture = TexMgr_LoadImage(nullptr, "nulltexture", 2, 2, SRC_RGBA, nullptr, "", 0, TEXPREF_PERSIST);
 }
@@ -148,11 +152,12 @@ void TexMgr_FreeTexturesForOwner(qmodel_t * owner)
     FreeTexturesWhere([owner](const gltexture_t & t) { return t.owner == owner; });
 }
 
-// A new game (the 'game' command) drops every texture not marked to persist.
+// A new game (the 'game' command) drops every texture not marked to persist. QuakeSpasm reloads
+// the palette here too, for a mod that ships its own; the GS CLUTs are fixed at init, so this
+// keeps the one it has. ('game' needs the registered version, so on shareware it never runs.)
 void TexMgr_NewGame()
 {
     FreeTexturesWhere([](const gltexture_t & t) { return (t.flags & TEXPREF_PERSIST) == 0; });
-    LoadPalette();
 }
 
 // QuakeSpasm pads a non-power-of-two texture for drivers that need it, which none here does.

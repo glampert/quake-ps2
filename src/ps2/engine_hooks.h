@@ -2,8 +2,9 @@
  * File: engine_hooks.h
  * Brief: What QuakeSpasm's C needs from the backend that no QuakeSpasm header declares: the PS2
  *        stand-ins for the few OpenGL calls made outside the renderer (the status bar's alpha
- *        and scissor, the view blend), and the engine state the backend reads that QuakeSpasm
- *        keeps to one file. Every engine line that uses this is tagged [PS2_QUAKE].
+ *        and scissor, the view blend, the screenshot readback), and the engine state the
+ *        backend reads that QuakeSpasm keeps to one file. Every engine line that uses this is
+ *        tagged [PS2_QUAKE].
  *        NOTE: Shared header between C and C++.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -38,6 +39,14 @@ void PS2_ResetScissor2D(void);
 
 // V_PolyBlend's full-screen tint: damage, powerups, underwater. 'rgba' is v_blend, each 0 to 1.
 void PS2_DrawPolyBlend(const float rgba[4]);
+
+// ------------------------------------------------------------------------------------------------
+// Screenshots (gl_screen.c)
+// ------------------------------------------------------------------------------------------------
+
+// The last finished frame, read back from GS VRAM as 8-bit RGB with the top row first: glwidth *
+// glheight * 3 bytes. SCR_ScreenShot_f's glReadPixels.
+void PS2_ReadPixels(byte * rgb);
 
 // ------------------------------------------------------------------------------------------------
 // Engine state the backend reads

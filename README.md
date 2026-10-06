@@ -29,7 +29,8 @@ cut down to fit the PS2's 32 MB. The port is brought up in phases, each checked 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless. *Done.*
-4. 2D: console, menus, HUD. *In progress: the GS and VU1 layer builds, not yet driven.*
+4. 2D: console, menus, HUD. *In progress: the GS is up and clears each frame, the VU1 test
+   cube draws, and `screenshot` reads frames back; the engine's 2D draws nothing yet.*
 5. Input: DualShock and USB keyboard.
 6. 3D: world, lightmaps, water, sky, models, sprites, particles.
 7. Sound, CD music, save games.
@@ -133,11 +134,32 @@ either way, as on the desktop, and is the way to script a session.
 
 ### Debugging commands
 
-| Command | What it prints |
+| Command | What it does |
 | --- | --- |
-| `ps2_memstats` | The backend's memory tags, and dlmalloc's arena, in-use, untagged-malloc and free totals. |
-| `hunk_print` | QuakeSpasm's own: the hunk by block, with what remains. |
-| `ps2_dump_iop_mods` | The IOP modules currently loaded. |
+| `ps2_memstats` | Prints the backend's memory tags, and dlmalloc's arena, in-use, untagged-malloc and free totals. |
+| `hunk_print` | QuakeSpasm's own: prints the hunk by block, with what remains. |
+| `ps2_dump_iop_mods` | Lists the IOP modules currently loaded. |
+| `screenshot` | QuakeSpasm's own, TGA only: reads the last frame back out of GS VRAM and writes `id1/spasmNNNN.tga`. |
+
+---
+
+## Rendering
+
+QuakeSpasm draws through the public functions of its OpenGL renderer, and the backend
+implements those directly, with no GL underneath. So far:
+
+- **Video and the frame** ([vid.cpp](src/ps2/renderer/vid.cpp)). `VID_Init` brings the GS up at
+  640x448 with two framebuffers, 16-bit by default (`ps2_fb_16bit`), and a 16-bit z-buffer.
+  `SCR_UpdateScreen` draws each frame between `GL_BeginRendering`, which clears it to
+  `r_clearcolor`, and `GL_EndRendering`, which submits it. By default the GS draws a finished
+  frame while the EE builds the next one (`ps2_gs_latency`).
+- **Palette.** Quake's textures stay 8-bit in VRAM (PSMT8) and sample `gfx/palette.lmp`
+  through a CLUT, built once as the GS comes up.
+- **Command buffer.** A frame is one DMA chain to VIF1, built in a 1 MB block of two 512 KB
+  halves, so one can fill while the other draws. 3D batches go to the VU1 microprograms, and 2D
+  goes straight to the GS.
+- **Screenshots.** `screenshot` reads the last finished frame back out of VRAM, turning the GS
+  bus around for it, and writes `id1/spasmNNNN.tga`.
 
 ---
 

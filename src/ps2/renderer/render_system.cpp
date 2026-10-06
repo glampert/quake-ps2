@@ -671,6 +671,17 @@ void KickAndWait()
     cmdbuf::Drain();
 }
 
+gs::DrawContext FinishFrameInFlight()
+{
+    PS2_AssertMsg(!s_frameStarted, "FinishFrameInFlight inside a frame!");
+
+    // Shown now rather than at the next BeginFrame, whose own call then has nothing to do.
+    PresentFrameInFlight();
+
+    // EndFrame moved s_drawCtx past the frame it closed.
+    return gs::NextDrawContext(s_drawCtx);
+}
+
 #if PS2_QUAKE_PROFILE
 int Gif2DPeakQwords()
 {

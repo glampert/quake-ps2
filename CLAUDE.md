@@ -69,10 +69,11 @@ directory. Engine output carries a `[Q1]` prefix in the PCSX2 log.
 
 ## Git workflow
 
-- One branch: commit directly on `main`. Don't create feature branches unless asked. Push
-  only when asked.
-- There is no GitHub remote yet. Once there is: `git fetch` first, since the user sometimes
-  commits on GitHub directly, so fast-forward if behind.
+- One branch: commit directly on `main`. Don't create feature branches unless asked.
+- **Never push.** The remote is `origin` (github.com/glampert/quake-ps2); the user reviews the
+  local commits and pushes them.
+- `git fetch` first, since the user sometimes commits on GitHub directly, so fast-forward if
+  behind.
 - Push submodules before the repo that pins them: **parse-utils → vclpp → quake-ps2**. A
   gitlink that reaches GitHub before its submodule commit breaks recursive clones.
 - Commit subjects are one sentence ending in a period, often prefixed with the area:
