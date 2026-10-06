@@ -107,15 +107,14 @@ const u8 * MakeParticlePattern()
 }
 
 // ------------------------------------------------------------------------------------------------
-// The pool
+// Texture pool
 // ------------------------------------------------------------------------------------------------
 
 using TexturePool = SmallPool<Texture, kMaxTextures>;
+static TexturePool s_pool;
 
-TexturePool s_pool;
-
-const Texture * s_debugTextures[kNumDebugTextures] = {};
-const Texture * s_particleTexture = nullptr;
+static const Texture * s_debugTextures[kNumDebugTextures] = {};
+static const Texture * s_particleTexture = nullptr;
 
 } // namespace
 

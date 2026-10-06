@@ -29,7 +29,7 @@
 // QuakeSpasm reads the cvars its video mode starts with out of config.cfg ahead of the configs;
 // so does this, for the GS.
 extern "C" {
-#include "quake/cfgfile.h"
+    #include "quake/cfgfile.h"
 }
 
 namespace {
@@ -46,12 +46,12 @@ constexpr u32 kChainBytes = 2u * ps2::cmdbuf::kHalfBytes;
 //
 // ps2_gs_latency leaves the frame drawing at EndFrame and shows it at the next one, at the cost of
 // one frame of input lag. ps2_fb_dither hides the banding a 16-bit framebuffer shows on gradients.
-cvar_t s_gsLatency    = ps2::MakeCvar("ps2_gs_latency", "1", CVAR_ARCHIVE);
-cvar_t s_enableDither = ps2::MakeCvar("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+static cvar_t s_gsLatency    = ps2::MakeCvar("ps2_gs_latency", "1", CVAR_ARCHIVE);
+static cvar_t s_enableDither = ps2::MakeCvar("ps2_fb_dither",  "0", CVAR_ARCHIVE);
 
 // The framebuffer format, which fixes the whole VRAM layout: read once, as the GS comes up, so a
 // change takes effect on the next run.
-cvar_t s_fb16Bit = ps2::MakeCvar("ps2_fb_16bit", "1", CVAR_ARCHIVE);
+static cvar_t s_fb16Bit = ps2::MakeCvar("ps2_fb_16bit", "1", CVAR_ARCHIVE);
 
 // VID_Init runs inside Host_Init, before quake.rc executes config.cfg, so the cvars the GS is
 // brought up with are read from the file ahead of time, as QuakeSpasm does for its video mode.
@@ -104,8 +104,10 @@ void VID_Init()
     Cvar_RegisterVariable(&s_gsLatency);
     Cvar_RegisterVariable(&s_enableDither);
     Cvar_RegisterVariable(&s_fb16Bit);
+
     ps2::debug::FrameLogInit();
     ps2::overlay::Init();
+
 #if PS2_QUAKE_DEBUG
     ps2::test::RegisterCvars();
 #endif // PS2_QUAKE_DEBUG
@@ -113,7 +115,7 @@ void VID_Init()
     ReadInitCvars();
 
     // The palette first: the GS builds its CLUTs from it as it comes up.
-    ps2::texmgr::LoadPalette();
+    ps2::tex::LoadPalette();
     ps2::tex::Init();
 
     void * const chain = ps2::heap::AllocAligned(ps2::heap::MemAlign(64), kChainBytes,

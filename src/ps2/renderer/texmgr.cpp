@@ -15,22 +15,23 @@
 #include "ps2/renderer/texmgr.h"
 
 #include <cstring>
-
 #include <tamtypes.h>
 
 namespace {
 
 // Every live texture, newest first, through gltexture_t's own 'next' link.
-gltexture_t * s_textures = nullptr;
+static gltexture_t * s_textures = nullptr;
 
 gltexture_t * NewTexture()
 {
+    // TODO: Allocate these from a fixed-size pool instead.
     void * const memory = ps2::heap::Alloc(sizeof(gltexture_t), ps2::heap::MemTag::TexImage);
     std::memset(memory, 0, sizeof(gltexture_t));
 
     gltexture_t * const texture = static_cast<gltexture_t *>(memory);
     texture->next = s_textures;
     s_textures = texture;
+
     return texture;
 }
 
@@ -56,7 +57,7 @@ void FreeTexturesWhere(Predicate shouldFree)
 
 } // namespace
 
-namespace ps2::texmgr {
+namespace ps2::tex {
 
 // gfx/palette.lmp as QuakeSpasm keeps it: one RGBA word per index, little-endian, with index 255
 // transparent. gl_model.c reads it when it flood-fills a model skin's background.
@@ -79,7 +80,7 @@ void LoadPalette()
     }
 }
 
-} // namespace ps2::texmgr
+} // namespace ps2::tex
 
 extern "C" {
 

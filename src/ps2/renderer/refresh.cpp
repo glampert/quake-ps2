@@ -58,7 +58,9 @@ cvar_t r_clearcolor = ps2::MakeCvar("r_clearcolor", "2", CVAR_ARCHIVE);
 // The models gl_model.c flags as never lerped / never shadowed, by name.
 cvar_t r_nolerp_list = ps2::MakeCvar("r_nolerp_list",
     "progs/flame.mdl,progs/flame2.mdl,progs/braztall.mdl,progs/brazshrt.mdl,progs/longtrch.mdl,"
-    "progs/flame_pyre.mdl,progs/v_saw.mdl,progs/v_xfist.mdl,progs/h2stuff/newfire.mdl", CVAR_NONE);
+    "progs/flame_pyre.mdl,progs/v_saw.mdl,progs/v_xfist.mdl,progs/h2stuff/newfire.mdl",
+    CVAR_NONE);
+
 cvar_t r_noshadow_list = ps2::MakeCvar("r_noshadow_list",
     "progs/flame2.mdl,progs/flame.mdl,progs/bolt1.mdl,progs/bolt2.mdl,progs/bolt3.mdl,progs/laser.mdl",
     CVAR_NONE);

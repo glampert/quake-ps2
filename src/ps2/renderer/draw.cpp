@@ -43,7 +43,7 @@ constexpr int kGlyphSize = 8;
 constexpr u8 kTexelColour[3] = { 128, 128, 128 };
 
 // The console background's opacity: QuakeSpasm keeps it in the 2D module.
-cvar_t s_conAlpha = ps2::MakeCvar("scr_conalpha", "0.5", CVAR_ARCHIVE);
+static cvar_t s_conAlpha = ps2::MakeCvar("scr_conalpha", "0.5", CVAR_ARCHIVE);
 
 // 0..1 opacity as the 0..255 byte the 2D primitives take, 255 being opaque.
 u8 AlphaByte(const float alpha)
@@ -101,7 +101,7 @@ void MakeStandalone(Pic & out, const char * name, const byte * src, const int wi
     const u32 bytes       = static_cast<u32>(paddedWidth * height);
 
     byte * const pixels = static_cast<byte *>(ps2::heap::AllocAligned(ps2::heap::MemAlign(64), bytes,
-                                                                     ps2::heap::MemTag::TexImage));
+                                                                      ps2::heap::MemTag::TexImage));
     std::memset(pixels, 255, bytes);
 
     for (int y = 0; y < height; ++y)
@@ -166,8 +166,8 @@ void FreePic(Pic & pic)
 // Pics from gfx.wad: the status bar's, the disc, the border tile. Kept until a new game rereads
 // the WAD, as QuakeSpasm's are.
 constexpr int kMaxWadPics = 256;
-Pic s_wadPics[kMaxWadPics];
-int s_numWadPics = 0;
+static Pic s_wadPics[kMaxWadPics];
+static int s_numWadPics = 0;
 
 // Pics loaded by path (menus, the loading plaque, the console background), kept for the rest of
 // the game the way QuakeSpasm's menu_cachepics are.
@@ -178,12 +178,12 @@ struct CachedPic
 };
 
 constexpr int kMaxCachedPics = 128;
-CachedPic s_cachedPics[kMaxCachedPics];
-int       s_numCachedPics = 0;
+static CachedPic s_cachedPics[kMaxCachedPics];
+static int       s_numCachedPics = 0;
 
 // The font, and the tile SCR_TileClear borders a shrunk 3D view with.
-Pic      s_conchars;
-qpic_t * s_backtile = nullptr;
+static Pic      s_conchars;
+static qpic_t * s_backtile = nullptr;
 
 // QuakeSpasm's internal pics, from images compiled into gl_draw.c: the console's insert and
 // overwrite cursors, and the stand-in for a pic gfx.wad doesn't have.
@@ -221,16 +221,16 @@ constexpr byte kPicNulData[8][8] = {
     {   0,   0,   0,   0, 252, 252, 252, 252 },
 };
 
-Pic s_picIns;
-Pic s_picOvr;
-Pic s_picNul;
+static Pic s_picIns;
+static Pic s_picOvr;
+static Pic s_picNul;
 
 // The player picture the setup menu recolours (Draw_TransPicTranslate), as it was loaded: each
 // change of colours translates it afresh into the pic's texture. QuakeSpasm's menuplyr_pixels.
-byte  s_menuPlayerPixels[4096];
-Pic * s_menuPlayerPic    = nullptr;
-int   s_menuPlayerTop    = -2;
-int   s_menuPlayerBottom = -2;
+static byte  s_menuPlayerPixels[4096];
+static Pic * s_menuPlayerPic    = nullptr;
+static int   s_menuPlayerTop    = -2;
+static int   s_menuPlayerBottom = -2;
 
 qpic_t * PicFromWad(const char * name)
 {
@@ -351,12 +351,12 @@ void TranslateMenuPlayer(const Pic & pic, const int top, const int bottom)
 // the scale and offset that pair amounts to.
 struct CanvasTransform
 {
-    float scaleX, scaleY;
+    float scaleX,  scaleY;
     float originX, originY;
 };
 
-CanvasTransform s_canvas      = { 1.0f, 1.0f, 0.0f, 0.0f };
-canvastype      s_currentCanvas = CANVAS_NONE;
+static CanvasTransform s_canvas      = { 1.0f, 1.0f, 0.0f, 0.0f };
+static canvastype      s_currentCanvas = CANVAS_NONE;
 
 // glOrtho(left, right, bottom, top) into glViewport(vpX, vpY, vpWidth, vpHeight). The viewport
 // is in GL's window coordinates, whose origin is the bottom left, as gl_draw.c computed it.
@@ -513,7 +513,7 @@ void Draw_NewGame()
 // ------------------------------------------------------------------------------------------------
 // Drawing
 // ------------------------------------------------------------------------------------------------
-//
+
 // Every entry point charges the "Ui" event, so the overlay and the frame log show one figure for
 // the whole 2D pass the engine draws. None of them nest: they share the helpers above instead of
 // calling each other.

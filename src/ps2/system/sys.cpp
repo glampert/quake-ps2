@@ -68,6 +68,7 @@ int Milliseconds()
     return s_millisecs;
 }
 
+// TODO: Make this single-precision float.
 double Seconds()
 {
     // A soft-float conversion and multiply per call, which is fine for what calls it -
@@ -244,7 +245,7 @@ void PrintToLog(const char * text)
 // QuakeSpasm's handle-based file API over stdio, as its Unix backend did it. Slot 0 is never
 // handed out, so a zero handle can't be mistaken for an open file.
 constexpr int kMaxFileHandles = 32;
-std::FILE * s_fileHandles[kMaxFileHandles];
+static std::FILE * s_fileHandles[kMaxFileHandles];
 
 int FindFileHandle()
 {
