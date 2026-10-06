@@ -1,55 +1,62 @@
 ---
 paths:
   - "src/ps2/system/**"
-  - "src/ps2/renderer/vram.*"
-  - "src/ps2/renderer/texture.*"
-  - "src/ps2/renderer/model*"
-  - "src/ps2/renderer/image_load.*"
-  - "src/ps2/tests/map_cycle.*"
+  - "src/ps2/renderer/**"
+  - "src/quake/zone.c"
+  - "src/quake/quakedef.h"
 ---
 
 # Memory budget (32 MB EE RAM)
 
-> **Quake II facts.** Everything below was measured or decided on the Quake II port. Keep
-> what still holds and rewrite the rest when this subsystem is ported to Quake 1.
+## The picture
 
-- A single program-wide dlmalloc heap (`system/heap.h`) carries per-tag accounting
+- One program-wide dlmalloc heap (`system/heap.h`) with per-tag accounting
   (`ps2::heap::MemTag`). Kernel, ELF image and stack are booked as `MemTag::ElfSys`, so the
   tags add up to the whole 32 MB. dlmalloc's page size is pinned to 4096 because ps2sdk's
   `sysconf` fails (see `ps2-platform.md`).
-- **The worst moment is a map transition**, not any map. The outgoing level's data can
-  overlap the incoming one's, and every out-of-memory failure in this port has happened there.
-  Watch `PEAK`/`NEW PEAK` and the per-transition "load peak" line from `ps2_testmaps 1`.
-- `MapCycle` prints a level's line after `EndRegistration`, plus a second "load peak" line
-  with that transition's own heap-window peak and its per-tag split. Summaries from before
-  that change hold mid-transition Tex/Mdl snapshots, so don't compare them to current ones.
+- **QuakeSpasm's hunk is one `MemTag::Hunk` block**, 16 MB from `main.cpp` (`-heapsize <KB>`
+  overrides it). It holds QuakeSpasm's hunk, its zone (`DYNAMIC_SIZE`) and its cache, so what is
+  inside is `hunk_print`'s to show, with REMAINING at the end. A map change frees the hunk back to
+  the host level before the next map loads (`Host_ClearMemory`), so levels never overlap in it.
+- QuakeSpasm's plain `malloc`s (mostly `sv.edicts`: `max_edicts` × the progs' edict size) land
+  in dlmalloc without a tag.
+- `ps2_memstats` prints the tag table, then dlmalloc's arena, in-use, untagged-malloc and free
+  totals. Pair it with `hunk_print`.
+- From the Quake II port, for the renderer's allocations outside the hunk: there, the worst
+  moment was always a map transition, with the old level's data still resident while the next
+  one loaded. Free the old map's render data before the new map's is built. Fixed segregated
+  heaps for textures and models were measured there and rejected: a partition must cover
+  max(tex+mdl) + max(everything else), which cost about 1.2 MB more than fragmentation did.
 
-## Measured history (MapCycle worst moment, of 32 MB)
+## Limits
 
-- The view-weapon preload took it from 29.76 to 30.29 MB.
-- **Free-before-load** (`CL_PrepRefresh` touch-only pass → `FreeUnregistered` → real pass;
-  walls likewise in `LoadTexInfo`): 30.33 → **28.89 MB**. The textures+models overlap during
-  power1's load had been 10.91 MB against a 7.76 MB steady max. The worst moment is now city3's
-  own content (7.81 MB tex+mdl, 5.12 MB audio), with zero reloads.
-- Wall mipmaps (WAL levels 1-3 on POT walls): 28.89 → 29.26 MB (max tex+mdl 7.81 → 8.17).
-  `ps2_mipmaps 0` reproduces the old numbers.
-- CD music: 29.31 MB (~25 KB static).
-- CD music's WAV fallback moved the stream buffers to the heap (`MemTag::Music`, the `Mus`
-  column), held only while a track plays: the loading plaque stops music, so transitions
-  never carry them. Static dropped to ~12 KB. On the code of 2026-10-05 the worst moment is
-  city3's steady state either way: **29.44 MB** with `.adp` tracks (2 × 8 KB buffers) and
-  **29.54 MB** with every track falling back to a 44.1 kHz WAV (2 × 64 KB), 1.98 MB still
-  free. Exactly the 112 KB of buffer difference.
-- **Fixed segregated heaps for textures/models were rejected.** A partition must cover
-  max(tex+mdl) + max(everything else), and those peak at different moments, so it costs about
-  1.2 MB more than fragmentation does. Fragmentation (arena minus live peak) measured
-  0.67-1.55 MB. If it ever matters, the follow-up is a top-down compacting tex/model region
-  that shares the gap with dlmalloc.
-- `pics/*` are never freed. A stray key press that opens a menu shows up as extra Tex in a
-  cycle (e.g. `pics/inventory.pcx`, 48 KB).
-- Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which saves ~9 KB of
-  `.text` for level data.
+QuakeSpasm is sized for a PC. Each limit below is cut back to an earlier QuakeSpasm or FitzQuake
+value, or to id's original, and tagged `[PS2_QUAKE]` where it is defined (2026-10-06):
 
-Reference summaries live in `build/baselines/` (local, untracked): `mapcycle-fbl0` (before
-free-before-load), `mapcycle-fbl1`, `mapcycle-mip0`/`mip1`, `mapcycle-vwep`,
-`mapcycle-cdmusic`, `mapcycle-cdmusic2` (ADPCM, current code), `mapcycle-cdwav` (WAV only).
+| Limit | QuakeSpasm | PS2 | What it cost |
+| --- | --- | --- | --- |
+| `MAX_MOD_KNOWN` | 4096 | 512 | 2.0 MB of `.bss` |
+| `MAX_STATIC_ENTITIES` | 4096 | 512 | 992 KB of `.bss` |
+| `max_edicts` (cvar default) | 8192 | 1024 | most of 7.78 MB of `malloc`, and 2 MB of hunk (`cl_entities`) |
+| `DYNAMIC_SIZE` (the zone) | 4 MB | 512 KB | hunk |
+| `CON_TEXTSIZE` | 1 MB | 64 KB | hunk |
+| `DEFAULT_NUM_PARTICLES` | 16384 | 2048 | 704 KB of hunk |
+| `cmd_text` (`Cbuf_Init`) | 256 KB | 64 KB | hunk |
+| `NET_MAXMESSAGE`, `MAX_MSGLEN`, `MAX_DATAGRAM` | 64000 | 32000 | qsockets, clients and sizebufs on the hunk, two buffers in `.bss`, and `SV_SendClientDatagram`'s stack buffer (half the 128 KB main stack at 64000) |
+| `MAX_MODELS` / `MAX_SOUNDS` | 4096 / 2048 | 1024 / 1024 | precache arrays |
+| `MAX_VISEDICTS`, `MAX_CHANNELS`, `MAX_SFX`, `MAXALIASVERTS`/`TRIS` | 4096, 1024, 1024, 2400/4096 | 1024, 512, 512, 1024/2048 | tens of KB each |
+
+Measure with `ps2_memstats` and `hunk_print` before raising any of them.
+
+## Measured (debug build, shareware data, sound off, nothing rendered)
+
+- e1m1 before the limits pass: ELF + system 5.75 MB (`.bss` 3.96 MB), hunk 12.42 MB in use,
+  untagged malloc 7.78 MB, **2.44 MB** of RAM left.
+- After it: ELF + system 2.92 MB (`.bss` 0.99 MB), untagged malloc 1.08 MB, **11.96 MB** left
+  with the 16 MB hunk, on every map.
+- Hunk in use per shareware map, once the client has connected: start 4.44, e1m1 4.43, e1m2
+  4.42, e1m3 4.33, **e1m4 4.71** (the peak), e1m5 4.33, e1m6 3.88, e1m7 2.83, e1m8 3.62 MB.
+  About 1.8 MB of it is fixed: zone, progs, sockets, particles, console.
+- The 16 MB hunk is a placeholder. The sound cache (which lives in the hunk) and the renderer
+  aren't in yet; size it once they are.
+- Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

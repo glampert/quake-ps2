@@ -74,7 +74,9 @@ Cbuf_Init
 */
 void Cbuf_Init (void)
 {
-	SZ_Alloc (&cmd_text, 1<<18);		// space for commands and script files. spike -- was 8192, but modern configs can be _HUGE_, at least if they contain lots of comments/docs for things.
+	// [PS2_QUAKE]: 64 KB rather than QuakeSpasm's 256 KB of hunk. Still eight times id's 8192, and a
+	// script that overflows it is dropped with a console warning, not a crash.
+	SZ_Alloc (&cmd_text, 1<<16);		// space for commands and script files
 }
 
 

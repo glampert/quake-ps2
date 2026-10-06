@@ -43,15 +43,29 @@
   2026-10-06; PCSX2 doesn't model the EE cache, so treat it as a rough baseline.
 - `path` lists the search path and `mods` the directories next to the ELF (on `host:` that
   is `build/<config>/`: `id1`, `irx`, `miniz`, `src`), which shows `opendir` works.
-- `-dedicated` in the argv `main.cpp` builds skips every client subsystem and runs
-  `map start`: a headless check of the filesystem, the QuakeC VM and physics.
+- `make run RUN_ARGS="..."` puts arguments on the game's command line through PCSX2's
+  `-gameargs`, e.g. `RUN_ARGS="+map e1m1"`. PCSX2 passes them without a program name in
+  `argv[0]`; `main.cpp` adds one, since QuakeSpasm reads options from `argv[1]` on. For runs
+  that shouldn't overwrite `emulog.txt`, launch PCSX2 directly with `-logfile <path>`.
+- `-dedicated` doesn't work: QuakeSpasm stops with "Network not available!" when no driver but
+  loopback comes up. A normal run's `map e1m1` already exercises the server, QuakeC and
+  physics, with the client attached.
 - Record the traps here as they turn up. The Quake II port's (a 128-char `COM_Parse` overrun,
   `wait`s queued across a map load) came from Quake II's code and may not apply.
 
-## Built-in tests
+## Tests
 
-None are ported yet. The Quake II port's `ps2_testcube` (VU1 smoke test) returns with the 2D
-phase; a map cycle over the shareware maps and an unattended demo perf run come later.
+No built-in test cvars are ported yet; the Quake II port's `ps2_testcube` (VU1 smoke test)
+returns with the 2D phase. Until then, scripted runs:
+
+- **Map cycle**: an `autoexec.cfg` that, per map, runs `map <name>`, about 150 `wait`s (the
+  client finishes connecting), `echo CYCLE <name>`, `hunk_print` and `ps2_memstats`, ending
+  with `echo CYCLE_DONE`. All nine shareware maps (start, e1m1-e1m8) loaded clean on
+  2026-10-06; the numbers are in [memory-budget.md](memory-budget.md).
+- **Config write**: `quit` runs `Host_Shutdown`, which writes `id1/config.cfg` through
+  `host:`. Then PCSX2 boots into the PS2 BIOS menu; stop it there.
+- **Stop every PCSX2 you launch once its log is read.** A run stays open after the game halts,
+  quits or idles, and the next launch starts another instance beside it.
 
 ## Quiet map for renderer work
 

@@ -94,6 +94,38 @@ void RegisterCommands()
         PrintLoadedIopModules(40, &Con_Printf);
     });
 
+    // The program's memory as the backend sees it. QuakeSpasm's hunk is a single Hunk-tagged
+    // block, so how full it is is hunk_print's to say; what QuakeSpasm takes with plain malloc
+    // (sv.edicts, mostly) carries no tag and shows up as the untagged remainder.
+    Cmd_AddCommand("ps2_memstats", []() {
+        char dump[ps2::heap::kMemTagsDumpSize];
+        Con_Printf("%s\n", ps2::heap::DumpMemTags(dump, sizeof(dump)));
+
+        size_t taggedHeapBytes = 0;
+        for (int i = 0; i < static_cast<int>(ps2::heap::MemTag::TagCount); ++i)
+        {
+            const auto tag = static_cast<ps2::heap::MemTag>(i);
+            if (tag != ps2::heap::MemTag::ElfSys) // the system's RAM, not the heap's
+            {
+                taggedHeapBytes += ps2::heap::GetStatsForMemTag(tag).totalBytes;
+            }
+        }
+
+        const ps2::heap::HeapStats heap = ps2::heap::GetHeapStats();
+        const size_t untaggedBytes = (heap.inUseBytes > taggedHeapBytes) ? (heap.inUseBytes - taggedHeapBytes) : 0u;
+
+        char arena[ps2::heap::kMemUnitStrSize];
+        char inUse[ps2::heap::kMemUnitStrSize];
+        char untagged[ps2::heap::kMemUnitStrSize];
+        char freeBytes[ps2::heap::kMemUnitStrSize];
+        Con_Printf("dlmalloc: arena %s, in use %s (untagged malloc %s), free %s in %u chunks\n",
+                   ps2::heap::FormatMemoryUnit(heap.arenaBytes, true, arena, sizeof(arena)),
+                   ps2::heap::FormatMemoryUnit(heap.inUseBytes, true, inUse, sizeof(inUse)),
+                   ps2::heap::FormatMemoryUnit(untaggedBytes, true, untagged, sizeof(untagged)),
+                   ps2::heap::FormatMemoryUnit(heap.freeBytes, true, freeBytes, sizeof(freeBytes)),
+                   static_cast<unsigned>(heap.freeChunks));
+    });
+
 #if PS2_QUAKE_PROFILE
     Cmd_AddCommand("ps2_profile", []() {
         ps2::debug::ProfileDump(&Con_Printf);

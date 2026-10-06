@@ -23,6 +23,28 @@ constexpr int kDefaultHunkSizeBytes = 16 * 1024 * 1024;
 // Must outlive the program: host_parms points at it.
 quakeparms_t s_parms;
 
+// The command line QuakeSpasm sees. Like any C program it takes argv[0] to be the program and
+// looks for options from argv[1] on, but launchers disagree on argv[0]: PCSX2's -gameargs hands
+// the ELF its arguments alone, so a lone "-dedicated" arrives as argv[0] and would be skipped.
+// A first argument that looks like an option or a +command gets a program name put in front.
+char   s_programName[] = "quake.elf";
+char * s_argv[MAX_NUM_ARGVS + 1];
+int    s_argc = 0;
+
+void BuildArgv(const int argc, char ** const argv)
+{
+    const bool argv0IsArg = (argc > 0) && (argv[0][0] == '-' || argv[0][0] == '+');
+    if (argc == 0 || argv0IsArg)
+    {
+        s_argv[s_argc++] = s_programName;
+    }
+    for (int i = 0; i < argc && s_argc < MAX_NUM_ARGVS; ++i)
+    {
+        s_argv[s_argc++] = argv[i];
+    }
+    s_argv[s_argc] = nullptr;
+}
+
 int HunkSizeBytes()
 {
     const int arg = COM_CheckParm("-heapsize");
@@ -60,10 +82,12 @@ int main(int argc, char ** argv)
     const char * const basedir = ps2::sys::DetectBasePathAndBootIop();
 #endif // PS2_FS_BASE_PATH
 
+    BuildArgv(argc, argv);
+
     host_parms = &s_parms;
     s_parms.basedir  = basedir;
-    s_parms.argc     = argc;
-    s_parms.argv     = argv;
+    s_parms.argc     = s_argc;
+    s_parms.argv     = s_argv;
     s_parms.errstate = 0;
 
     COM_InitArgv(s_parms.argc, s_parms.argv);

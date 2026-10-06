@@ -375,9 +375,9 @@ typedef struct {
 	maliasframedesc_t	frames[1];	// variable sized
 } aliashdr_t;
 
-#define	MAXALIASVERTS	2400 //johnfitz -- was 1024
+#define	MAXALIASVERTS	1024 // [PS2_QUAKE]: id's limit again (was 2400); load-time arrays in .bss
 #define	MAXALIASFRAMES	1024 //spike -- was 256
-#define	MAXALIASTRIS	4096 //ericw -- was 2048
+#define	MAXALIASTRIS	2048 // [PS2_QUAKE]: id's limit again (was 4096); load-time arrays in .bss
 extern	aliashdr_t	*pheader;
 extern	stvert_t	stverts[MAXALIASVERTS];
 extern	mtriangle_t	triangles[MAXALIASTRIS];

@@ -84,8 +84,8 @@ directory. Engine output carries a `[Q1]` prefix in the PCSX2 log.
 - The EE FPU has no Inf/NaN (1/0 = FLT_MAX), and double is soft-float. Host and target
   silently disagree on degenerate math. QuakeSpasm keeps time in `double` (`realtime`,
   `cl.time`), which is correct but slow.
-- QuakeSpasm is sized for a PC: a 384 MB default heap, a 4 MB zone, and limits like
-  `MAX_MOD_KNOWN 4096`. Everything has to fit in 32 MB here.
+- QuakeSpasm is sized for a PC. Its limits are cut to PS2 values, each tagged (see
+  memory-budget.md); measure with `ps2_memstats` and `hunk_print` before raising one.
 - ps2sdk stubs some libc calls to fail (`sysconf` → -1), and some of its register macros
   don't parenthesize their arguments. Verify before trusting either.
 - SIF DMA target buffers need `alignas(64)`.
@@ -109,7 +109,7 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [vu-microprograms.md](.claude/rules/vu-microprograms.md) | VU sources, vu-checker | openvcl/dvp-as/vclpp traps, VU0 inline asm, VCL comment style, runtime probes |
 | [performance.md](.claude/rules/performance.md) | `src/ps2`, frame-log scripts | EE codegen facts, what PCSX2 can measure, capture/A-B/asm-test recipes |
 | [engine-c.md](.claude/rules/engine-c.md) | QuakeSpasm's C | editing rules, build mode, seams, QuakeSpasm quirks |
-| [memory-budget.md](.claude/rules/memory-budget.md) | heap, VRAM, assets | the 32 MB picture *(measurements: Q2)* |
+| [memory-budget.md](.claude/rules/memory-budget.md) | heap, renderer, zone.c, quakedef.h | the 32 MB picture, QuakeSpasm's limits, measured budgets |
 | [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | CD music format and pipeline decisions, costs *(Q2)* |
 | [save-games.md](.claude/rules/save-games.md) | `src/ps2/save` | save design, format, icon, config.cfg policy *(Q2)* |
 | [vclpp-submodule.md](.claude/rules/vclpp-submodule.md) | `src/tools/vclpp` | vclpp/parse-utils conventions, verification recipes, CI, MASP mode, tyra |

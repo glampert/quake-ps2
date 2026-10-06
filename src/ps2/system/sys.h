@@ -21,8 +21,7 @@ double Seconds();
 // Registers the backend's console commands (ps2_dump_iop_mods, the profiler's). It has to run
 // inside Host_Init: Sys_Init comes before the command system exists, and QuakeSpasm refuses
 // new commands once Host_Init has finished. VID_Init, the first backend seam Host_Init calls
-// after its command system is up, is the caller - so a -dedicated run, which skips VID_Init,
-// goes without them.
+// after its command system is up, is the caller.
 void RegisterCommands();
 
 } // namespace ps2::sys

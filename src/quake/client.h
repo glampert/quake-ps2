@@ -268,8 +268,8 @@ extern	cvar_t	cl_startdemos;
 
 
 #define	MAX_TEMP_ENTITIES	256		//johnfitz -- was 64
-#define	MAX_STATIC_ENTITIES	4096	//ericw -- was 512	//johnfitz -- was 128
-#define	MAX_VISEDICTS		4096	// larger, now we support BSP2
+#define	MAX_STATIC_ENTITIES	512	// [PS2_QUAKE]: was 4096 (992 KB of .bss); 512 is FitzQuake's, and plenty for id's maps
+#define	MAX_VISEDICTS		1024	// [PS2_QUAKE]: was 4096, for big BSP2 maps the PS2 couldn't hold anyway
 
 extern	client_state_t	cl;
 

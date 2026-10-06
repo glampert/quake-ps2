@@ -46,7 +46,7 @@ static int	mod_novis_capacity;
 static byte	*mod_decompressed;
 static int	mod_decompressed_capacity;
 
-#define	MAX_MOD_KNOWN	4096 /*johnfitz -- was 512 */
+#define	MAX_MOD_KNOWN	512 /* [PS2_QUAKE]: GLQuake's again (was 4096, 2 MB of .bss) */
 static qmodel_t	mod_known[MAX_MOD_KNOWN];
 static int		mod_numknown;
 

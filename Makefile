@@ -420,8 +420,12 @@ $(OUTPUT_DIR)/id1:
 	@mkdir -p $(dir $@)
 	ln -sfn $(abspath id1) $@
 
+# The game's command line, handed to the ELF through PCSX2's -gameargs: make run RUN_ARGS=-dedicated,
+# or RUN_ARGS="+map e1m1" (QuakeSpasm runs +commands after the configs, as on the desktop).
+RUN_ARGS ?=
+
 run: all $(OUTPUT_DIR)/id1
-	$(PCSX2) -batch -elf $(abspath $(GAME_ELF))
+	$(PCSX2) -batch -elf $(abspath $(GAME_ELF))$(if $(RUN_ARGS), -gameargs "$(RUN_ARGS)")
 
 # Regenerate compile_commands.json so the editor's IntelliSense uses the exact
 # per-file compile flags. Run after adding/removing source files.

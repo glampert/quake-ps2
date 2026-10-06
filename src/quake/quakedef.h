@@ -82,8 +82,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	DIST_EPSILON	(0.03125)	// 1/32 epsilon to keep floating point happy (moved from world.c)
 
-#define	MAX_MSGLEN	64000		// max length of a reliable message //ericw -- was 32000
-#define	MAX_DATAGRAM	64000		// max length of unreliable message //johnfitz -- was 1024
+// [PS2_QUAKE]: FitzQuake's 32000 again for both (QuakeSpasm has 64000). Every client and qsocket
+// carries buffers this size, and SV_SendClientDatagram puts a MAX_DATAGRAM one on the stack - half
+// of the EE's 128 KB main stack at 64000.
+#define	MAX_MSGLEN	32000		// max length of a reliable message
+#define	MAX_DATAGRAM	32000		// max length of unreliable message
 
 #define	DATAGRAM_MTU	1400		// johnfitz -- actual limit for unreliable messages to nonlocal clients
 
@@ -94,8 +97,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	MAX_EDICTS	32000		// johnfitz -- highest allowed value for max_edicts cvar
 						// ents past 8192 can't play sounds in the standard protocol
 #define	MAX_LIGHTSTYLES	64
-#define	MAX_MODELS	4096		// johnfitz -- was 256
-#define	MAX_SOUNDS	2048		// johnfitz -- was 256
+#define	MAX_MODELS	1024		// [PS2_QUAKE]: was 4096; id's content needs at most 256
+#define	MAX_SOUNDS	1024		// [PS2_QUAKE]: was 2048; id's content needs at most 256
 
 #define	SAVEGAME_COMMENT_LENGTH	39
 

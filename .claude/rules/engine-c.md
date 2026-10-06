@@ -64,3 +64,7 @@ Record QuakeSpasm quirks here as they are found.
   host_initialized"). Anything that registers commands must run inside `Host_Init`.
 - `Host_Init` queues `vid_unlock` to run after the configs; the backend registers it as a
   no-op, since the PS2 has one fixed video mode.
+- `-dedicated` stops with "Network not available!": a dedicated server needs a network driver
+  besides loopback, and the PS2 has none.
+- `Host_Map_f` frees the hunk back to the host level (`Host_ClearMemory`) before loading the
+  next map, so maps never overlap in the hunk.

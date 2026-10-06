@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-#define	DYNAMIC_SIZE	(4 * 1024 * 1024) // ericw -- was 512KB (64-bit) / 384KB (32-bit)
+#define	DYNAMIC_SIZE	(512 * 1024) // [PS2_QUAKE]: was 4 MB of hunk; QuakeSpasm's own 512 KB before that
 
 #define	ZONEID	0x1d4a11
 #define MINFRAGMENT	64
