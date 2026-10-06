@@ -61,6 +61,7 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   aren't in yet; size it once they are.
 - Renderer, outside the hunk, so far: the frame's DMA chain, one 1 MB block
   (`MemTag::Renderer`) that `VID_Init` allocates for the whole run, and the `ps2::tex` pool
-  (640 `Texture` slots) in `.bss`. Boot shows 3.10 MB for ELF + system with the renderer
-  infrastructure linked, up from 2.92 MB (2026-10-06).
+  (640 `Texture` slots) in `.bss`. Boot shows 3.13 MB for ELF + system with the 2D in. In
+  demo1 `TexImage` holds 197 KB: the 2D pics' copies, the scrap atlases (64 KB each), and
+  texmgr's `gltexture_t` records. 11.56 MB of RAM is left (2026-10-06).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

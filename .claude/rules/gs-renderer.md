@@ -43,6 +43,15 @@ values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap
   the target is whole 64-byte lines (sync before, invalidate after). Works in PCSX2.
 - **Alpha 0x80 = 1.0.** 0xFF is about 2× overbright under `(Cs-Cd)*As/128+Cd`. Scale
   engine-facing 0..255 alpha with `a >> 1`. In MODULATE, vertex colour 0x80 is identity.
+- The palette CLUT gives opaque texels alpha **0xFF**, and MODULATE multiplies texel by vertex
+  alpha over 0x80. So a blended textured draw puts a quarter of its 0..255 alpha on the vertex
+  (`EmitTexturedRect`), not half as `EmitFillRect` does.
+- **Texture uploads DMA straight out of `texture.pixels`** (REF tags), so the pixels must start
+  16-byte aligned and be a whole number of quadwords. `draw_texture_transfer` sends
+  `(w*h)>>4` qwords against a TRXREG of w x h, so a short tail leaves the GS waiting and the
+  next GIF data becomes texels. A WAD lump at an arbitrary file offset can't be uploaded in
+  place: draw.cpp copies pics into 64-byte-aligned blocks with rows padded to 16 texels, and
+  keeps the real size in `srcWidth`/`srcHeight` for the draws.
 - The ALPHA register computes `(A - B) * C + D` where **C is a scalar alpha** (As/Ad/FIX), not
   a colour. Colour × colour (GL's `GL_ZERO, GL_SRC_COLOR`) is not expressible. That is why
   lightmaps are alpha-only intensity atlases, with chroma per vertex. Check this before

@@ -133,6 +133,17 @@ bool TryPack(const u8 * pic8, const int width, const int height,
     return true;
 }
 
+void Reset()
+{
+    for (int i = 0; i < s_scrapCount; ++i)
+    {
+        Scrap & scrap = s_scraps[i];
+        scrap.packer.Reset();
+        std::memset(scrap.pixels, kTransparentIndex, kScrapBytes);
+        scrap.texture.MarkPixelsDirty();
+    }
+}
+
 void DumpUsage()
 {
     if (s_scrapCount == 0)

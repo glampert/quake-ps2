@@ -29,8 +29,7 @@ cut down to fit the PS2's 32 MB. The port is brought up in phases, each checked 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless. *Done.*
-4. 2D: console, menus, HUD. *In progress: the GS is up and clears each frame, the VU1 test
-   cube draws, and `screenshot` reads frames back; the engine's 2D draws nothing yet.*
+4. 2D: console, menus, HUD. *Done.*
 5. Input: DualShock and USB keyboard.
 6. 3D: world, lightmaps, water, sky, models, sprites, particles.
 7. Sound, CD music, save games.
@@ -146,7 +145,8 @@ either way, as on the desktop, and is the way to script a session.
 ## Rendering
 
 QuakeSpasm draws through the public functions of its OpenGL renderer, and the backend
-implements those directly, with no GL underneath. So far:
+implements those directly, with no GL underneath. So far the 2D draws; the 3D view is the
+clear colour until the 3D phase.
 
 - **Video and the frame** ([vid.cpp](src/ps2/renderer/vid.cpp)). `VID_Init` brings the GS up at
   640x448 with two framebuffers, 16-bit by default (`ps2_fb_16bit`), and a 16-bit z-buffer.
@@ -158,6 +158,16 @@ implements those directly, with no GL underneath. So far:
 - **Command buffer.** A frame is one DMA chain to VIF1, built in a 1 MB block of two 512 KB
   halves, so one can fill while the other draws. 3D batches go to the VU1 microprograms, and 2D
   goes straight to the GS.
+- **2D** ([draw.cpp](src/ps2/renderer/draw.cpp)), in place of QuakeSpasm's `gl_draw.c`: console
+  text, pics, fills, the tiled border, and QuakeSpasm's canvases, each of whose
+  `glOrtho`/`glViewport` pairs becomes a scale and an offset. WAD pics under 64x64 share two
+  256x256 scrap atlases, as in QuakeSpasm; every other pic gets its own texture. The menus and
+  the status bar default to twice their size (`scr_menuscale`, `scr_sbarscale` 2), which fills
+  the 640x448 screen the way the original filled 320x200. At that size QuakeSpasm's slider
+  values, which sit past the menu's right edge, are cut off.
+- **Debug overlays** ([overlays.cpp](src/ps2/renderer/overlays.cpp)): an FPS counter and
+  panels for frame times, memory, VRAM and draw statistics, on by default in debug builds
+  (see [CVARS.md](CVARS.md)).
 - **Screenshots.** `screenshot` reads the last finished frame back out of VRAM, turning the GS
   bus around for it, and writes `id1/spasmNNNN.tga`.
 

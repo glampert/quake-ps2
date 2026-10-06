@@ -3,7 +3,8 @@
  * Brief: QuakeSpasm's VID_* video seam and the frame bracket SCR_UpdateScreen draws inside
  *        (GL_BeginRendering/GL_EndRendering). Brings the GS up, owns the engine's 'vid'
  *        screen state, and does the backend's per-frame work around the engine's drawing:
- *        the profiler's frame rollover, the test scene, and the frame's submission.
+ *        the profiler's frame rollover, the test scene, the debug overlays, and the frame's
+ *        submission.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -16,6 +17,7 @@
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/texmgr.h"
+#include "ps2/renderer/overlays.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/tests/draw_cube.h"
 
@@ -103,6 +105,7 @@ void VID_Init()
     Cvar_RegisterVariable(&s_enableDither);
     Cvar_RegisterVariable(&s_fb16Bit);
     ps2::debug::FrameLogInit();
+    ps2::overlay::Init();
 #if PS2_QUAKE_DEBUG
     ps2::test::RegisterCvars();
 #endif // PS2_QUAKE_DEBUG
@@ -195,6 +198,10 @@ void GL_EndRendering()
     // and lands on top of it.
     ps2::test::DrawRotatingCube();
 #endif // PS2_QUAKE_DEBUG
+
+    // The backend's own debug overlays, on top of everything. Each is cvar gated and returns at
+    // once when off.
+    ps2::overlay::Draw();
 
     ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency.value != 0.0f);
 }

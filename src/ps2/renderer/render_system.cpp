@@ -75,6 +75,9 @@ static gs::DrawContext s_drawCtx = gs::DrawContext::Ctx1;
 // of its own, and a 2D section can outlive a block across a split.
 static bool s_in2D = false;
 
+// Whether the open 2D section has narrowed the scissor, which it must put back before it closes.
+static bool s_scissor2D = false;
+
 // The GIF block currently open - the frame clear, or the 2D overlay - as a cursor into the
 // command buffer. Engaged only between OpenGifBlock and CloseGifBlock, which is also what says
 // whether a block is open at all.
@@ -464,6 +467,12 @@ void FlushPending2D()
     }
     s_in2D = false;
 
+    // The full screen back, for the 3D that follows and the frames after: nothing else sets it.
+    if (s_scissor2D)
+    {
+        ResetScissor2D();
+    }
+
     // TEST back to the 3D pixel tests, since the batches that follow do not write it.
     gs::EmitEnd2D(GifData(gs::kEnd2DQwords), s_drawCtx);
 
@@ -484,7 +493,8 @@ void FillRect(const int x, const int y, const int width, const int height,
 }
 
 void DrawTexturedRect(const tex::Texture & texture, const int x, const int y, const int width, const int height,
-                      const int u0, const int v0, const int u1, const int v1, const u8 brightness[3])
+                      const int u0, const int v0, const int u1, const int v1, const u8 brightness[3],
+                      const u8 alpha)
 {
     Ensure2D();
 
@@ -498,7 +508,24 @@ void DrawTexturedRect(const tex::Texture & texture, const int x, const int y, co
     }
 
     gs::EmitTexturedRect(GifData(gs::kTexturedRectQwords), s_drawCtx,
-                         x, y, width, height, u0, v0, u1, v1, bind, brightness);
+                         x, y, width, height, u0, v0, u1, v1, bind, brightness, alpha);
+}
+
+void SetScissor2D(const int x, const int y, const int width, const int height)
+{
+    Ensure2D();
+    gs::EmitScissor(GifData(gs::kScissorQwords), s_drawCtx, x, y, width, height);
+    s_scissor2D = true;
+}
+
+void ResetScissor2D()
+{
+    if (!s_scissor2D)
+    {
+        return;
+    }
+    gs::EmitScissor(GifData(gs::kScissorQwords), s_drawCtx, 0, 0, gs::Width(), gs::Height());
+    s_scissor2D = false;
 }
 
 // ------------------------------------------------------------------------------------------------

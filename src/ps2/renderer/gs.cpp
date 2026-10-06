@@ -30,6 +30,7 @@
 #include "ps2/renderer/profile.h"
 #include "ps2/system/heap.h"
 
+#include <algorithm> // std::clamp
 #include <cstring> // memset
 #include <optional>
 #include <dma.h>
@@ -788,7 +789,7 @@ void EmitTextureBind(GifWriter & w, const DrawContext ctx, const Bind2D & bind)
 void EmitTexturedRect(GifWriter & w, const DrawContext ctx, const int x, const int y,
                       const int width, const int height,
                       const int u0, const int v0, const int u1, const int v1,
-                      const Bind2D & bind, const u8 brightness[3])
+                      const Bind2D & bind, const u8 brightness[3], const u8 alpha)
 {
     PS2_AssertMsg(detail::g_state.currentTex != nullptr, "EmitTexturedRect with nothing bound!");
 
@@ -817,8 +818,45 @@ void EmitTexturedRect(GifWriter & w, const DrawContext ctx, const int x, const i
     rect.color.a = 0x80;
     rect.color.q = 1.0f;
 
-    draw_disable_blending();
+    if (alpha == 255)
+    {
+        draw_disable_blending();
+        w.RectTextured(Index(ctx), rect);
+        return;
+    }
+
+    // Blended at 'alpha'. An opaque texel's own alpha is 0xFF, twice the GS's 1.0, and MODULATE
+    // multiplies it by the vertex alpha over 0x80: a quarter of 'alpha' at the vertex comes out
+    // as half of it at the blender, the GS scale FillRect uses too. Alpha 0 texels still fail
+    // the alpha test, as do the faintest, whose product rounds to 0.
+    rect.color.a = static_cast<u8>(alpha >> 2);
+
+    draw_enable_blending();
     w.RectTextured(Index(ctx), rect);
+    draw_disable_blending();
+}
+
+void EmitScissor(GifWriter & w, const DrawContext ctx, const int x, const int y,
+                 const int width, const int height)
+{
+    w.EnsureSpace(kScissorQwords);
+
+    // The GS's bounds are inclusive and unsigned, so a rectangle with nothing inside is written
+    // as an inverted one rather than with a -1 that would wrap.
+    int x0 = std::clamp(x, 0, Width());
+    int y0 = std::clamp(y, 0, Height());
+    int x1 = std::clamp(x + width, 0, Width()) - 1;
+    int y1 = std::clamp(y + height, 0, Height()) - 1;
+    if (x1 < x0 || y1 < y0)
+    {
+        x0 = 1;
+        x1 = 0;
+        y0 = 1;
+        y1 = 0;
+    }
+
+    const u64 scissor = GS_SET_SCISSOR(x0, x1, y0, y1);
+    w.SetRegister(ContextReg(GS_REG_SCISSOR, ctx), scissor);
 }
 
 } // namespace ps2::gs

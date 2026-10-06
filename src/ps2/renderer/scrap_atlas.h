@@ -134,6 +134,10 @@ inline bool IsPackable(const int width, const int height)
 bool TryPack(const u8 * pic8, int width, int height,
              const tex::Texture ** outAtlas, int * outX, int * outY);
 
+// Empties every scrap for a new set of pics (a new game's gfx.wad): the packers start over
+// and the texels go back to transparent. The images packed so far must be gone already.
+void Reset();
+
 // Logs how full the scraps are, for the level-load summary.
 void DumpUsage();
 

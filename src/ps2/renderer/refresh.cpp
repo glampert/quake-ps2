@@ -13,7 +13,6 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
-#include "ps2/engine_hooks.h"
 #include "ps2/renderer/render_system.h"
 
 extern "C" {
@@ -127,9 +126,6 @@ void D_FlushCaches() {}
 // ------------------------------------------------------------------------------------------------
 
 void R_RenderView() {}
-
-// engine_hooks.h:
-void PS2_DrawPolyBlend(const float rgba[4]) { (void)rgba; }
 
 void R_TranslatePlayerSkin(int playernum)    { (void)playernum; }
 void R_TranslateNewPlayerSkin(int playernum) { (void)playernum; }

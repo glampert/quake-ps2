@@ -90,6 +90,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/draw.cpp             \
 	ps2/renderer/texmgr.cpp           \
 	ps2/renderer/refresh.cpp          \
+	ps2/renderer/overlays.cpp         \
 	ps2/tests/draw_cube.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \

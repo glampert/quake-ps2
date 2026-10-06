@@ -79,8 +79,11 @@ float		scr_con_current;
 float		scr_conlines;		// lines of console to display
 
 //johnfitz -- new cvars
-cvar_t		scr_menuscale = {"scr_menuscale", "1", CVAR_ARCHIVE};
-cvar_t		scr_sbarscale = {"scr_sbarscale", "1", CVAR_ARCHIVE};
+// [PS2_QUAKE]: the menus and the status bar at twice their size by default (was 1). Quake laid
+// them out for 320x200, and on the PS2's 640x448 framebuffer, shown TV-sized, that is what fills
+// the screen the way the original did.
+cvar_t		scr_menuscale = {"scr_menuscale", "2", CVAR_ARCHIVE};
+cvar_t		scr_sbarscale = {"scr_sbarscale", "2", CVAR_ARCHIVE};
 cvar_t		scr_sbaralpha = {"scr_sbaralpha", "0.75", CVAR_ARCHIVE};
 cvar_t		scr_conwidth = {"scr_conwidth", "0", CVAR_ARCHIVE};
 cvar_t		scr_conscale = {"scr_conscale", "1", CVAR_ARCHIVE};

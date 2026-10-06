@@ -31,6 +31,14 @@
   Delete the TGAs afterwards. A 16-bit framebuffer reads back at 5 bits a channel (palette
   grey 31 comes back as 24). Outside what the game draws (the PS2 BIOS, PCSX2's own UI),
   anything visual still needs the user's eyes.
+- A screenshot recipe that worked (2026-10-06), in `autoexec.cfg`: `alias w10 "wait;..."` (ten
+  waits), `alias w100 "w10;..."`, then `playdemo demo1`, `w100`, `w100`, `screenshot` for the
+  HUD in play. `menu_main`/`menu_options`/`menu_setup` plus `w10` and another `screenshot` add
+  the menus, and `toggleconsole` the console. `ps2_debug_overlays 0` and `ps2_show_fps 0` keep
+  the debug panels out of the shot. The commands run before `quake.rc`'s `startdemos`, which
+  then finds a demo playing and leaves it.
+- Launching PCSX2 by hand on a release build needs `build/release/id1`, which `make release
+  run` creates: `ln -s $PWD/id1 build/release/id1`.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
 - Runs read and rewrite `id1/config.cfg` (gitignored; QuakeSpasm writes it on quit).

@@ -59,7 +59,7 @@ paths:
 Only *implicit* conversions warn. An explicit `static_cast` is the fix almost everywhere.
 
 - `-Wcast-align`: byte buffer → struct pointer must go through `void*`:
-  `static_cast<const T *>(static_cast<const void *>(ptr))` (as image_load.cpp does).
+  `static_cast<const T *>(static_cast<const void *>(ptr))` (as draw.cpp does for an LMP's header).
 - `-Wconversion`/`-Wsign-conversion`: `int / sizeof(X)` promotes the int to `size_t`, so
   write `static_cast<int>(sizeof(X))`. Size arguments to `memcpy`/`Alloc` need explicit
   `static_cast<size_t>`/`<u32>`.

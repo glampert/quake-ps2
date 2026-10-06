@@ -342,6 +342,7 @@ constexpr int kTextureBindQwords  = 16;
 constexpr int kTexturedRectQwords = 8;
 constexpr int kBegin2DQwords      = 8;
 constexpr int kEnd2DQwords        = 2;
+constexpr int kScissorQwords      = 2;
 
 // Colour + depth clear of the whole framebuffer, as a z=0 sprite with an always-pass z-test.
 // Re-arms depth writes and sets the dither enable, neither of which the clear itself touches.
@@ -365,9 +366,16 @@ void EmitTextureBind(GifWriter & w, DrawContext ctx, const Bind2D & bind);
 
 // A textured rectangle sampling the bound texture over texel range [u0,v0]..[u1,v1], shifted by
 // the bind's atlas origin. 'brightness' modulates the texel colour per RGB channel: 128 leaves
-// it unchanged, 255 doubles it. Texels with alpha 0 are cut out by the alpha test.
+// it unchanged, 255 doubles it. Texels with alpha 0 are cut out by the alpha test. 'alpha' 255
+// draws opaque; below that the rectangle blends at that opacity, which assumes the texture's
+// opaque texels carry alpha 0xFF, as every palette and RGBA image does.
 void EmitTexturedRect(GifWriter & w, DrawContext ctx, int x, int y, int width, int height,
                       int u0, int v0, int u1, int v1, const Bind2D & bind,
-                      const u8 brightness[3]);
+                      const u8 brightness[3], u8 alpha);
+
+// SCISSOR: what the context draws is clipped to the rectangle, in pixels, clamped to the
+// framebuffer. The whole framebuffer is what everything else assumes - the 3D guard band
+// included - so whoever narrows it puts it back.
+void EmitScissor(GifWriter & w, DrawContext ctx, int x, int y, int width, int height);
 
 } // namespace ps2::gs

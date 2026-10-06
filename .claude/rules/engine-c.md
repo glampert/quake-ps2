@@ -40,15 +40,16 @@ renderer directly. So the seam is that renderer's public surface, implemented in
   `net_drivers[]`/`net_numdrivers` (loopback only).
 
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
-`gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen` and
-the loading plaque), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation) and
+`gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the
+loading plaque, and `screenshot`, TGA only, over `PS2_ReadPixels`; it also defaults
+`scr_menuscale`/`scr_sbarscale` to 2 for the 640x448 screen), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation) and
 `gl_fog.c` (its message parsing must run, or the stream desyncs).
 
 Two PS2 headers sit at the seam. `src/ps2/renderer/gl_types.h` gives quakedef.h the GL type
 names QuakeSpasm's headers are written with, and nothing else: with no GL function declared,
 a stray GL call fails to compile. `src/ps2/engine_hooks.h` declares what engine files call in
 the backend that no QuakeSpasm header declares (the status bar's alpha and scissor, the view
-blend) and the engine state the backend reads (`active_particles`).
+blend, the screenshot readback) and the engine state the backend reads (`active_particles`).
 
 ## Known engine quirks
 
@@ -64,6 +65,14 @@ Record QuakeSpasm quirks here as they are found.
   host_initialized"). Anything that registers commands must run inside `Host_Init`.
 - `Host_Init` queues `vid_unlock` to run after the configs; the backend registers it as a
   no-op, since the PS2 has one fixed video mode.
+- `VID_Init` runs inside `Host_Init`, before `quake.rc` executes `config.cfg`. A cvar that has
+  to be right when the GS comes up (`ps2_fb_16bit`) is read from the file ahead of time with
+  `CFG_ReadCvars`, as QuakeSpasm's own `VID_Init` does for its video mode.
+- `Con_Printf` redraws the screen (`SCR_UpdateScreen`) for every line while the client isn't
+  in a game. Backend code that can run inside a frame prints with `Con_DPrintf` or
+  `Con_SafePrintf` instead (see gs-renderer.md).
+- `+commands` on the command line do nothing with the shareware data: `stuffcmds` reads the
+  `cmdline` cvar, which `COM_CheckRegistered` fills only for the registered version.
 - `-dedicated` stops with "Network not available!": a dedicated server needs a network driver
   besides loopback, and the PS2 has none.
 - `Host_Map_f` frees the hunk back to the host level (`Host_ClearMemory`) before loading the

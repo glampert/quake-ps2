@@ -19,6 +19,12 @@ More come back as each subsystem is ported.
 | `ps2_gs_latency` | 1 | 1 | Arch. | 1 leaves each frame drawing on the GS and shows it at the start of the next, so the GS rasterises while the EE builds the next frame, for one frame of input lag. 0 waits for the GS and flips at the end of each frame. Live. |
 | `ps2_fb_dither` | 0 | 0 | Arch. | The GS's ordered dither, which hides the banding of a 16-bit framebuffer on gradients. Live. |
 | `ps2_fb_16bit` | 1 | 1 | Arch. | 16-bit (5:5:5) framebuffers instead of 32-bit: 560 KB of VRAM each instead of 1120 KB, which the texture heap gets. Read once as the GS comes up, from `config.cfg` (or `+ps2_fb_16bit 0` on the command line), so a change applies on the next run. |
+| `ps2_debug_overlays` | 1 | 0 | Arch. | Master switch for the debug panels below, all but the FPS counter. Each panel also has its own switch. |
+| `ps2_show_fps` | 1 | 0 | Arch. | FPS counter, top right: green while every frame made its vsync, yellow once one missed, red at half the refresh rate or below. |
+| `ps2_show_profile` | 1 | 0 | Arch. | Frame times per profiled event, under the FPS counter. Draws in profile builds only. |
+| `ps2_show_memstats` | 1 | 0 | Arch. | Heap use per memory tag, with the total, its peak and what is left, bottom right. |
+| `ps2_show_vramstats` | 1 | 0 | Arch. | GS texture heap use, resident textures, and this frame's uploads and forced GS drains, bottom left. |
+| `ps2_show_drawstats` | 1 | 0 | Arch. | What the last frame submitted (triangles, particles, batches, clipping) and the DMA chain's use, top left. Draws in profile builds only. |
 | `ps2_frame_log` | 0 | — | | Writes per-frame timings and draw counters to stdout as CSV `FLOG` rows, for `src/tools/scripts/frame_log/`. Registered in profile builds (`PS2_QUAKE_PROFILE`). |
 | `ps2_testcube` | 0 | — | | Draws the VU1 test cube on top of every frame: the GS/VU1 smoke test. |
 | `ps2_testcube_tess` | 8 | — | | The test cube's tessellation per face, 1 to 8. Higher values push a face past one VU1 batch, to exercise chunked submission. |

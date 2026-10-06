@@ -263,9 +263,15 @@ void FillRect(int x, int y, int width, int height, u8 r, u8 g, u8 b, u8 a);
 
 // A textured rectangle sampling 'texture' over texel range [u0,v0]..[u1,v1], made resident first
 // if it is not already. 'brightness' modulates the texel colour per RGB channel: 128 leaves it
-// unchanged. Texels with alpha 0 are cut out by the alpha test.
+// unchanged. Texels with alpha 0 are cut out by the alpha test. 'alpha' below 255 blends the
+// rectangle with the framebuffer at that opacity (see gs::EmitTexturedRect).
 void DrawTexturedRect(const tex::Texture & texture, int x, int y, int width, int height,
-                      int u0, int v0, int u1, int v1, const u8 brightness[3]);
+                      int u0, int v0, int u1, int v1, const u8 brightness[3], u8 alpha = 255);
+
+// Clips the 2D drawn after it to a rectangle, in screen pixels, until ResetScissor2D - or the
+// end of the 2D section, which puts the full screen back on its own.
+void SetScissor2D(int x, int y, int width, int height);
+void ResetScissor2D();
 
 // ------------------------------------------------------------------------------------------------
 // Particles
