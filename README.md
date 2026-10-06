@@ -3,8 +3,11 @@
 
 ## Overview
 
-This is an unofficial fan-made port of id Software's Quake to the PlayStation 2 console, based on
-[QuakeSpasm][link_quakespasm] 0.97.0.
+This is an unofficial fan-made port of id Software's Quake to the PlayStation 2 console. It derives
+from [QuakeSpasm][link_quakespasm] 0.97.0, the modern, faithful Quake engine based on FitzQuake and
+id's GPL source release: the engine, client, server and QuakeC virtual machine here are
+QuakeSpasm's. id's original release notes for the Quake source code are in
+[src/README.md](src/README.md).
 
 Like the [Quake II port][link_q2_ps2] it builds on, it relies solely on the free
 [PS2DEV SDK][link_ps2_dev], with no official Sony SDK and no proprietary libraries. The goal is a fully
@@ -151,6 +154,17 @@ Much of `src/ps2` is still the Quake II port's code, waiting for the phase that 
 
 ---
 
+## Credits
+
+- [QuakeSpasm][link_quakespasm], which this port derives from: everything under [src/quake/](src/quake/)
+  is QuakeSpasm 0.97.0's code, by the QuakeSpasm developers, changed only where tagged `[PS2_QUAKE]`.
+  QuakeSpasm is itself based on John Fitzgibbons' FitzQuake.
+- id Software's Quake, released under the GPL in 1999 ([source][link_id_repo]; the original release
+  notes are in [src/README.md](src/README.md)).
+- The PS2 backend under [src/ps2/](src/ps2/) comes from the [Quake II port][link_q2_ps2].
+
+---
+
 ## License
 
 Quake was released by id Software under the GNU General Public License, and QuakeSpasm is
@@ -159,5 +173,6 @@ original source code are also released under the GNU General Public License vers
 accompanying LICENSE file for details.
 
 [link_quakespasm]: https://github.com/sezero/quakespasm
+[link_id_repo]: https://github.com/id-Software/Quake
 [link_q2_ps2]: https://github.com/glampert/quake2-ps2
 [link_ps2_dev]: https://github.com/ps2dev
