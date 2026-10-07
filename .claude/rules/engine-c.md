@@ -39,11 +39,18 @@ renderer directly. So the seam is that renderer's public surface, implemented in
   (platform.h), `IN_*` (input.h), `SNDDMA_*` (q_sound.h), `CDAudio_*` (cdaudio.h), and
   `net_drivers[]`/`net_numdrivers` (loopback only).
 
+For the 3D renderer: `gl_model.h` pads `texture_t` to 80 bytes (the BSP texture's pixels
+after it on the hunk start 16-byte aligned, which the GS uploads them in place from) and adds
+`qmodel_t::ps2_render`, the brush model's draw data; `gl_model.c` keeps all four mip levels of
+a BSP texture and keeps the light samples one byte per luxel (no `.lit`); `gl_rlight.c`'s
+`RecursiveLightPoint` reads them that way.
+
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the
 loading plaque, and `screenshot`, TGA only, over `PS2_ReadPixels`; it also defaults
-`scr_menuscale`/`scr_sbarscale` to 2 for the 640x448 screen), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation) and
-`gl_fog.c` (its message parsing must run, or the stream desyncs).
+`scr_menuscale`/`scr_sbarscale` to 2 for the 640x448 screen), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation),
+`gl_fog.c` (its message parsing must run, or the stream desyncs) and `gl_warp.c`
+(`GL_SubdivideSurface`, whose polygons the water warps on VU1).
 
 Two PS2 headers sit at the seam. `src/ps2/renderer/gl_types.h` gives quakedef.h the GL type
 names QuakeSpasm's headers are written with, and nothing else: with no GL function declared,
@@ -94,3 +101,12 @@ Record QuakeSpasm quirks here as they are found.
   besides loopback, and the PS2 has none.
 - `Host_Map_f` frees the hunk back to the host level (`Host_ClearMemory`) before loading the
   next map, so maps never overlap in the hunk.
+- **`qmodel_t::cache` must stay its last field**: zone.c's `Cache_Free` finds the model from
+  it with `(qmodel_t *)(c + 1) - 1`. New fields go before it (brush.cpp static_asserts it).
+- A model's `type` is only set once its loader is done: while an alias model's skins go
+  through `TexMgr_LoadImage`, it still reads `mod_brush`. texmgr.cpp tells walls from skins
+  and sprites by the model's file name instead.
+- `R_PushDlights` marks surfaces with `r_framecount + 1`, and the view increments
+  `r_framecount` right after, so a surface lit this frame reads `dlightframe == r_framecount`.
+  `R_NewMap` builds the lightmaps at frame 1, or every surface (dlight frame 0) would read as
+  lit by a dynamic light.

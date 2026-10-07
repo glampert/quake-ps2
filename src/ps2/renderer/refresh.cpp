@@ -5,15 +5,17 @@
  *        renderer hooks gl_model.c calls (sky textures, warp subdivision, alias mesh building).
  *        The Quake 1 counterpart of the Quake II port's ref.cpp.
  *
- *        Nothing is drawn yet, and nothing is built for drawing: R_Init and R_NewMap do only the
- *        engine-visible part of QuakeSpasm's gl_rmisc.c - cvars, particles, light styles, efrags,
- *        fog - and the view renders nothing.
+ *        R_Init and R_NewMap are gl_rmisc.c's - cvars, particles, light styles, efrags, fog - with
+ *        the brush models' draw data and lightmaps built where GL_BuildLightmaps ran; the view
+ *        itself is view.cpp.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/renderer/brush.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/renderer/view.h"
 
 extern "C" {
 
@@ -36,10 +38,6 @@ const float r_avertexnormals[NUMVERTEXNORMALS][3] = {
     #include "quake/anorms.h"
 };
 #pragma GCC diagnostic pop
-
-// Warp image size, which gl_model.c reads when it loads a turbulent texture. The PS2 warps
-// texture coordinates on VU1 instead of rendering warp images, so there are none.
-int gl_warpimagesize = 0;
 
 // ------------------------------------------------------------------------------------------------
 // Renderer cvars the engine reads. QuakeSpasm registers them in R_Init, and so does this.
@@ -64,9 +62,6 @@ cvar_t r_nolerp_list = ps2::MakeCvar("r_nolerp_list",
 cvar_t r_noshadow_list = ps2::MakeCvar("r_noshadow_list",
     "progs/flame2.mdl,progs/flame.mdl,progs/bolt1.mdl,progs/bolt2.mdl,progs/bolt3.mdl,progs/laser.mdl",
     CVAR_NONE);
-
-// Registered by gl_model.c's Mod_Init, which runs before R_Init.
-cvar_t gl_subdivide_size = ps2::MakeCvar("gl_subdivide_size", "128", CVAR_ARCHIVE);
 
 // ------------------------------------------------------------------------------------------------
 // Lifecycle
@@ -93,6 +88,8 @@ void R_Init()
     Cvar_RegisterVariable(&r_clearcolor);
     Cvar_SetCallback(&r_clearcolor, ClearColorChanged);
 
+    ps2::view::Init();
+
     R_InitParticles();
     ClearColorChanged(&r_clearcolor);
     Fog_Init();
@@ -111,10 +108,19 @@ void R_NewMap()
         cl.worldmodel->leafs[i].efrags = nullptr;
     }
 
+    r_viewleaf = nullptr;
     R_ClearParticles();
-    r_framecount = 0;
 
-    Fog_NewMap(); // global fog, from worldspawn
+    // GL_BuildLightmaps' "no dlightcache": the surfaces' dlight frames start at 0, so a build at
+    // frame 0 would take every one of them for lit by a dynamic light last frame.
+    r_framecount = 1;
+    ps2::brush::BuildForNewMap();
+
+    r_framecount    = 0;
+    r_visframecount = 0;
+
+    Fog_NewMap();          // global fog, from worldspawn
+    ps2::view::NewMap();   // the liquids' opacity, from worldspawn
 }
 
 // QuakeSpasm's R_NewGame forgets the player skin textures, which TexMgr_NewGame has just freed;
@@ -124,10 +130,13 @@ void R_NewGame() {}
 void D_FlushCaches() {}
 
 // ------------------------------------------------------------------------------------------------
-// Frame: nothing is drawn yet
+// Frame
 // ------------------------------------------------------------------------------------------------
 
-void R_RenderView() {}
+void R_RenderView()
+{
+    ps2::view::RenderView();
+}
 
 void R_TranslatePlayerSkin(int playernum)    { (void)playernum; }
 void R_TranslateNewPlayerSkin(int playernum) { (void)playernum; }
@@ -136,12 +145,44 @@ void R_TranslateNewPlayerSkin(int playernum) { (void)playernum; }
 // Load-time hooks the model loader calls
 // ------------------------------------------------------------------------------------------------
 
-void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)    { (void)mod; (void)mt; }
+// For now only the sky's flat colour, which the view draws sky surfaces in: gl_sky.c's average
+// of the opaque texels of the front layer, the left half of the 256x128 image (index 0 is the
+// layer's transparent colour), as it works it out for r_fastsky.
+void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)
+{
+    (void)mod;
+
+    const int halfWidth = static_cast<int>(mt->width / 2);
+    const int height    = static_cast<int>(mt->height);
+    const byte * const src = static_cast<const byte *>(static_cast<const void *>(mt + 1));
+
+    u32 r = 0, g = 0, b = 0, count = 0;
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < halfWidth; ++x)
+        {
+            const byte p = src[(y * static_cast<int>(mt->width)) + x];
+            if (p != 0)
+            {
+                const u32 rgba = d_8to24table[p];
+                r += rgba & 0xFFu;
+                g += (rgba >> 8) & 0xFFu;
+                b += (rgba >> 16) & 0xFFu;
+                ++count;
+            }
+        }
+    }
+
+    if (count > 0)
+    {
+        ps2::view::SetSkyFlatColor(static_cast<u8>(r / count), static_cast<u8>(g / count),
+                                   static_cast<u8>(b / count));
+    }
+}
 void Sky_LoadTextureQ64(qmodel_t * mod, texture_t * mt) { (void)mod; (void)mt; }
 void Sky_LoadSkyBox(const char * name)                  { (void)name; }
 void Sky_ClearAll() {}
 
-void GL_SubdivideSurface(msurface_t * fa) { (void)fa; }
 void GL_MakeAliasModelDisplayLists(qmodel_t * m, aliashdr_t * hdr) { (void)m; (void)hdr; }
 void GLMesh_DeleteVertexBuffers() {}
 

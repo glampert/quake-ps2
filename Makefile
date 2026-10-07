@@ -91,6 +91,9 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/vid.cpp              \
 	ps2/renderer/draw.cpp             \
 	ps2/renderer/texmgr.cpp           \
+	ps2/renderer/brush.cpp            \
+	ps2/renderer/lightmap.cpp         \
+	ps2/renderer/view.cpp             \
 	ps2/renderer/refresh.cpp          \
 	ps2/renderer/overlays.cpp         \
 	ps2/tests/draw_cube.cpp           \
@@ -120,7 +123,7 @@ ENGINE_C_SRC = \
 	quake/sv_phys.c    quake/sv_user.c    quake/view.c       quake/wad.c       \
 	quake/world.c      quake/zone.c       quake/strlcat.c    quake/strlcpy.c   \
 	quake/gl_model.c   quake/gl_refrag.c  quake/gl_rlight.c  quake/gl_screen.c \
-	quake/gl_fog.c     quake/r_part.c
+	quake/gl_fog.c     quake/r_part.c     quake/gl_warp.c
 
 C_SRC   = $(PS2_C_SRC) $(ENGINE_C_SRC)
 CXX_SRC = $(PS2_CXX_SRC)
@@ -133,6 +136,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/renderer/texture.cpp          \
 	ps2/renderer/scrap_atlas.cpp      \
 	ps2/system/iop_boot.cpp           \
+	ps2/renderer/brush.cpp            \
 	ps2/input/keyboard.cpp            \
 	ps2/input/pad.cpp                 \
 	ps2/renderer/vid.cpp              \

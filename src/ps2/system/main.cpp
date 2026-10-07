@@ -97,8 +97,11 @@ int main(int argc, char ** argv)
     Sys_Init();
     Sys_Printf("==== Initializing PS2 QuakeSpasm v%s ====\n", QUAKESPASM_VER_STRING);
 
+    // Cache-line aligned: every hunk block is then 16-byte aligned (the hunk's headers and
+    // allocation sizes keep to 16), which the GS needs of the BSP textures it uploads in place.
     s_parms.memsize = HunkSizeBytes();
-    s_parms.membase = ps2::heap::Alloc(static_cast<size_t>(s_parms.memsize), ps2::heap::MemTag::Hunk);
+    s_parms.membase = ps2::heap::AllocAligned(ps2::heap::MemAlign(64), static_cast<size_t>(s_parms.memsize),
+                                              ps2::heap::MemTag::Hunk);
 
     Sys_Printf("Calling Host_Init...\n");
     Host_Init();

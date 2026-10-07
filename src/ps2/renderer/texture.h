@@ -31,17 +31,6 @@ enum class ImageType : u8
     Sky     // Skybox face.
 };
 
-// Which images are pre-brightened by ps2_intensity before anything multiplies
-// them back down again: a wall under its lightmap, a skin or a sprite under an
-// entity's shade colour. Images drawn at face value - the HUD, the menus, the
-// sky - are left alone, or the compensation would just wash them out.
-constexpr bool TakesIntensity(ImageType type)
-{
-    return (type == ImageType::Wall) ||
-           (type == ImageType::Skin) ||
-           (type == ImageType::Sprite);
-}
-
 // Bit-flag texture properties, orthogonal to the ImageType.
 enum class TexFlags : u8
 {
@@ -61,17 +50,26 @@ constexpr bool HasFlag(TexFlags flags, TexFlags test)
 }
 
 // Pixel storage formats we support, mapped to GS PSMs by GsPsm().
+//
+// The 8-bit formats are all PSMT8 indices and differ only in the CLUT they sample through, each
+// built once by gs::Init and never changed: one per palette QuakeSpasm keeps (gl_texmgr.c's
+// d_8to24table, _nobright and _fbright), and two ramps for images that carry only an alpha.
 enum class PixelFormat : u8
 {
-    RGBA32,   // 4 bytes/texel, 8888.
-    RGB16,    // 2 bytes/texel, 5551 (alpha bit present but unused as TexComponents::RGB).
-    Palette8, // 1 byte/texel: PSMT8 indices into the shared global-palette CLUT
-              // (gs::Init uploads it once; color and alpha come from the palette entry).
-    Alpha8    // 1 byte/texel: PSMT8 indices into the shared alpha-ramp CLUT, where the
-              // index *is* the alpha and the color is pinned at the modulate identity.
-              // For images that carry only a coverage/intensity signal and take their
-              // color from the primitive: the particle sprites and the lightmap atlases.
-              // Needs TexComponents::RGBA, or the texture function drops the alpha.
+    RGBA32,             // 4 bytes/texel, 8888.
+    RGB16,              // 2 bytes/texel, 5551 (alpha bit present but unused as TexComponents::RGB).
+    Palette8,           // 1 byte/texel: Quake's palette, with index 255 transparent (alpha 0). Pics,
+                        // sprites, skins, and walls without fullbright texels.
+    Palette8NoBright,   // Quake's palette with the fullbright range, 224-255, black: the lit pass
+                        // of a texture that has fullbright texels (TEXPREF_NOBRIGHT).
+    Palette8Fullbright, // The fullbright range alone, 0-223 transparent: the texels a texture keeps
+                        // lit at full brightness, added over the lit pass (TEXPREF_FULLBRIGHT).
+    Alpha8,             // 1 byte/texel: the index *is* the alpha, 0..1.0, with the colour pinned at
+                        // the modulate identity, for images carrying only coverage that take
+                        // their colour from the primitive: the particle sprites. Needs
+                        // TexComponents::RGBA, or the texture function drops the alpha.
+    Light8              // As Alpha8, but the alpha runs to 255, nearly 2.0: the lightmap atlases,
+                        // whose overbright range the GS's Cd * As / 128 blend reaches with it.
 };
 
 // Whether the texture's own alpha participates in the texture function (GS TCC bit).
@@ -187,10 +185,13 @@ inline int GsPsm(PixelFormat format)
 {
     switch (format)
     {
-    case PixelFormat::RGBA32   : return GS_PSM_32;
-    case PixelFormat::RGB16    : return GS_PSM_16;
-    case PixelFormat::Palette8 : return GS_PSM_8;
-    case PixelFormat::Alpha8   : return GS_PSM_8;
+    case PixelFormat::RGBA32             : return GS_PSM_32;
+    case PixelFormat::RGB16              : return GS_PSM_16;
+    case PixelFormat::Palette8           : return GS_PSM_8;
+    case PixelFormat::Palette8NoBright   : return GS_PSM_8;
+    case PixelFormat::Palette8Fullbright : return GS_PSM_8;
+    case PixelFormat::Alpha8             : return GS_PSM_8;
+    case PixelFormat::Light8             : return GS_PSM_8;
     }
     return GS_PSM_32; // Unreachable; keeps GCC's -Wreturn-type happy.
 }
@@ -200,10 +201,13 @@ inline int BytesPerTexel(PixelFormat format)
 {
     switch (format)
     {
-    case PixelFormat::RGBA32   : return 4;
-    case PixelFormat::RGB16    : return 2;
-    case PixelFormat::Palette8 : return 1;
-    case PixelFormat::Alpha8   : return 1;
+    case PixelFormat::RGBA32             : return 4;
+    case PixelFormat::RGB16              : return 2;
+    case PixelFormat::Palette8           : return 1;
+    case PixelFormat::Palette8NoBright   : return 1;
+    case PixelFormat::Palette8Fullbright : return 1;
+    case PixelFormat::Alpha8             : return 1;
+    case PixelFormat::Light8             : return 1;
     }
     return 4; // Unreachable; keeps GCC's -Wreturn-type happy.
 }
@@ -216,7 +220,7 @@ inline int BytesPerTexel(PixelFormat format)
 inline bool FollowsFilterSetting(const Texture & texture)
 {
     return (texture.type == ImageType::Wall || texture.type == ImageType::Skin) &&
-           texture.format != PixelFormat::Alpha8;
+           texture.format != PixelFormat::Light8;
 }
 
 // Bytes of EE RAM the texture's pixel buffer occupies: level 0 and any mip levels after it.

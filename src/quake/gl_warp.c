@@ -22,21 +22,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-extern cvar_t r_drawflat;
-
 cvar_t r_oldwater = {"r_oldwater", "0", CVAR_ARCHIVE};
 cvar_t r_waterquality = {"r_waterquality", "8", CVAR_NONE};
 cvar_t r_waterwarp = {"r_waterwarp", "1", CVAR_NONE};
 
+// [PS2_QUAKE]: no warp images, so their size stays 0 (gl_model.c reads it). load_subdivide_size,
+// the sine table and the WARPCALC macros fed the GL water drawing, cut below: the PS2 animates the
+// subdivided polygons' texture coordinates on VU1 instead.
 int gl_warpimagesize;
-float load_subdivide_size; //johnfitz -- remember what subdivide_size value was when this map was loaded
-
-static const float	turbsin[] = {
-#include "gl_warp_sin.h"
-};
-
-#define WARPCALC(s,t) ((s + turbsin[(int)((t*2)+(cl.time*(128.0/M_PI))) & 255]) * (1.0/64)) //johnfitz -- correct warp
-#define WARPCALC2(s,t) ((s + turbsin[(int)((t*0.125+cl.time)*(128.0/M_PI)) & 255]) * (1.0/64)) //johnfitz -- old warp
 
 //==============================================================================
 //
@@ -172,106 +165,6 @@ void GL_SubdivideSurface (msurface_t *fa)
 	SubdividePolygon (fa->polys->numverts, verts[0]);
 }
 
-/*
-================
-DrawWaterPoly -- johnfitz
-================
-*/
-void DrawWaterPoly (glpoly_t *p)
-{
-	float	*v;
-	int		i;
-
-	if (load_subdivide_size > 48)
-	{
-		glBegin (GL_POLYGON);
-		v = p->verts[0];
-		for (i=0 ; i<p->numverts ; i++, v+= VERTEXSIZE)
-		{
-			glTexCoord2f (WARPCALC2(v[3],v[4]), WARPCALC2(v[4],v[3]));
-			glVertex3fv (v);
-		}
-		glEnd ();
-	}
-	else
-	{
-		glBegin (GL_POLYGON);
-		v = p->verts[0];
-		for (i=0 ; i<p->numverts ; i++, v+= VERTEXSIZE)
-		{
-			glTexCoord2f (WARPCALC(v[3],v[4]), WARPCALC(v[4],v[3]));
-			glVertex3fv (v);
-		}
-		glEnd ();
-	}
-}
-
-//==============================================================================
-//
-//  RENDER-TO-FRAMEBUFFER WATER
-//
-//==============================================================================
-
-/*
-=============
-R_UpdateWarpTextures -- johnfitz -- each frame, update warping textures
-=============
-*/
-#ifdef __WATCOMC__ /* OW1.9 doesn't have floorf() */
-#define floorf(_val)		(float)floor((_val))
-#endif
-void R_UpdateWarpTextures (void)
-{
-	texture_t *tx;
-	int i;
-	float x, y, x2, warptess;
-
-	if (r_oldwater.value || cl.paused || r_drawflat_cheatsafe || r_lightmap_cheatsafe)
-		return;
-
-	warptess = 128.0f/CLAMP (3.0f, floorf(r_waterquality.value), 64.0f);
-
-	for (i=0; i<cl.worldmodel->numtextures; i++)
-	{
-		if (!(tx = cl.worldmodel->textures[i]))
-			continue;
-
-		if (!tx->update_warp)
-			continue;
-
-		//render warp
-		GL_SetCanvas (CANVAS_WARPIMAGE);
-		GL_Bind (tx->gltexture);
-		for (x=0.0; x<128.0; x=x2)
-		{
-			x2 = x + warptess;
-			glBegin (GL_TRIANGLE_STRIP);
-			for (y=0.0; y<128.01; y+=warptess) // .01 for rounding errors
-			{
-				glTexCoord2f (WARPCALC(x,y), WARPCALC(y,x));
-				glVertex2f (x,y);
-				glTexCoord2f (WARPCALC(x2,y), WARPCALC(y,x2));
-				glVertex2f (x2,y);
-			}
-			glEnd();
-		}
-
-		//copy to texture
-		GL_Bind (tx->warpimage);
-		glCopyTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, glx, gly+glheight-gl_warpimagesize, gl_warpimagesize, gl_warpimagesize);
-		if (GL_GenerateMipmap)
-			GL_GenerateMipmap (GL_TEXTURE_2D);
-
-		tx->update_warp = false;
-	}
-
-	// ericw -- workaround for osx 10.6 driver bug when using FSAA. R_Clear only clears the warpimage part of the screen.
-	GL_SetCanvas(CANVAS_DEFAULT);
-
-	//if warp render went down into sbar territory, we need to be sure to refresh it next frame
-	if (gl_warpimagesize + sb_lines > glheight)
-		Sbar_Changed ();
-
-	//if viewsize is less than 100, we need to redraw the frame around the viewport
-	scr_tileclear_updates = 0;
-}
+// [PS2_QUAKE]: DrawWaterPoly drew a subdivided polygon with OpenGL, its texture coordinates
+// warped on the CPU; R_UpdateWarpTextures rendered each warping texture into its warp image.
+// The PS2 renderer draws the polygons GL_SubdivideSurface builds and warps them on VU1.

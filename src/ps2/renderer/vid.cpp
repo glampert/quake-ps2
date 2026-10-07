@@ -121,10 +121,8 @@ void VID_Init()
     void * const chain = ps2::heap::AllocAligned(ps2::heap::MemAlign(64), kChainBytes,
                                                  ps2::heap::MemTag::Renderer);
 
-    // No lit-CLUT brightening: Quake's walls and skins draw at the palette's own colours.
     const ps2::gs::Config gsConfig = {
         .palette          = d_8to24table,
-        .intensity        = 1.0f,
         .width            = kScreenWidth,
         .height           = kScreenHeight,
         .framebuffer16Bit = (s_fb16Bit.value != 0.0f)

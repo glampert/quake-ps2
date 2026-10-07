@@ -54,7 +54,6 @@ constexpr u64 ContextReg(const int reg, const DrawContext ctx)
 struct Config
 {
     const u32 * palette;          // 256 RGBA entries; the palette every indexed image samples
-    float       intensity;        // lit-CLUT brightening, >= 1 (below that would darken)
     int         width, height;    // framebuffer dimensions, in pixels
     bool        framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
 };
@@ -75,9 +74,11 @@ struct State
     int width, height;               // as configured
     framebuffer_t framebuffer[2];    // one per drawing context: the pair that alternates
     zbuffer_t zbuffer;               // where the z-buffer is, its format, and the real z-test
-    vram::Address globalPaletteClut; // the three fixed CLUTs, outside the texture heap
-    vram::Address litPaletteClut;
+    vram::Address paletteClut;       // the fixed CLUTs, outside the texture heap: one per 8-bit
+    vram::Address noBrightClut;      // pixel format (see tex::PixelFormat)
+    vram::Address fullbrightClut;
     vram::Address alphaRampClut;
+    vram::Address lightRampClut;
 
     // Texture bound for 2D draws in the current context, for dropping redundant TEX0 writes.
     // The atlas when a scrapped image was bound; see ResolveBind2D.
@@ -210,18 +211,22 @@ Q_ALWAYS_INLINE u64 MakeTex1(const tex::Texture & texture, const TextureSampling
 // TEX1's MXL is 0. The texture must be resident.
 u64 MakeMipTbp1(const tex::Texture & texture);
 
-// GS VRAM word address of the 256-entry CLUT an indexed format samples through. Palette8 takes
-// the global palette, or the intensity-brightened copy of it when 'lit' - an image something is
-// going to multiply back down, a wall under its lightmap or a skin under its shade colour.
-// Alpha8 takes the alpha ramp. Invalid for the direct-colour formats, which sample no CLUT.
-Q_ALWAYS_INLINE vram::Address ClutAddress(const tex::PixelFormat format, const bool lit)
+// GS VRAM word address of the 256-entry CLUT an indexed format samples through, one per 8-bit
+// format (see tex::PixelFormat). Invalid for the direct-colour formats, which sample no CLUT.
+Q_ALWAYS_INLINE vram::Address ClutAddress(const tex::PixelFormat format)
 {
     switch (format)
     {
     case tex::PixelFormat::Palette8 :
-        return lit ? detail::g_state.litPaletteClut : detail::g_state.globalPaletteClut;
+        return detail::g_state.paletteClut;
+    case tex::PixelFormat::Palette8NoBright :
+        return detail::g_state.noBrightClut;
+    case tex::PixelFormat::Palette8Fullbright :
+        return detail::g_state.fullbrightClut;
     case tex::PixelFormat::Alpha8 :
         return detail::g_state.alphaRampClut;
+    case tex::PixelFormat::Light8 :
+        return detail::g_state.lightRampClut;
     default :
         return vram::Address::Invalid;
     }
@@ -229,7 +234,7 @@ Q_ALWAYS_INLINE vram::Address ClutAddress(const tex::PixelFormat format, const b
 
 // TEX0: where the texture is in VRAM, how it is laid out there, and the CLUT it samples through
 // when it is an indexed format. The texture must be resident.
-u64 MakeTex0(const tex::Texture & texture, bool lit);
+u64 MakeTex0(const tex::Texture & texture);
 
 // ------------------------------------------------------------------------------------------------
 // Presentation

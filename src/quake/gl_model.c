@@ -724,7 +724,7 @@ static void Mod_LoadTextures (lump_t *l)
 		pal = false;
 #endif
 
-		pixels = mt->width*mt->height; // only copy the first mip, the rest are auto-generated
+		pixels = mt->width*mt->height/64*85; // [PS2_QUAKE]: all four mip levels, which the GS samples (was the first only; GL generated the rest)
 #ifdef BSP29_VALVE
 		// valve textures have a color palette immediately following the pixels
 		if (pal)
@@ -1065,104 +1065,18 @@ _load_texture:
 Mod_LoadLighting -- johnfitz -- replaced with lit support code via lordhavoc
 =================
 */
+// [PS2_QUAKE]: the samples stay one byte per luxel, as the BSP has them. The GS can only scale the
+// framebuffer by an intensity (its blend multiplies by an alpha, never by a second colour), so
+// the PS2's lightmaps carry intensity alone, and expanding the samples to RGB would triple their
+// hunk for nothing. So no .lit files either; the Quake 64 and Half-Life layouts went with them.
 static void Mod_LoadLighting (lump_t *l)
 {
-	int i, mark;
-	byte *in, *out, *data;
-	byte d, q64_b0, q64_b1;
-	char litfilename[MAX_OSPATH];
-	unsigned int path_id;
-
 	loadmodel->lightdata = NULL;
-	// LordHavoc: check for a .lit file
-	q_strlcpy(litfilename, loadmodel->name, sizeof(litfilename));
-	COM_StripExtension(litfilename, litfilename, sizeof(litfilename));
-	q_strlcat(litfilename, ".lit", sizeof(litfilename));
-	mark = Hunk_LowMark();
-	data = (byte*) COM_LoadHunkFile (litfilename, &path_id);
-	if (data)
-	{
-		// use lit file only from the same gamedir as the map
-		// itself or from a searchpath with higher priority.
-		if (path_id < loadmodel->path_id)
-		{
-			Hunk_FreeToLowMark(mark);
-			Con_DPrintf("ignored %s from a gamedir with lower priority\n", litfilename);
-		}
-		else
-		if (data[0] == 'Q' && data[1] == 'L' && data[2] == 'I' && data[3] == 'T')
-		{
-			i = LittleLong(((int *)data)[1]);
-			if (i == 1)
-			{
-				if (8+l->filelen*3 == com_filesize)
-				{
-					Con_DPrintf2("%s loaded\n", litfilename);
-					loadmodel->lightdata = data + 8;
-					return;
-				}
-				Hunk_FreeToLowMark(mark);
-				Con_Printf("Outdated .lit file (%s should be %u bytes, not %u)\n", litfilename, 8+l->filelen*3, com_filesize);
-			}
-			else
-			{
-				Hunk_FreeToLowMark(mark);
-				Con_Printf("Unknown .lit file version (%d)\n", i);
-			}
-		}
-		else
-		{
-			Hunk_FreeToLowMark(mark);
-			Con_Printf("Corrupt .lit file (old version?), ignoring\n");
-		}
-	}
-	// LordHavoc: no .lit found, expand the white lighting data to color
 	if (!l->filelen)
 		return;
 
-	// Quake64 bsp lighmap data
-	if (loadmodel->bspversion == BSPVERSION_QUAKE64)
-	{
-		// RGB lightmap samples are packed in 16bits.
-		// RRRRR GGGGG BBBBBB
-
-		loadmodel->lightdata = (byte *) Hunk_AllocName ( (l->filelen / 2)*3, litfilename);
-		in = mod_base + l->fileofs;
-		out = loadmodel->lightdata;
-
-		for (i = 0;i < (l->filelen / 2) ;i++)
-		{
-			q64_b0 = *in++;
-			q64_b1 = *in++;
-
-			*out++ = q64_b0 & 0xf8;/* 0b11111000 */
-			*out++ = ((q64_b0 & 0x07) << 5) + ((q64_b1 & 0xc0) >> 5);/* 0b00000111, 0b11000000 */
-			*out++ = (q64_b1 & 0x3f) << 2;/* 0b00111111 */
-		}
-		return;
-	}
-
-#ifdef BSP29_VALVE
-	if (loadmodel->bspversion == BSPVERSION_VALVE)
-	{
-		// lightmap samples are already stored as rgb
-		loadmodel->lightdata = (byte *)Hunk_AllocName (l->filelen, litfilename);
-		memcpy (loadmodel->lightdata, mod_base + l->fileofs, l->filelen);
-		return;
-	}
-#endif
-
-	loadmodel->lightdata = (byte *) Hunk_AllocName ( l->filelen*3, litfilename);
-	in = loadmodel->lightdata + l->filelen*2; // place the file at the end, so it will not be overwritten until the very last write
-	out = loadmodel->lightdata;
-	memcpy (in, mod_base + l->fileofs, l->filelen);
-	for (i = 0;i < l->filelen;i++)
-	{
-		d = *in++;
-		*out++ = d;
-		*out++ = d;
-		*out++ = d;
-	}
+	loadmodel->lightdata = (byte *) Hunk_AllocName (l->filelen, loadname);
+	memcpy (loadmodel->lightdata, mod_base + l->fileofs, l->filelen);
 }
 
 
@@ -1621,7 +1535,7 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
 			out->samples = loadmodel->lightdata + lofs; // accounts for RGB light data
 #endif
 		else
-			out->samples = loadmodel->lightdata + (lofs * 3); //johnfitz -- lit support via lordhavoc (was "+ i")
+			out->samples = loadmodel->lightdata + lofs; // [PS2_QUAKE]: one byte per luxel again (see Mod_LoadLighting)
 
 		//johnfitz -- this section rewritten
 		if (!q_strncasecmp(out->texinfo->texture->name,"sky",3)) // sky surface //also note -- was Q_strncmp, changed to match qbsp

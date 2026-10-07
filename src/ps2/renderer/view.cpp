@@ -1,296 +1,328 @@
 /* ================================================================================================
  * File: view.cpp
- * Brief: View/3D frame rendering: the world geometry pass behind PS2_RenderFrame.
+ * Brief: The 3D view: QuakeSpasm's R_RenderView on the VU1 path. See view.h.
  *
- *  RenderFrame walks the world BSP for the refdef's camera: MarkLeaves stamps the nodes reachable
- *  from the current PVS cluster, RecursiveWorldNode descends the tree front-to-back culling
- *  against the view frustum and threads every visible opaque surface onto its texture's draw
- *  chain, and DrawTextureChains gathers each chain through an rs::TriangleStream - one batch per
- *  texture. Translucent surfaces are routed aside and drawn back-to-front at the end of the frame
- *  by RenderAlphaSurfaces, and sky surfaces aside to sky.cpp.
+ *  Setup and visibility are QuakeSpasm's own, function for function: R_SetupView's dynamic lights,
+ *  light styles, view leaf and frustum, and R_MarkSurfaces, which walks the leafs the PVS lets
+ *  through, culls their surfaces against the frustum and their planes, and threads the survivors
+ *  onto their textures' chains (texture_t::texturechains). Drawing walks those chains as
+ *  QuakeSpasm's multipass path does, each pass one rs::TriangleStream:
  *
- *  Camera mapping: Quake is Z-up with AngleVectors giving forward/right/up; those
- *  feed math::LookAt directly (its right = cross(up, -forward) lands on Quake's
- *  own right vector) and PerspectiveProjection's Y-flip puts +up up on screen, so
- *  no axis juggling is needed between the engine and the GS.
+ *    - diffuse: the texture, at the modulate identity;
+ *    - lightmap: the same triangles again through the atlas UVs, multiplying the framebuffer by
+ *      the luxel (Modulate, Cd * As / 128, overbright up to nearly 2x) - QuakeSpasm's 2x
+ *      modulate pass with gl_overbright;
+ *    - fullbright: the texels 224-255 of the textures that have them, added over the lit result
+ *      (Additive) - its gl_fullbrights glow pass.
+ *
+ *  Water and its kin draw after the opaque entities, as there, with their texture coordinates
+ *  bent on VU1 (rs::DrawFlags::Warped). Brush entities - doors, lifts, the ammo boxes - run the
+ *  same passes under their own transform. The sky draws flat for now, in the colour QuakeSpasm's
+ *  r_fastsky uses.
+ *
+ *  Camera mapping: Quake is Z-up with AngleVectors giving forward/right/up; those feed
+ *  math::LookAt directly, and the projection's Y flip puts +up up on the GS's screen.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include "ps2/common.h"
 #include "ps2/renderer/view.h"
-#include "ps2/qwords.h"
-#include "ps2/renderer/profile.h"
-#include "ps2/renderer/md2.h"
-#include "ps2/renderer/sky.h"
-#include "ps2/renderer/texture.h"
-#include "ps2/renderer/model.h"
+#include "ps2/renderer/brush.h"
 #include "ps2/renderer/lightmap.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
-#include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/texmgr.h"
+#include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/builtin/builtin.h" // global_palette (beam and particle colours)
+#include "ps2/math/vec_mat.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+
+extern "C" {
+
+// sv_main.c's; QuakeSpasm's r_world.c declared it for itself too.
+byte * SV_FatPVS(vec3_t org, qmodel_t * worldmodel);
+
+// ------------------------------------------------------------------------------------------------
+// Renderer state the engine headers declare (glquake.h) for gl_rmain.c to define
+// ------------------------------------------------------------------------------------------------
+
+mleaf_t * r_viewleaf      = nullptr;
+mleaf_t * r_oldviewleaf   = nullptr;
+int       r_visframecount = 0;   // Bumped by every R_MarkSurfaces; stamps the surfaces it reaches.
+mplane_t  frustum[4];            // Left, right, bottom, top.
+
+// The liquids' opacity: the cvars, or what the map's worldspawn says (R_ParseWorldspawn).
+float map_wateralpha = 1.0f;
+float map_lavaalpha  = 0.0f;
+float map_telealpha  = 0.0f;
+float map_slimealpha = 0.0f;
+
+// ------------------------------------------------------------------------------------------------
+// Cvars: QuakeSpasm's, at its defaults, for the passes there are so far
+// ------------------------------------------------------------------------------------------------
+
+cvar_t r_norefresh    = ps2::MakeCvar("r_norefresh",    "0", CVAR_NONE);
+cvar_t r_drawentities = ps2::MakeCvar("r_drawentities", "1", CVAR_NONE);
+cvar_t r_drawworld    = ps2::MakeCvar("r_drawworld",    "1", CVAR_NONE);
+cvar_t r_fullbright   = ps2::MakeCvar("r_fullbright",   "0", CVAR_NONE);
+cvar_t r_lightmap     = ps2::MakeCvar("r_lightmap",     "0", CVAR_NONE);
+cvar_t r_wateralpha   = ps2::MakeCvar("r_wateralpha",   "1", CVAR_ARCHIVE);
+cvar_t r_lavaalpha    = ps2::MakeCvar("r_lavaalpha",    "0", CVAR_NONE);
+cvar_t r_telealpha    = ps2::MakeCvar("r_telealpha",    "0", CVAR_NONE);
+cvar_t r_slimealpha   = ps2::MakeCvar("r_slimealpha",   "0", CVAR_NONE);
+cvar_t r_dynamic      = ps2::MakeCvar("r_dynamic",      "1", CVAR_ARCHIVE);
+cvar_t r_novis        = ps2::MakeCvar("r_novis",        "0", CVAR_ARCHIVE);
+cvar_t r_oldskyleaf   = ps2::MakeCvar("r_oldskyleaf",   "0", CVAR_NONE);
+cvar_t gl_fullbrights = ps2::MakeCvar("gl_fullbrights", "1", CVAR_ARCHIVE);
+cvar_t gl_farclip     = ps2::MakeCvar("gl_farclip",     "65536", CVAR_ARCHIVE);
+
+} // extern "C"
 
 namespace ps2::view {
 namespace {
 
 // ------------------------------------------------------------------------------------------------
-// Cvars / common constants
+// Constants
 // ------------------------------------------------------------------------------------------------
 
-// Depth range for the world projection (ref_gl's values).
-constexpr float kZNear = 4.0f;
-constexpr float kZFar  = 4096.0f;
+// QuakeSpasm's near plane (gl_rmain.c's NEARCLIP).
+constexpr float kNearClip = 4.0f;
 
-// The view weapon gets its own, much closer near plane. Its models sit at the
-// view origin with the stock and hands reaching back past it, so at kZNear a
-// good part of the gun straddles the near plane - and the VU rejects straddling
-// triangles whole rather than cutting them, which would punch holes in it. The
-// weapon's depth is remapped into a fixed slice of the z-buffer regardless of
-// the projection (rs::DrawFlags::DepthHack), so a near plane this close costs
-// it no precision it can use: the gun still spans thousands of z values inside
-// its slice.
-constexpr float kZNearWeapon = 0.25f;
+// How far in front of a brush entity's surface the camera has to be for it to face the camera
+// (glquake.h's BACKFACE_EPSILON, a double there).
+constexpr float kBackfaceEpsilon = static_cast<float>(BACKFACE_EPSILON);
 
-// Vertex colour for the not-yet-lit world: GS modulate 128 = texels unchanged.
-// The loader bakes this same value into the vertices of every surface it cannot
-// give a luxel chroma to, so the two must not drift apart.
-constexpr u32 kFullBright = mod::kFullBrightColor;
+// Vertices a pass gathers before it flushes a batch to VU1: 768 whole triangles.
+constexpr int kBatchMaxVerts = 3 * 768;
 
-// Render view cvars:
-static const cvar_t * s_skipWorld         = nullptr;
-static const cvar_t * s_skipAlphaSurfaces = nullptr;
-static const cvar_t * s_skipBrushModels   = nullptr;
-static const cvar_t * s_skipSprites       = nullptr;
-static const cvar_t * s_skipEntities      = nullptr;
-static const cvar_t * s_skipParticles     = nullptr;
-static const cvar_t * s_forceNullModels   = nullptr;
-static const cvar_t * s_skipWeaponModel   = nullptr;
-static const cvar_t * s_dynamicLightmaps  = nullptr;
-static const cvar_t * s_dlightScale       = nullptr;
-static const cvar_t * s_lightmaps         = nullptr;
-static const cvar_t * s_lightmapOnly      = nullptr;
-static const cvar_t * s_lightmapColor     = nullptr;
-static const cvar_t * s_lightmapModulate  = nullptr;
-static const cvar_t * s_polyblend         = nullptr;
+// The GS modulate identity at full alpha: what a texel draws at unchanged.
+constexpr u32 kModulateIdentity = vu1::PackColorRGBA(128, 128, 128, 0x80);
 
-// Not ours to read: SetLightLevel writes the sampled light level back into it
-// every frame for the game code (hence non-const). Registered by the client
-// (cl_main.c), which forwards it to the server in each usercmd.
-static cvar_t * s_lightLevel = nullptr;
-
-// ps2_mip_filter picks the filtering of the walls and model skins by name, as ref_gl's
-// gl_texturemode did: nearest, bilinear or trilinear. Non-const to clear its 'modified' flag,
-// which is what gets a new name parsed - once, not every frame. ps2_mip_bias shifts the mip
-// levels the walls sample, in levels; positive is blurrier. See SetUpTextureSampling.
-static cvar_t *       s_mipFilter     = nullptr;
-static const cvar_t * s_mipBias       = nullptr;
-static gs::MipFilter  s_mipFilterMode = gs::MipFilter::Bilinear;
+// What a vertex's alpha byte is for an opacity of 'alpha', 0 to 1, on the GS's 0x80 = 1.0 scale.
+Q_ALWAYS_INLINE u32 AlphaByte(const float alpha)
+{
+    const float scaled = alpha * 128.0f;
+    return (scaled >= 128.0f) ? 128u : ((scaled <= 0.0f) ? 0u : static_cast<u32>(scaled));
+}
 
 // ------------------------------------------------------------------------------------------------
 // Frame state
 // ------------------------------------------------------------------------------------------------
 
-// Game time of the frame, in seconds; drives the water warp animation.
-static float s_frameTime = 0.0f;
+// World to clip: the frame's view-projection. World geometry draws under it as it is.
+static math::Mat4 s_viewProj = {};
 
-// Frame counters used to mark drawable surfaces:
-static int s_frameCount    = 0; // Bumped per RenderFrame; stamps surfaces marked for draw.
-static int s_visFrameCount = 0; // Bumped when the PVS changes; stamps reachable nodes.
+// The sky's flat colour (see SetSkyFlatColor), packed as a GS vertex colour.
+static u32 s_skyColor = vu1::PackColorRGBA(64, 64, 96, 0x80);
 
-// Quake 2 view clusters; BeginRegistration() resets them for a new map.
-constexpr int kInvalidCluster = -1;
-static int s_viewCluster      = kInvalidCluster;
-static int s_viewCluster2     = kInvalidCluster;
-static int s_oldViewCluster   = kInvalidCluster;
-static int s_oldViewCluster2  = kInvalidCluster;
+// The passes QuakeSpasm's cheat-safe draw modes leave on (R_SetupView): r_fullbright and
+// r_lightmap only take in single player, and a map without light data draws fullbright.
+static bool s_drawLightmaps = true;
+static bool s_lightmapOnly  = false;
 
-// Scene camera basis for the frame (Quake coordinates, from AngleVectors).
-static vec3_t s_forwardVec = {};
-static vec3_t s_rightVec   = {};
-static vec3_t s_upVec      = {};
+// ps2_mip_filter picks how the walls and model skins filter, by name, as QuakeSpasm's
+// gl_texturemode does: nearest, bilinear (between texels, the nearest mip level) or trilinear
+// (between levels too, at twice the texture reads). ps2_mip_bias shifts the mip levels the walls
+// sample, in levels; positive is blurrier. See SetUpTextureSampling.
+static cvar_t s_mipFilter = ps2::MakeCvar("ps2_mip_filter", "bilinear", CVAR_ARCHIVE);
+static cvar_t s_mipBias   = ps2::MakeCvar("ps2_mip_bias",   "0",        CVAR_ARCHIVE);
 
-// World-to-clip transform for the frame (world geometry draws in world space).
-static math::Mat4 s_viewProjMatrix = {};
-
-// The same transform with the view weapon's closer near plane (kZNearWeapon).
-static math::Mat4 s_weaponViewProjMatrix = {};
-
-// View frustum side planes (left, right, bottom, top) for bounding-box culling.
-static cplane_t s_frustum[4] = {};
-
-// For each frustum plane, which of a bounding box's six minmaxs values (mins xyz, then maxs xyz)
-// make the corner farthest along the plane normal, and which the nearest - the pair of corners
-// BoxOnPlaneSide picks by the plane's sign bits, picked once a frame here instead. The far corner
-// behind the plane puts the whole box behind it; the near one in front puts the whole box in front.
-struct FrustumPlaneCorners
-{
-    u8 farCorner[3];
-    u8 nearCorner[3];
-};
-static FrustumPlaneCorners s_frustumCorners[4] = {};
-
-// All four frustum planes still to be tested, which is where the world walk starts.
-constexpr int kAllFrustumPlanes = 0xF;
-
-// The same four planes packed for VU0; rebuilt with them by SetUpFrustum.
-static math::Mat4 s_frustumMatrix = {};
-
-// Wall texture animation frame (viewDef.time * 2, as in ref_gl).
-static int s_textureAnimFrame = 0;
-
-// Textures that received surfaces this frame; DrawTextureChains draws and
-// resets exactly these. One entry per live texture is the true ceiling, so it
-// tracks the cache's own capacity.
-constexpr int kMaxChainTextures = static_cast<int>(tex::kMaxTextures);
-static const tex::Texture * s_chainTextures[kMaxChainTextures];
-static int s_chainTextureCount = 0;
-
-// Surfaces with transparency (glass, water, lava, slime), collected while
-// walking the BSP and while drawing brush model entities, then drawn last by
-// RenderAlphaSurfaces over the finished opaque scene.
-//
-// Recorded here rather than threaded through ModelSurface::textureChain like
-// the opaque chains because a brush model's surfaces have to remember the
-// entity transform they were collected under. ref_gl loses it - its
-// R_DrawAlphaSurfaces reloads the world matrix, so a moving submodel's water
-// draws back at the map's rest position - and the records cost little.
-struct AlphaSurface
-{
-    const mod::ModelSurface * surf;
-    const tex::Texture *      texture; // Resolved on collection: the animation frame is the entity's.
-    const math::Mat4 *        mvp;     // &s_viewProjMatrix, or into s_alphaEntityMatrices below.
-};
-
-constexpr int kMaxAlphaSurfaces = 1024;
-static AlphaSurface s_alphaSurfaces[kMaxAlphaSurfaces];
-static int s_alphaSurfaceCount = 0;
-
-// One transform per brush model entity that contributed a translucent surface;
-// DrawBrushModelEntity's own is a local, long gone by the time the alpha pass
-// runs. MAX_ENTITIES is the hard ceiling on contributors, so it cannot overflow.
-static math::Mat4 s_alphaEntityMatrices[MAX_ENTITIES];
-static int s_alphaEntityMatrixCount = 0;
-
-// Triangle gather buffer: texture chains append here and flush through
-// rs::DrawTriangles when full (see rs::TriangleStream). The vertices live in the frame
-// chain, so an instance is 8 bytes and rides in the draw state rather than
-// sitting in .bss - which also means a pass cannot gather under one state and
-// flush under another by forgetting which static it shared.
-constexpr int kBatchMaxVerts = 3 * 768; // 768 whole triangles per batch
-// One rs::TriangleStream per pass, at kBatchMaxVerts.
-
-// Performance counters for the frame, reset by RenderFrame and read through
-// GetStats() by the ps2_show_drawstats overlay.
-#if PS2_QUAKE_PROFILE
-static DrawStats s_drawStats = {};
-#endif // PS2_QUAKE_PROFILE
+static gs::MipFilter s_mipFilterMode = gs::MipFilter::Bilinear;
 
 // ------------------------------------------------------------------------------------------------
-// Translucent surface collection
+// Culling (gl_rmain.c's R_CullBox, R_CullModelForEntity; r_world.c's R_BackFaceCull)
 // ------------------------------------------------------------------------------------------------
 
-// Defers one translucent surface to the RenderAlphaSurfaces pass at the end of
-// the frame, remembering the texture (the animation frame is the caller's) and
-// the transform it draws under.
-void PushAlphaSurface(const mod::ModelSurface & surf, const tex::Texture & texture, const math::Mat4 & mvp)
+int SignbitsForPlane(const mplane_t & plane)
 {
-    PS2_AssertMsg(s_alphaSurfaceCount < kMaxAlphaSurfaces, "Out of alpha surface slots!");
-    if (s_alphaSurfaceCount == kMaxAlphaSurfaces)
-    {
-        Com_DPrintf("Out of alpha surface slots!\n");
-        return; // Fail and drop the overflow surface on no-asserts build.
-    }
-
-    AlphaSurface & entry = s_alphaSurfaces[s_alphaSurfaceCount++];
-    entry.surf    = &surf;
-    entry.texture = &texture;
-    entry.mvp     = &mvp;
-
-    PS2_PROFILE_ONLY(++s_drawStats.surfacesAlpha);
-}
-
-// Parks a brush model entity's transform where the deferred pass can still
-// reach it. One slot per contributing entity - callers hold on to the returned
-// pointer for the rest of their surfaces. Null only if the table is full.
-const math::Mat4 * StoreAlphaEntityMatrix(const math::Mat4 & mvp)
-{
-    PS2_AssertMsg(s_alphaEntityMatrixCount < MAX_ENTITIES, "Out of alpha entity matrix slots!");
-    if (s_alphaEntityMatrixCount == MAX_ENTITIES)
-    {
-        Com_DPrintf("Out of alpha entity matrix slots!\n");
-        return nullptr;
-    }
-
-    math::Mat4 & slot = s_alphaEntityMatrices[s_alphaEntityMatrixCount++];
-    slot = mvp;
-    return &slot;
-}
-
-// ------------------------------------------------------------------------------------------------
-// Frame setup: camera matrices and frustum
-// ------------------------------------------------------------------------------------------------
-
-Q_ALWAYS_INLINE int SignBitsForPlane(const cplane_t & plane)
-{
-    // Sign bits are used for fast box-on-plane-side tests.
     int bits = 0;
-    for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
     {
-        if (plane.normal[i] < 0.0f)
+        if (plane.normal[j] < 0.0f)
         {
-            bits |= (1 << i);
+            bits |= (1 << j);
         }
     }
     return bits;
 }
 
-// The frame's texture filtering and the constant that picks the walls' mip levels.
-//
-// A wall texel spans one world unit - 2085 of the 2118 walls are powers of two, and nearly every
-// texinfo is unscaled - and at view depth w a world unit covers f / w pixels, where
-// f = (screen height / 2) * cot(fovY / 2) is the projection's focal length in pixels (see
-// PerspectiveProjection; 320 at 640x448 and fov 90). So texels shrink to a pixel at w = f, and
-// the level that keeps them about a pixel wide is log2(w / f): with the GS measuring log2(1/Q)
-// and Q = 1/w, that makes K = -log2(f). The GS goes by depth alone, not by how slanted the
-// surface is, so a floor seen at a grazing angle gets a sharper level than its texel density on
-// screen calls for; ps2_mip_bias is the knob for that.
-void SetUpTextureSampling(const refdef_t & viewDef)
+// Turns 'forward' towards 'side' by 'angle' degrees in the plane they span: gl_rmain.c's
+// TurnVector. Both are unit length and perpendicular.
+void TurnVector(vec3_t out, const vec3_t forward, const vec3_t side, const float angle)
 {
-    if (s_mipFilter->modified)
+    const float radians      = math::DegToRad(angle);
+    const float scaleForward = math::Cosf(radians);
+    const float scaleSide    = math::Sinf(radians);
+
+    out[0] = (scaleForward * forward[0]) + (scaleSide * side[0]);
+    out[1] = (scaleForward * forward[1]) + (scaleSide * side[1]);
+    out[2] = (scaleForward * forward[2]) + (scaleSide * side[2]);
+}
+
+// The four side planes of the view frustum, for the bounding-box culls: gl_rmain.c's
+// R_SetFrustum.
+void SetFrustum(const float fovx, const float fovy)
+{
+    TurnVector(frustum[0].normal, vpn, vright, (fovx * 0.5f) - 90.0f); // left
+    TurnVector(frustum[1].normal, vpn, vright, 90.0f - (fovx * 0.5f)); // right
+    TurnVector(frustum[2].normal, vpn, vup,    90.0f - (fovy * 0.5f)); // bottom
+    TurnVector(frustum[3].normal, vpn, vup,    (fovy * 0.5f) - 90.0f); // top
+
+    for (mplane_t & plane : frustum)
     {
-        s_mipFilter->modified = false;
+        plane.type     = PLANE_ANYZ;
+        plane.dist     = DotProduct(r_origin, plane.normal);
+        plane.signbits = static_cast<byte>(SignbitsForPlane(plane));
+    }
+}
 
-        static const char * const kFilterNames[] = { "nearest", "bilinear", "trilinear" };
-        int filter = -1;
-        for (int i = 0; i < ArrayLength(kFilterNames); ++i)
+// True when the box is entirely behind one of the frustum's side planes.
+bool CullBox(const float * const mins, const float * const maxs)
+{
+    for (const mplane_t & plane : frustum)
+    {
+        const int signbits = plane.signbits;
+        const float x = ((signbits & 1) ? mins : maxs)[0];
+        const float y = ((signbits & 2) ? mins : maxs)[1];
+        const float z = ((signbits & 4) ? mins : maxs)[2];
+        if ((plane.normal[0] * x) + (plane.normal[1] * y) + (plane.normal[2] * z) < plane.dist)
         {
-            if (Q_stricmp(s_mipFilter->string, kFilterNames[i]) == 0)
-            {
-                filter = i;
-            }
-        }
-
-        if (filter >= 0)
-        {
-            s_mipFilterMode = static_cast<gs::MipFilter>(filter);
-        }
-        else
-        {
-            const char * const current = kFilterNames[static_cast<int>(s_mipFilterMode)];
-            Com_Printf("ps2_mip_filter: '%s' is not nearest, bilinear or trilinear; keeping %s.\n",
-                       s_mipFilter->string, current);
-            Cvar_Set(s_mipFilter->name, current);
-            s_mipFilter->modified = false;
+            return true;
         }
     }
+    return false;
+}
 
-    const float halfFovY    = math::DegToRad(viewDef.fov_y) * 0.5f;
-    const float focalPixels = 0.5f * static_cast<float>(gs::Height()) * math::Cosf(halfFovY) / math::Sinf(halfFovY);
-    const float lodK        = s_mipBias->value - std::log2(focalPixels);
+// The entity's model bounds placed where it stands, taking the rotated bounds gl_model.c
+// precomputed when it yaws, pitches or rolls.
+bool CullModelForEntity(const entity_t & e)
+{
+    const float * minBounds;
+    const float * maxBounds;
+    if (e.angles[0] != 0.0f || e.angles[2] != 0.0f)
+    {
+        minBounds = e.model->rmins;
+        maxBounds = e.model->rmaxs;
+    }
+    else if (e.angles[1] != 0.0f)
+    {
+        minBounds = e.model->ymins;
+        maxBounds = e.model->ymaxs;
+    }
+    else
+    {
+        minBounds = e.model->mins;
+        maxBounds = e.model->maxs;
+    }
+
+    const float scale = ENTSCALE_DECODE(e.scale);
+    vec3_t mins, maxs;
+    for (int i = 0; i < 3; ++i)
+    {
+        mins[i] = e.origin[i] + (minBounds[i] * scale);
+        maxs[i] = e.origin[i] + (maxBounds[i] * scale);
+    }
+    return CullBox(mins, maxs);
+}
+
+// True when the camera is behind the surface's plane.
+bool BackFaceCull(const msurface_t & surf)
+{
+    const mplane_t & plane = *surf.plane;
+    const float dot = (plane.type < 3) ? (r_refdef.vieworg[plane.type] - plane.dist)
+                                       : (DotProduct(r_refdef.vieworg, plane.normal) - plane.dist);
+    return (dot < 0.0f) != ((surf.flags & SURF_PLANEBACK) != 0);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Transforms
+// ------------------------------------------------------------------------------------------------
+
+// The view-projection for the frame: QuakeSpasm's R_SetupGL - glFrustum over the field of view,
+// glViewport over r_refdef.vrect - for the GS.
+//
+// The projection maps the view rectangle's extent onto NDC at the GS's scale (the 4096-unit
+// drawing window doubling as the clip guard band, see math::PerspectiveProjection), and moves
+// the projection's centre onto the rectangle's when it is off the screen's: NDC 1.0 is 2048
+// pixels from the screen's centre.
+void SetupTransforms(const float fovx, const float fovy)
+{
+    const math::Vec3 eye    = { r_refdef.vieworg[0], r_refdef.vieworg[1], r_refdef.vieworg[2] };
+    const math::Vec3 target = { eye.x + vpn[0], eye.y + vpn[1], eye.z + vpn[2] };
+    const math::Vec3 up     = { vup[0], vup[1], vup[2] };
+    const math::Mat4 view   = math::LookAt(eye, target, up);
+
+    const vrect_t & rect = r_refdef.vrect;
+    const float cotX = 1.0f / std::tan(math::DegToRad(fovx) * 0.5f);
+    const float cotY = 1.0f / std::tan(math::DegToRad(fovy) * 0.5f);
+    const float w    = cotX * (static_cast<float>(rect.width)  / 4096.0f);
+    const float h    = cotY * (static_cast<float>(rect.height) / 4096.0f);
+
+    const float centreX = static_cast<float>(rect.x) + (static_cast<float>(rect.width)  * 0.5f);
+    const float centreY = static_cast<float>(rect.y) + (static_cast<float>(rect.height) * 0.5f);
+    const float offsetX = (centreX - (static_cast<float>(gs::Width())  * 0.5f)) / 2048.0f;
+    const float offsetY = (centreY - (static_cast<float>(gs::Height()) * 0.5f)) / 2048.0f;
+
+    const float zNear = kNearClip;
+    const float zFar  = (gl_farclip.value > (zNear * 2.0f)) ? gl_farclip.value : 65536.0f;
+
+    // Row vectors (clip = eye * proj), looking down -Z: clip.w is -z, so the third row's x and y
+    // add the centre's offset times w, which the divide leaves as a plain NDC offset.
+    const math::Mat4 proj = {{
+        { w,        0.0f,     0.0f,                                0.0f },
+        { 0.0f,     -h,       0.0f,                                0.0f }, // Y flipped: GS screen space grows downwards
+        { -offsetX, -offsetY, (zFar + zNear) / (zFar - zNear),     -1.0f },
+        { 0.0f,     0.0f,     (2.0f * zFar * zNear) / (zFar - zNear), 0.0f }
+    }};
+
+    s_viewProj = view * proj;
+}
+
+// An entity's model to world transform: gl_rmain.c's R_RotateForEntity, which turns yaw about Z,
+// then -pitch about Y, then roll about X, scaled. 'pitch' is the angle the caller wants applied
+// there: brush models flip the pitch going in (R_DrawBrushModel's "stupid quake bug"), so theirs
+// comes out positive.
+math::Mat4 EntityMatrix(const entity_t & e, const float pitch)
+{
+    const float scale = ENTSCALE_DECODE(e.scale);
+
+    math::Mat4 m = math::RotationX(math::DegToRad(e.angles[ROLL])) *
+                   math::RotationY(math::DegToRad(pitch)) *
+                   math::RotationZ(math::DegToRad(e.angles[YAW]));
+
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            m.m[row][col] *= scale;
+        }
+    }
+    m.m[3][0] = e.origin[0];
+    m.m[3][1] = e.origin[1];
+    m.m[3][2] = e.origin[2];
+    m.m[3][3] = 1.0f;
+    return m;
+}
+
+// The frame's texture filtering, and the constant that picks the walls' mip levels.
+//
+// A wall texel spans one world unit, and at view depth w a world unit covers f / w pixels, where
+// f = (view height / 2) * cot(fovY / 2) is the projection's focal length in pixels (320 at 640x448
+// and a 70-degree vertical field of view). So texels shrink to a pixel at w = f, and the level that
+// keeps them about a pixel wide is log2(w / f): with the GS measuring log2(1/Q) and Q = 1/w, that
+// makes K = -log2(f). The GS goes by depth alone, not by how slanted the surface is, so a floor
+// seen at a grazing angle gets a sharper level than its texel density on screen calls for;
+// ps2_mip_bias is the knob for that.
+void SetUpTextureSampling(const float fovy)
+{
+    const float halfFovY    = math::DegToRad(fovy) * 0.5f;
+    const float focalPixels = 0.5f * static_cast<float>(r_refdef.vrect.height) * math::Cosf(halfFovY) / math::Sinf(halfFovY);
+    const float lodK        = s_mipBias.value - std::log2(focalPixels);
 
     // TEX1.K is signed fixed point with four fraction bits, in 12 bits.
     int lodK16 = static_cast<int>((lodK * 16.0f) + ((lodK < 0.0f) ? -0.5f : 0.5f));
@@ -299,2175 +331,661 @@ void SetUpTextureSampling(const refdef_t & viewDef)
     rs::SetTextureSampling({ s_mipFilterMode, lodK16 });
 }
 
-// Builds the four frustum side planes by rotating the view direction around
-// the up/right axes by half the FOV (ref_gl's R_SetFrustum construction).
-void SetUpFrustum(const refdef_t & viewDef)
+// ps2_mip_filter's callback: takes the new name, or puts the old one back.
+void MipFilterChanged(cvar_t * var)
 {
-    RotatePointAroundVector(s_frustum[0].normal, s_upVec,    s_forwardVec, -(90.0f - viewDef.fov_x * 0.5f));
-    RotatePointAroundVector(s_frustum[1].normal, s_upVec,    s_forwardVec,  (90.0f - viewDef.fov_x * 0.5f));
-    RotatePointAroundVector(s_frustum[2].normal, s_rightVec, s_forwardVec,  (90.0f - viewDef.fov_y * 0.5f));
-    RotatePointAroundVector(s_frustum[3].normal, s_rightVec, s_forwardVec, -(90.0f - viewDef.fov_y * 0.5f));
-
-    for (int p = 0; p < 4; ++p)
+    static const char * const kFilterNames[] = { "nearest", "bilinear", "trilinear" };
+    for (int i = 0; i < ps2::ArrayLength(kFilterNames); ++i)
     {
-        cplane_t & plane = s_frustum[p];
-        plane.type     = PLANE_ANYZ;
-        plane.dist     = DotProduct(viewDef.vieworg, plane.normal);
-        plane.signbits = static_cast<byte>(SignBitsForPlane(plane));
-
-        // A negative normal component takes the far corner from mins, as BoxOnPlaneSide's
-        // sign bits do.
-        for (int axis = 0; axis < 3; ++axis)
+        if (q_strcasecmp(var->string, kFilterNames[i]) == 0)
         {
-            const bool negative = (plane.normal[axis] < 0.0f);
-            s_frustumCorners[p].farCorner[axis]  = static_cast<u8>(negative ? axis : axis + 3);
-            s_frustumCorners[p].nearCorner[axis] = static_cast<u8>(negative ? axis + 3 : axis);
+            s_mipFilterMode = static_cast<gs::MipFilter>(i);
+            return;
         }
     }
 
-    // The same four planes as a transform, so a point's distance to all of them
-    // comes out of one VU0 pass instead of four scalar dot products: column p
-    // holds plane p's normal with -dist in the translation row, which makes
-    // component p of (point * this) exactly dot(point, n[p]) - dist[p].
-    s_frustumMatrix = {{
-        { s_frustum[0].normal[0], s_frustum[1].normal[0], s_frustum[2].normal[0], s_frustum[3].normal[0] },
-        { s_frustum[0].normal[1], s_frustum[1].normal[1], s_frustum[2].normal[1], s_frustum[3].normal[1] },
-        { s_frustum[0].normal[2], s_frustum[1].normal[2], s_frustum[2].normal[2], s_frustum[3].normal[2] },
-        { -s_frustum[0].dist,     -s_frustum[1].dist,     -s_frustum[2].dist,     -s_frustum[3].dist     },
-    }};
-}
-
-// True when dynamic lights are drawn as per-vertex point lights on VU1.
-Q_ALWAYS_INLINE bool VuDynamicLightsEnabled()
-{
-    return s_dynamicLightmaps->value == 2.0f;
-}
-
-// Hands the frame's dynamic lights to VU1 (mode 2 only).
-//
-// The microprogram evaluates four at once and attenuates per vertex, so lights
-// need no assignment to batches - one far from a surface simply contributes
-// nothing through the same max(). That means the only choice to make here is
-// which four matter most when the client sends more, which it rarely does:
-// MAX_DLIGHTS is 32 but a busy firefight runs two or three.
-//
-// Selection is by intensity, largest first. Quake 2's dlight intensity is the
-// radius in world units, so the brightest light is also the one reaching
-// furthest, which makes it the right one to keep.
-void SetUpDynamicLights(const refdef_t & viewDef)
-{
-    if (!VuDynamicLightsEnabled())
-    {
-        rs::SetDynamicLights(nullptr, 0);
-        return;
-    }
-
-    vu1::DynamicLight chosen[vu1::kMaxDynamicLights];
-    int count = 0;
-
-    const float scale = s_dlightScale->value;
-    const int numDlights = viewDef.num_dlights;
-
-    for (int i = 0; i < numDlights; ++i)
-    {
-        const dlight_t & dl = viewDef.dlights[i];
-        if (dl.intensity <= 0.0f)
-        {
-            continue; // The client emits "dark lights" this path cannot express.
-        }
-
-        // Insertion sort into a four-deep list, weakest dropped off the end.
-        int slot = count;
-        while (slot > 0 && chosen[slot - 1].radius < dl.intensity)
-        {
-            if (slot < vu1::kMaxDynamicLights)
-            {
-                chosen[slot] = chosen[slot - 1];
-            }
-            --slot;
-        }
-        if (slot < vu1::kMaxDynamicLights)
-        {
-            chosen[slot] = {
-                { dl.origin[0], dl.origin[1], dl.origin[2] },
-                { dl.color[0] * scale, dl.color[1] * scale, dl.color[2] * scale },
-                dl.intensity
-            };
-            if (count < vu1::kMaxDynamicLights)
-            {
-                ++count;
-            }
-        }
-    }
-
-    rs::SetDynamicLights(chosen, count);
-}
-
-// Extracts the six planes bounding the VU1 clip volume from a view-projection.
-//
-// Tests a box ('minmaxs': mins xyz, then maxs xyz) against the frustum planes still set in
-// 'clipFlags'. Returns -1 when it is entirely behind one of them, and otherwise the planes its
-// contents still have to be tested against: a plane the box is entirely in front of is cleared,
-// since nothing inside the box can be behind it either. That is what makes the world walk cheap -
-// once a node is fully inside a plane, nothing beneath it tests that plane again, which is the
-// software renderer's R_RecursiveWorldNode clipflags.
-//
-// The same corners, sums and comparisons as BOX_ON_PLANE_SIDE, so the same boxes go: the frustum
-// planes are never axial, which sent every one of those to an out-of-line BoxOnPlaneSide.
-Q_ALWAYS_INLINE int CullBoxToFrustum(const float * const minmaxs, int clipFlags)
-{
-    for (int p = 0; p < 4; ++p)
-    {
-        if ((clipFlags & (1 << p)) == 0)
-        {
-            continue;
-        }
-
-        const cplane_t & plane = s_frustum[p];
-        const FrustumPlaneCorners & corners = s_frustumCorners[p];
-
-        const float farDist = plane.normal[0] * minmaxs[corners.farCorner[0]]
-                            + plane.normal[1] * minmaxs[corners.farCorner[1]]
-                            + plane.normal[2] * minmaxs[corners.farCorner[2]];
-        if (farDist < plane.dist)
-        {
-            PS2_PROFILE_ONLY(++s_drawStats.boxesCulled);
-            return -1;
-        }
-
-        const float nearDist = plane.normal[0] * minmaxs[corners.nearCorner[0]]
-                             + plane.normal[1] * minmaxs[corners.nearCorner[1]]
-                             + plane.normal[2] * minmaxs[corners.nearCorner[2]];
-        if (nearDist >= plane.dist)
-        {
-            clipFlags &= ~(1 << p);
-        }
-    }
-    return clipFlags;
-}
-
-// True when the box is completely outside the frustum and must not draw.
-Q_ALWAYS_INLINE bool ShouldCullBBox(const float * const mins, const float * const maxs)
-{
-    const float minmaxs[6] = { mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2] };
-    return CullBoxToFrustum(minmaxs, kAllFrustumPlanes) < 0;
-}
-
-void SetupFrame(const refdef_t & viewDef)
-{
-    PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
-
-    lm::BeginFrame();
-
-    PS2_PROFILE_ONLY(s_drawStats = {});
-    s_alphaSurfaceCount = 0;
-    s_alphaEntityMatrixCount = 0;
-
-    ++s_frameCount;
-
-    // Animated walls flip frames at 2 Hz of game time (as in ref_gl).
-    s_frameTime        = viewDef.time;
-    s_textureAnimFrame = static_cast<int>(viewDef.time * 2.0f);
-
-    // Turbulent surfaces animate on the VU (the warp block of textured_triangles.vcl), so the frame's two animation
-    // terms go over once here rather than being folded into every vertex.
-    //
-    // The phase travels in turns and pre-wrapped, which keeps it precise however long the session
-    // has run - ref_gl hands its table a raw, ever-growing 'time' and leans on the integer mask to
-    // bring it back. SURF_FLOWING's drift is a whole 64-texel tile every two seconds; the batches
-    // that take it are the ones flagged rs::DrawFlags::WarpFlowing.
-    const float warpTurns = s_frameTime * (1.0f / (2.0f * math::kPI));
-    const float halfTime  = s_frameTime * 0.5f;
-    rs::SetWarpAnimation(warpTurns - std::floor(warpTurns), -64.0f * (halfTime - std::floor(halfTime)));
-
-    SetUpTextureSampling(viewDef);
-
-    // Camera basis vectors from the view angles.
-    math::AngleVectors(viewDef.viewangles, s_forwardVec, s_rightVec, s_upVec);
-
-    const math::Vec3 eye    = { viewDef.vieworg[0], viewDef.vieworg[1], viewDef.vieworg[2] };
-    const math::Vec3 target = { eye.x + s_forwardVec[0], eye.y + s_forwardVec[1], eye.z + s_forwardVec[2] };
-    const math::Vec3 up     = { s_upVec[0], s_upVec[1], s_upVec[2] };
-
-    const float fovY    = math::DegToRad(viewDef.fov_y);
-    const float aspect  = static_cast<float>(viewDef.width) / static_cast<float>(viewDef.height);
-    const float screenW = static_cast<float>(gs::Width());
-    const float screenH = static_cast<float>(gs::Height());
-
-    const math::Mat4 view = math::LookAt(eye, target, up);
-    const math::Mat4 proj = math::PerspectiveProjection(fovY, aspect, screenW, screenH, kZNear, kZFar);
-    s_viewProjMatrix = view * proj;
-
-    // The view weapon's variant differs only in the near plane, so it shares
-    // the camera and every screen mapping; nothing else may use it.
-    const math::Mat4 weaponProj = math::PerspectiveProjection(fovY, aspect, screenW, screenH, kZNearWeapon, kZFar);
-    s_weaponViewProjMatrix = view * weaponProj;
-
-    SetUpFrustum(viewDef);
-    SetUpDynamicLights(viewDef);
+    const char * const current = kFilterNames[static_cast<int>(s_mipFilterMode)];
+    Con_Printf("ps2_mip_filter: '%s' is not nearest, bilinear or trilinear; keeping %s.\n", var->string, current);
+    Cvar_SetQuick(var, current);
 }
 
 // ------------------------------------------------------------------------------------------------
-// PVS / visibility
+// Visibility (r_world.c's R_MarkSurfaces)
 // ------------------------------------------------------------------------------------------------
 
-const mod::ModelLeaf * FindLeafNodeForPoint(const float * point, const mod::ModelInstance & model)
+// Threads a visible surface onto its texture's chain: r_world.c's R_ChainSurface.
+Q_ALWAYS_INLINE void ChainSurface(msurface_t & surf, const texchain_t chain)
 {
-    PS2_AssertMsg(model.Brush().nodes != nullptr, "World model has no nodes!");
-
-    const mod::ModelNode * node = model.Brush().nodes;
-    for (;;)
-    {
-        if (node->contents != -1)
-        {
-            return reinterpret_cast<const mod::ModelLeaf *>(node);
-        }
-
-        const cplane_t * const plane = node->plane;
-        const float d = DotProduct(point, plane->normal) - plane->dist;
-        node = (d > 0.0f) ? node->children[0] : node->children[1];
-    }
+    surf.texturechain = surf.texinfo->texture->texturechains[chain];
+    surf.texinfo->texture->texturechains[chain] = &surf;
 }
 
-// Returns the decompressed PVS row for 'cluster'.
-//
-// Defers to CM_ClusterPVS rather than keeping a copy of the VISIBILITY lump in the world hunk -
-// the collision model already holds it, and its decoder clamps a zero-run to the row length
-// instead of running off the end.
-//
-// The row lives in a shared buffer that the next call overwrites, so don't hold
-// on to it (MarkLeaves copies it into a temp before asking for the second one).
-Q_ALWAYS_INLINE const u8 * GetClusterPVS(const int cluster)
+void ClearTextureChains(qmodel_t & model, const texchain_t chain)
 {
-    PS2_Assert(cluster != kInvalidCluster); // MarkLeaves handles that case itself.
-    return CM_ClusterPVS(cluster);
-}
-
-// Finds the clusters the camera sees from this frame. Two clusters when near a
-// solid water surface, so crossing it doesn't draw wrong (checked by sampling a
-// second leaf 16 units above/below the eye).
-void SetUpViewClusters(const refdef_t & viewDef, const mod::ModelInstance & world)
-{
-    const mod::ModelLeaf * leaf = FindLeafNodeForPoint(viewDef.vieworg, world);
-
-    s_oldViewCluster  = s_viewCluster;
-    s_oldViewCluster2 = s_viewCluster2;
-    s_viewCluster = s_viewCluster2 = leaf->cluster;
-
-    vec3_t temp;
-    VectorCopy(viewDef.vieworg, temp);
-    temp[2] += (leaf->contents == 0) ? -16.0f : 16.0f;
-
-    leaf = FindLeafNodeForPoint(temp, world);
-    if (!(leaf->contents & CONTENTS_SOLID) && (leaf->cluster != s_viewCluster2))
+    for (int i = 0; i < model.numtextures; ++i)
     {
-        s_viewCluster2 = leaf->cluster;
-    }
-}
-
-// Stamps the leafs in the current clusters' PVS - and the node chains above
-// them - with the new vis frame count. Skipped entirely while the camera stays
-// in the same cluster(s), which is the common case.
-void MarkLeaves(const mod::ModelInstance & world)
-{
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::MarkLeaves);
-
-    if (s_oldViewCluster  == s_viewCluster  &&
-        s_oldViewCluster2 == s_viewCluster2 &&
-        s_viewCluster != kInvalidCluster)
-    {
-        return; // Same clusters as the previous frame; marks still valid.
-    }
-
-    ++s_visFrameCount;
-    s_oldViewCluster  = s_viewCluster;
-    s_oldViewCluster2 = s_viewCluster2;
-
-    if (s_viewCluster == kInvalidCluster || !CM_HasVisibility())
-    {
-        // Outside the map or no PVS data: mark everything visible.
-        for (int i = 0; i < world.Brush().numLeafs; ++i)
+        if (model.textures[i] != nullptr)
         {
-            world.Brush().leafs[i].visFrame = s_visFrameCount;
-        }
-        for (int i = 0; i < world.Brush().numNodes; ++i)
-        {
-            world.Brush().nodes[i].visFrame = s_visFrameCount;
-        }
-        return;
-    }
-
-    const u8 * vis = GetClusterPVS(s_viewCluster);
-
-    // Scratch for the two-cluster PVS union used when the camera straddles a solid
-    // water boundary. The single-cluster row comes from CM_ClusterPVS, which owns its
-    // own buffer - this only exists because combining two clusters needs the first row
-    // kept while the second is decompressed over it.
-    alignas(16) u8 fatPvs[MAX_MAP_LEAFS / 8];
-
-    // May have to combine two clusters because of solid water boundaries:
-    if (s_viewCluster2 != s_viewCluster)
-    {
-        // Copy the first row out before asking for the second: CM_ClusterPVS
-        // decompresses both into the same buffer.
-        std::memcpy(fatPvs, vis, static_cast<size_t>((world.Brush().numLeafs + 7) / 8));
-        vis = GetClusterPVS(s_viewCluster2);
-
-        // Both buffers are 16-byte aligned, so OR them a word at a time.
-        u32 * fat = static_cast<u32 *>(static_cast<void *>(fatPvs));
-        const u32 * add = static_cast<const u32 *>(static_cast<const void *>(vis));
-
-        const int words = (world.Brush().numLeafs + 31) / 32;
-        for (int i = 0; i < words; ++i)
-        {
-            fat[i] |= add[i];
-        }
-        vis = fatPvs;
-    }
-
-    mod::ModelLeaf * leaf = world.Brush().leafs;
-    for (int i = 0; i < world.Brush().numLeafs; ++i, ++leaf)
-    {
-        const int cluster = leaf->cluster;
-        if (cluster == kInvalidCluster)
-        {
-            continue;
-        }
-
-        if (vis[cluster >> 3] & (1 << (cluster & 7)))
-        {
-            auto * node = reinterpret_cast<mod::ModelNode *>(leaf);
-            do
-            {
-                if (node->visFrame == s_visFrameCount)
-                {
-                    break; // This branch is already marked up to the root.
-                }
-                node->visFrame = s_visFrameCount;
-                node = node->parent;
-            } while (node != nullptr);
+            model.textures[i]->texturechains[chain] = nullptr;
         }
     }
 }
 
-// ------------------------------------------------------------------------------------------------
-// World BSP walk and texture chains
-// ------------------------------------------------------------------------------------------------
-
-// Returns the texture a surface draws with, following the animation chain for
-// animated walls (torches, screens). Never null: the model loader substitutes
-// the debug checkerboard for missing wall textures. World surfaces step the
-// chain on game time; brush model entities step it on entity.frame instead,
-// which is how the game scripts a door or button changing its own texture.
-const tex::Texture * TextureAnimation(const mod::ModelTexInfo * texInfo, int animFrame)
+// Marks the surfaces of every leaf the PVS lets through and the frustum doesn't cull, chains the
+// ones facing the camera, rebuilds their lightmaps if their lighting moved, and adds the static
+// entities standing in those leafs to the frame's entity list.
+void MarkSurfaces()
 {
-    PS2_Assert(texInfo != nullptr && texInfo->texture != nullptr);
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::Vis);
 
-    if (texInfo->next == nullptr)
-    {
-        return texInfo->texture; // Not animated.
-    }
+    qmodel_t & world = *cl.worldmodel;
 
-    int c = animFrame % texInfo->numFrames;
-    while (c-- > 0)
+    // Seen through a water surface the camera is next to, the other side is in a leaf the
+    // camera's own PVS may not reach: take the PVS of everything around the eye then.
+    bool nearWaterPortal = false;
+    msurface_t ** mark = r_viewleaf->firstmarksurface;
+    for (int i = 0; i < r_viewleaf->nummarksurfaces; ++i, ++mark)
     {
-        texInfo = texInfo->next;
-    }
-    return texInfo->texture;
-}
-
-// Recursively marks and chains the visible world surfaces: walks the BSP
-// front-to-back, culling nodes against the PVS marks and the view frustum,
-// and threads each drawable surface onto its texture's chain so the next
-// DrawTextureChains() call renders what was collected here.
-void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & world, mod::ModelNode * node,
-                        int clipFlags)
-{
-    if (node->contents == CONTENTS_SOLID)
-    {
-        return;
-    }
-    if (node->visFrame != s_visFrameCount)
-    {
-        return; // Not reachable from the current PVS cluster.
-    }
-    // Only the planes the parent was not already entirely inside.
-    if (clipFlags != 0)
-    {
-        clipFlags = CullBoxToFrustum(node->minmaxs, clipFlags);
-        if (clipFlags < 0)
+        if (((*mark)->flags & SURF_DRAWTURB) != 0)
         {
-            return; // Entirely outside the view frustum.
+            nearWaterPortal = true;
         }
     }
 
-    PS2_PROFILE_ONLY(++s_drawStats.nodesWalked);
-
-    // Leaf: stamp its surfaces as drawable this frame.
-    if (node->contents != -1)
+    const byte * vis;
+    if (r_novis.value != 0.0f || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY)
     {
-        auto * leaf = reinterpret_cast<mod::ModelLeaf *>(node);
-
-        // Check for door-connected areas:
-        if (viewDef.areabits != nullptr)
-        {
-            if (!(viewDef.areabits[leaf->area >> 3] & (1 << (leaf->area & 7))))
-            {
-                return; // Not visible.
-            }
-        }
-
-        mod::ModelSurface ** mark = leaf->firstMarkSurface;
-        for (int i = 0; i < leaf->numMarkSurfaces; ++i, ++mark)
-        {
-            (*mark)->visFrame = s_frameCount;
-        }
-        return;
+        vis = Mod_NoVisPVS(&world);
     }
-
-    // Decision node: find which side of its plane the camera is on.
-    float dot;
-    const cplane_t * const plane = node->plane;
-    switch (plane->type)
+    else if (nearWaterPortal)
     {
-    case PLANE_X:
-        dot = viewDef.vieworg[0] - plane->dist;
-        break;
-    case PLANE_Y:
-        dot = viewDef.vieworg[1] - plane->dist;
-        break;
-    case PLANE_Z:
-        dot = viewDef.vieworg[2] - plane->dist;
-        break;
-    default:
-        dot = DotProduct(viewDef.vieworg, plane->normal) - plane->dist;
-        break;
-    }
-
-    const int  side         = (dot >= 0.0f) ? 0 : 1;
-    const bool cameraOnBack = (side == 1);
-
-    // Recurse down the camera side first (front-to-back order)...
-    RecursiveWorldNode(viewDef, world, node->children[side], clipFlags);
-
-    // ...then chain this node's surfaces that face the camera...
-    mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
-    for (int i = 0; i < node->numSurfaces; ++i, ++surf)
-    {
-        if (surf->visFrame != s_frameCount)
-        {
-            continue; // Not in a visible leaf.
-        }
-        if (HasFlag(surf->flags, mod::SurfaceFlags::PlaneBack) != cameraOnBack)
-        {
-            continue; // Facing away from the camera.
-        }
-
-        const int texFlags = surf->texInfo->flags;
-        if (texFlags & SURF_SKY)
-        {
-            // Never drawn: a sky surface is a hole, and all it contributes is
-            // which part of the skybox the player can see through it.
-            sky::AddSurface(*surf, viewDef.vieworg);
-            continue;
-        }
-
-        if (texFlags & (SURF_TRANS33 | SURF_TRANS66 | SURF_WARP))
-        {
-            // Translucent or turbulent: deferred to the back-to-front pass at
-            // the end of the frame. World geometry draws in world space, so
-            // the plain view-projection is transform enough.
-            PushAlphaSurface(*surf, *TextureAnimation(surf->texInfo, s_textureAnimFrame), s_viewProjMatrix);
-            continue;
-        }
-
-        // Opaque: thread onto its texture's draw chain.
-        PS2_PROFILE_ONLY(++s_drawStats.surfaces);
-        const tex::Texture * texture = TextureAnimation(surf->texInfo, s_textureAnimFrame);
-        if (texture->textureChain == nullptr)
-        {
-            // First surface for this texture this frame; remember the chain.
-            PS2_AssertMsg(s_chainTextureCount < kMaxChainTextures, "Out of texture chain slots!");
-            s_chainTextures[s_chainTextureCount++] = texture;
-        }
-        surf->textureChain    = texture->textureChain;
-        texture->textureChain = surf;
-
-        // Rebuild the surface's luxels if its lighting moved since they were
-        // baked, and thread it onto its atlas's chain for the lightmap pass.
-        // Here rather than at draw time because this walk reaches each visible
-        // surface exactly once, so the rebuild cannot be done twice over.
-        if (surf->lightmapTextureNum != mod::kNotLightmapped)
-        {
-            lm::ChainSurface(*surf, viewDef, s_frameCount);
-        }
-    }
-
-    // ...and finally recurse down the far side.
-    RecursiveWorldNode(viewDef, world, node->children[side ^ 1], clipFlags);
-}
-
-// ------------------------------------------------------------------------------------------------
-// Triangle gathering and submission
-// ------------------------------------------------------------------------------------------------
-
-// Everything the gather path needs beyond the geometry itself. The world pass
-// draws untransformed, fullbright and opaque; a brush model entity carries its
-// own model-view-projection and may blend, so the same clipper and scratch
-// buffer serve both.
-struct SurfaceDrawState
-{
-    // What the gather appends to. Scoped to the pass that built this state: two
-    // streams holding claimed command buffer spans at once is not a thing the
-    // buffer can represent (see rs::TriangleStream).
-    rs::TriangleStream * stream = nullptr;
-
-    // Draws with this; the world's is the plain view-projection. Kept here as
-    // well as on the stream because ApplyDrawState is what hands it over.
-    const math::Mat4 * mvp = nullptr;
-
-    // Packed vertex colour (GS modulate: 128 = unchanged, alpha 0x80 = 1.0).
-    u32 rgba = 0;
-
-    // Batch flags, i.e. whether the submission blends.
-    rs::DrawFlags flags = rs::DrawFlags::None;
-
-    // Gouraud alpha: take each vertex's alpha from its own corner's st.z
-    // (0..1) instead of from 'rgba', whose RGB is still used for all three
-    // corners. The gather path is otherwise flat-shaded - one colour per
-    // batch - and this is the cheapest way out of that, since st is already
-    // a whole quadword the clipper interpolates and .z was spare.
-    bool vertexAlpha = false;
-
-    // Feed the gather the vertices' lightmap UVs instead of their diffuse
-    // ones - the second pass over the same geometry that modulates in the
-    // lightmap. Defaulted because only that one pass wants it; every other
-    // draw leaves it alone.
-    bool lightmapUVs = false;
-
-    // Tint the surface being gathered by the luxel chroma its vertices carry
-    // (PolyVertex::rgba), rather than leaving the vertex colour flat.
-    // Set per surface by the diffuse passes: the lightmap pass can only deliver
-    // a luxel's intensity, so its colour rides the vertex colour the GS
-    // modulates the wall texture by instead. Mutually exclusive with
-    // vertexAlpha, which owns that colour's alpha byte.
-    bool lightmapTint = false;
-
-    // The loader's PolyVertex is exactly what this pass wants in the batch, so
-    // GatherPolyTriangles can hand the model's own memory to the DMA instead of
-    // rebuilding a vertex per corner. True whenever the pass draws with the colour
-    // the bake put there - which is every shipping path; the debug views that
-    // override it (ps2_lightmap_only, ps2_lightmap_color 0) and translucent brush
-    // models, which carry the entity's alpha rather than the surface's, fall back
-    // to BuildPolyVertexCache.
-    bool bakedVertices = false;
-};
-
-// ------------------------------------------------------------------------------------------------
-// Triangle gathering through the clipper
-//
-// The VU rejects a straddling triangle whole rather than cutting it, so world
-// Sprites, beams, null models and the dlight flares build their corners here
-// and hand them to GatherTriangle, which turns them into batch vertices. VU1
-// cuts whatever straddles; nothing on this path meets the EE clipper any more.
-// ------------------------------------------------------------------------------------------------
-
-struct GatherCorner
-{
-    math::Vec3 position;
-    math::Vec3 st;
-};
-
-// Scales one 0-255 colour channel by a 0..1 factor, rounded so a factor of 1
-// leaves it exactly where it was.
-// Applies a vertex's cached luxel chroma (lm::CacheSurfaceVertexColors) to a
-// batch colour. The cache holds what a fullbright batch wants, which is the
-// overwhelmingly common case and needs nothing further.
-//
-// The rest - the lightmap-only debug view, and translucent brush models at their
-// flat quarter alpha - rescale it with integer maths rather than falling back to
-// re-sampling the atlas: the cached channel is the chroma times 128, so
-// (base * cached) >> 7 recovers base times chroma, with no float conversions and
-// no 128 KB mirror read.
-Q_ALWAYS_INLINE u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
-{
-    if (base == kFullBright)
-    {
-        return cached;
-    }
-
-    const auto channel = [](const u32 b, const u32 c) -> u32
-    {
-        const u32 scaled = ((b * c) + 64u) >> 7;
-        return (scaled > 255u) ? 255u : scaled;
-    };
-
-    return channel( base        & 0xFFu,  cached        & 0xFFu)
-        | (channel((base >>  8) & 0xFFu, (cached >>  8) & 0xFFu) <<  8)
-        | (channel((base >> 16) & 0xFFu, (cached >> 16) & 0xFFu) << 16)
-        | (base & 0xFF000000u); // The batch keeps its own alpha.
-}
-
-// Swaps the batch colour's alpha for this vertex's own, clamped onto the GS's
-// 0..0x80 = 0..1.0 alpha scale.
-Q_ALWAYS_INLINE u32 WithVertexAlpha(u32 rgba, float alpha)
-{
-    const float scaled = alpha * 128.0f;
-    const u32   packed = (scaled >= 128.0f) ? 128u
-                       : (scaled <= 0.0f)   ? 0u
-                                            : static_cast<u32>(scaled);
-    return (rgba & 0x00FFFFFFu) | (packed << 24);
-}
-
-// One triangle from the gathers that are not surfaces - sprites, beams, null
-// models and the dlight flares - straight into the batch. VU1 cuts it.
-//
-// The corners arrive carrying a position and UVs, and for the flares an alpha
-// per vertex in st.z, which is the one thing the batch colour cannot express;
-// it folds into rgba here, which is where the clipper's extra lanes used to go.
-// The two free lanes DrawVertex keeps for the world's second UV set are zeroed:
-// no microprogram reads them, the translation row being scaled by a hardwired
-// 1.0 and Q synthesised from the divide.
-Q_ALWAYS_INLINE void GatherTriangle(const GatherCorner (&corners)[3], const SurfaceDrawState & state)
-{
-    state.stream->BeginVerts(3);
-
-    vu1::DrawVertex * __restrict const dst = state.stream->PushTriangle();
-    for (int i = 0; i < 3; ++i)
-    {
-        const GatherCorner & src = corners[i];
-
-        dst[i].position   = src.position;
-        dst[i].rgba       = state.vertexAlpha ? WithVertexAlpha(state.rgba, src.st.z) : state.rgba;
-        dst[i].s          = src.st.x;
-        dst[i].t          = src.st.y;
-        dst[i].lightmap_s = 0.0f;
-        dst[i].lightmap_t = 0.0f;
-    }
-}
-
-// Hands the pass's transform, flags and texture to its stream, which flushes whatever it gathered
-// under the outgoing set first. Everything submitted from here draws with these.
-Q_ALWAYS_INLINE void ApplyDrawState(const SurfaceDrawState & state, const tex::Texture & texture)
-{
-    state.stream->SetTransform(*state.mvp);
-    state.stream->SetDrawFlags(state.flags);
-    state.stream->SetTexture(texture);
-}
-
-// Every vertex the polygon being gathered can emit, already in the form the
-// batch wants. Filled by GatherPolyTriangles, and bounded by
-// mod::kTriangulationMaxVerts as it is. File level rather than a local because
-// 128 entries is 4 KB of stack, and gathers never interleave - the same
-// single-caller-at-a-time discipline the sky path's clip::Scratch relies on.
-static mod::PolyVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
-
-// Fills s_polyVertexCache with the polygon's vertices as the batch wants them.
-//
-// Every read of the draw state is hoisted into a local first. They look loop
-// invariant, but the build stores through a mod::PolyVertex while the state
-// arrives by reference, and the renderer builds with -fno-strict-aliasing - so
-// left in place the compiler must assume each store could have changed them and
-// reload all four every single time round.
-Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const SurfaceDrawState & state)
-{
-    const mod::PolyVertex * const verts = poly.vertexes;
-
-    const bool tinted      = state.lightmapTint;
-    const bool lightmapUVs = state.lightmapUVs;
-    const u32  baseRgba    = state.rgba;
-
-    // The untinted colour is the same for every vertex of every polygon: this
-    // path leaves the alpha lane zero, so the alpha branch reads a
-    // constant 0.0f here. Fold it once rather than per vertex.
-    const u32 flatRgba = (!tinted && state.vertexAlpha) ? WithVertexAlpha(baseRgba, 0.0f) : baseRgba;
-
-    const int numVerts = poly.numVerts;
-    for (int v = 0; v < numVerts; ++v)
-    {
-        const mod::PolyVertex & src = verts[v];
-        mod::PolyVertex & dst = s_polyVertexCache[v];
-
-        dst.position = src.position;
-        // The chroma comes off the vertex rather than out of the atlas: it was
-        // sampled once when the luxels were baked. See PolyVertex::rgba.
-        dst.rgba = tinted ? ApplyCachedLightmapColor(baseRgba, src.rgba) : flatRgba;
-        dst.s    = lightmapUVs ? src.lightmap_s : src.s;
-        dst.t    = lightmapUVs ? src.lightmap_t : src.t;
-        // The lightmap lanes are left as they fall: nothing downstream reads them.
-    }
-}
-
-// Appends a polygon's triangles to the stream, clipping the ones that cross the VU clip volume.
-// The gather for a surface SurfaceInsideClipVolume has already cleared: every
-// triangle is known to survive the VU's judgement whole, so there is nothing for
-// the clipper to decide and the vertices go straight into the batch.
-// The colour has to match VertexColor exactly, since a surface can take either
-// path depending only on where the camera is standing.
-//
-// Built in two passes, because a fan emits each of its vertices more than once -
-// 12.05 emissions per surface against 6 unique vertices, measured - and every
-// emission of one is byte for byte the same. So each vertex is assembled once
-// into s_polyVertexCache and the triangle loop only copies, which also lifts the
-// draw state's branches out of the inner loop entirely.
-void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & state)
-{
-    // TriangulatePolygon refuses a polygon wider than the cache and leaves its
-    // triangle list degenerate, so one draws nothing by either route; bailing
-    // here keeps the cache fill in bounds without a second bound to check.
-    if (poly.numVerts > mod::kTriangulationMaxVerts) [[unlikely]]
-    {
-        return;
-    }
-
-    // Where the batch's vertices come from. Cheapest first: the loader's own,
-    // handed over untouched; or a rebuilt cache, for the debug views whose colour
-    // the bake does not match.
-    const mod::PolyVertex * src;
-    if (state.bakedVertices)
-    {
-        src = poly.vertexes;
+        vis = SV_FatPVS(r_origin, &world);
     }
     else
     {
-        BuildPolyVertexCache(poly, state);
-        src = s_polyVertexCache;
+        vis = Mod_LeafPVS(r_viewleaf, &world);
     }
 
-    // The lightmap pass draws the same geometry through the other UV set. Its
-    // colour is flat: the Modulate blend takes the luxel's intensity from the
-    // texture and leaves its source-colour term at zero, so the chroma the bake
-    // left in the vertex belongs to the diffuse pass, not this one.
-    const bool patchLightmapUVs = state.bakedVertices && state.lightmapUVs;
+    ++r_visframecount;
+    ClearTextureChains(world, chain_world);
 
-    const mod::ModelTriangle * __restrict const tris = poly.triangles;
-    const mod::PolyVertex * const polyVerts = poly.vertexes;
-    const int numTriangles = poly.numVerts - 2;
-    if (numTriangles <= 0) [[unlikely]]
+    mleaf_t * leaf = &world.leafs[1];
+    for (int i = 0; i < world.numleafs; ++i, ++leaf)
+    {
+        if ((vis[i >> 3] & (1 << (i & 7))) == 0)
+        {
+            continue;
+        }
+        if (CullBox(leaf->minmaxs, leaf->minmaxs + 3))
+        {
+            continue;
+        }
+
+        if (r_oldskyleaf.value != 0.0f || leaf->contents != CONTENTS_SKY)
+        {
+            mark = leaf->firstmarksurface;
+            for (int j = 0; j < leaf->nummarksurfaces; ++j, ++mark)
+            {
+                msurface_t & surf = **mark;
+                if (surf.visframe == r_visframecount)
+                {
+                    continue; // Already reached through another leaf.
+                }
+                surf.visframe = r_visframecount;
+
+                if (!CullBox(surf.mins, surf.maxs) && !BackFaceCull(surf))
+                {
+                    ChainSurface(surf, chain_world);
+                    if ((surf.flags & SURF_DRAWTILED) == 0)
+                    {
+                        lm::UpdateSurface(surf);
+                    }
+                }
+            }
+        }
+
+        // The static entities in the leaf, onto cl_visedicts.
+        if (leaf->efrags != nullptr)
+        {
+            R_StoreEfrags(&leaf->efrags);
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Gathering
+// ------------------------------------------------------------------------------------------------
+
+// Appends a surface's triangles to the stream as they were baked: a fan from its first corner,
+// or a turbulent surface's triangle list.
+//
+// The whole surface's room claimed once and written through a cursor of our own (see
+// rs::TriangleStream::ReserveVerts), each vertex copied in two quadword moves.
+void GatherSurface(rs::TriangleStream & stream, const brush::SurfaceDraw & draw)
+{
+    const vu1::DrawVertex * const src = draw.verts;
+
+    if (draw.geometry == brush::Geometry::Triangles)
+    {
+        vu1::DrawVertex * __restrict dst = stream.ReserveVerts(draw.numVerts);
+        for (int i = 0; i < draw.numVerts; ++i)
+        {
+            vu1::CopyDrawVertex(dst[i], src[i]);
+        }
+        stream.CommitVerts(dst + draw.numVerts);
+        return;
+    }
+
+    if (draw.geometry != brush::Geometry::Fan)
     {
         return;
     }
 
-    // The whole polygon's room claimed once and written through a cursor of our own, rather than
-    // pushed a triangle at a time through the stream - which reloaded the stream and three of its
-    // members and stored the count back for every triangle (see ReserveVerts). A degenerate
-    // triangle leaves its slot for the next one; CommitVerts takes only what was written.
-    //
-    // __restrict for the same reason as everywhere in these loops: the stores cannot be proven
-    // disjoint from the mesh under -fno-strict-aliasing without it. Declared after the one call
-    // that may flush.
-    mod::PolyVertex * __restrict dst = state.stream->ReserveVerts(numTriangles * 3);
-
-    for (int t = 0; t < numTriangles; ++t)
+    const int numVerts = draw.numVerts;
+    vu1::DrawVertex * __restrict dst = stream.ReserveVerts((numVerts - 2) * 3);
+    for (int t = 1; t < numVerts - 1; ++t)
     {
-        // All three indices read up front: after the first store, the compiler would reload them.
-        const mod::ModelTriangle & tri = tris[t];
-        const int i0 = tri.vertexes[0];
-        const int i1 = tri.vertexes[1];
-        const int i2 = tri.vertexes[2];
+        vu1::CopyDrawVertex(dst[0], src[0]);
+        vu1::CopyDrawVertex(dst[1], src[t]);
+        vu1::CopyDrawVertex(dst[2], src[t + 1]);
+        dst += 3;
+    }
+    stream.CommitVerts(dst);
+}
 
-        if (i0 == i1) [[unlikely]]
-        {
-            continue; // Degenerate leftover from the triangulation.
-        }
+// As GatherSurface, but every vertex takes 'rgba' instead of the baked colour: a translucent
+// entity's or liquid's alpha, the flat sky.
+void GatherSurfaceColored(rs::TriangleStream & stream, const brush::SurfaceDraw & draw, const u32 rgba)
+{
+    const vu1::DrawVertex * const src = draw.verts;
 
-        if (patchLightmapUVs)
+    if (draw.geometry == brush::Geometry::Triangles)
+    {
+        vu1::DrawVertex * __restrict dst = stream.ReserveVerts(draw.numVerts);
+        for (int i = 0; i < draw.numVerts; ++i)
         {
-            const int v[3] = { i0, i1, i2 };
-            for (int i = 0; i < 3; ++i)
-            {
-                vu1::CopyDrawVertex(dst[i], src[v[i]]);
-                dst[i].rgba = kFullBright;
-                dst[i].s = polyVerts[v[i]].lightmap_s;
-                dst[i].t = polyVerts[v[i]].lightmap_t;
-            }
+            vu1::CopyDrawVertex(dst[i], src[i]);
+            dst[i].rgba = rgba;
         }
-        else
+        stream.CommitVerts(dst + draw.numVerts);
+        return;
+    }
+
+    if (draw.geometry != brush::Geometry::Fan)
+    {
+        return;
+    }
+
+    const int numVerts = draw.numVerts;
+    vu1::DrawVertex * __restrict dst = stream.ReserveVerts((numVerts - 2) * 3);
+    for (int t = 1; t < numVerts - 1; ++t)
+    {
+        vu1::CopyDrawVertex(dst[0], src[0]);
+        vu1::CopyDrawVertex(dst[1], src[t]);
+        vu1::CopyDrawVertex(dst[2], src[t + 1]);
+        dst[0].rgba = rgba;
+        dst[1].rgba = rgba;
+        dst[2].rgba = rgba;
+        dst += 3;
+    }
+    stream.CommitVerts(dst);
+}
+
+// A lit surface's triangles through its lightmap UVs instead of its diffuse ones, for the pass
+// that multiplies the framebuffer by the luxels.
+void GatherSurfaceLightmap(rs::TriangleStream & stream, const brush::SurfaceDraw & draw)
+{
+    PS2_Assert(draw.geometry == brush::Geometry::Fan);
+
+    const vu1::DrawVertex * const src = draw.verts;
+    const int numVerts = draw.numVerts;
+
+    vu1::DrawVertex * __restrict dst = stream.ReserveVerts((numVerts - 2) * 3);
+    for (int t = 1; t < numVerts - 1; ++t)
+    {
+        const int corners[3] = { 0, t, t + 1 };
+        for (int i = 0; i < 3; ++i)
         {
-            vu1::CopyDrawVertex(dst[0], src[i0]);
-            vu1::CopyDrawVertex(dst[1], src[i1]);
-            vu1::CopyDrawVertex(dst[2], src[i2]);
+            const vu1::DrawVertex & v = src[corners[i]];
+            vu1::CopyDrawVertex(dst[i], v);
+            dst[i].s = v.lightmap_s;
+            dst[i].t = v.lightmap_t;
         }
         dst += 3;
     }
-
-    state.stream->CommitVerts(dst);
+    stream.CommitVerts(dst);
 }
 
 // ------------------------------------------------------------------------------------------------
-// Turbulent (warped) surfaces: water, lava, slime
+// Texture chains (r_world.c's R_DrawTextureChains, R_DrawTextureChains_Water)
 // ------------------------------------------------------------------------------------------------
 
-// A subdivided warp polygon is a fan: a centre vertex, the ring, then a
-// duplicate of the first to close it. SubdividePolygon splits at 64-unit
-// boundaries, so a leaf never exceeds that many ring vertices.
-constexpr int kMaxWarpPolyVerts = 64 + 2;
-
-// Gathers a turbulent surface. The warp animation itself - ref_gl's
-// EmitWaterPolys, where every vertex's texture coordinates are pushed around by
-// a sine of the *other* axis plus time, which is what makes the surface ripple
-// while the geometry stays put - happens on the VU, at the emit (see BatchWarp).
-// What is left here is the fan walk.
-//
-// These polygons are shaped differently from ordinary ones, so this cannot go
-// through GatherPolyTriangles: the loader's SubdivideSurface leaves each as a
-// fan with no triangle list at all (reading poly.triangles would dereference
-// null), and with texture coordinates still in raw texel units. Both follow
-// ref_gl, whose GL_SubdivideSurface builds fans for glBegin(GL_TRIANGLE_FAN)
-// and leaves the texel-to-image division to EmitWaterPolys - which is now the
-// microprogram's last step rather than this function's.
-//
-// Raw texel units are exactly what the warp wants: the sine takes the texel
-// coordinate, not the normalized one. So nothing here has to touch a vertex at
-// all, and both paths below hand over the loader's own memory - see
-// rs::DrawFlags::Warped for the batch state that goes with it.
-void DrawAnimatedWaterPolys(const mod::ModelSurface & surf, const SurfaceDrawState & state)
+// The texture a surface of base texture 't' draws with this frame: r_brush.c's
+// R_TextureAnimation. Animated walls ('+0' to '+9') cycle on the client's clock, ten frames a
+// second; an entity in its alternate frame ('+a' to '+j') takes the alternate cycle.
+const texture_t * TextureAnimation(const texture_t * base, const int frame)
 {
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::TurbSurfs);
-    PS2_PROFILE_ONLY(++s_drawStats.surfacesTurb);
-
-    for (const mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
+    if (frame != 0 && base->alternate_anims != nullptr)
     {
-        PS2_AssertMsg(poly->numVerts <= kMaxWarpPolyVerts, "Warp polygon larger than a subdivision leaf!");
+        base = base->alternate_anims;
+    }
+    if (base->anim_total == 0)
+    {
+        return base;
+    }
 
-        // Vertex 0, then each adjacent pair round the ring.
-        //
-        // The loader's vertices go straight into the batch. The warp reads neither
-        // .w nor .q - it scales the MVP's translation row by a hardwired 1.0 and
-        // synthesises Q from the divide - so the lightmap coordinates PolyVertex
-        // parks in those two lanes ride along unread, and the colour the bake left
-        // is already the one this pass draws.
-        //
-        // VU1 cuts what straddles, which water routinely does with the camera
-        // inside it. It carries the raw texel coordinates through the cut and warps
-        // whatever survives, and that is not merely equivalent to warping first:
-        // the coordinates are linear in clip space, so a cut interpolates them
-        // exactly, and the ripple is evaluated at the vertex that is really there.
-        const int numTriangles = poly->numVerts - 2;
-        const mod::PolyVertex * const src = poly->vertexes;
+    const int relative = static_cast<int>(cl.time * 10.0) % base->anim_total;
 
-        for (int t = 0; t < numTriangles; ++t)
+    int count = 0;
+    while (base->anim_min > relative || base->anim_max <= relative)
+    {
+        base = base->anim_next;
+        if (base == nullptr)
         {
-            state.stream->BeginVerts(3);
-
-            mod::PolyVertex * const dst = state.stream->PushTriangle();
-            vu1::CopyDrawVertex(dst[0], src[0]);
-            vu1::CopyDrawVertex(dst[1], src[t + 1]);
-            vu1::CopyDrawVertex(dst[2], src[t + 2]);
+            Sys_Error("R_TextureAnimation: broken cycle");
+        }
+        if (++count > 100)
+        {
+            Sys_Error("R_TextureAnimation: infinite cycle");
         }
     }
+    return base;
 }
 
-// ------------------------------------------------------------------------------------------------
-// DrawTextureChains
-// ------------------------------------------------------------------------------------------------
-
-// The transform and culling the world pass draws with. World geometry sits in
-// world space already, so its "model" transform is the plain view-projection
-// and the back-face test takes the world camera. Shared by the diffuse and
-// lightmap passes, which must agree on all of it or their triangles would not
-// land on the same pixels.
-Q_ALWAYS_INLINE SurfaceDrawState WorldSurfaceDrawState(rs::TriangleStream & trisStream)
+// The PS2 texture to bind for a gltexture, or the stand-in checkerboard when there is none (a
+// texture missing from the BSP).
+Q_ALWAYS_INLINE const tex::Texture & BindableTexture(const gltexture_t * gl)
 {
-    return SurfaceDrawState {
-        .stream = &trisStream,
-        .mvp    = &s_viewProjMatrix,
-        .rgba   = kFullBright,
-    };
+    const tex::Texture * const texture = tex::TextureFor(gl);
+    return (texture != nullptr) ? *texture : tex::DebugTexture();
 }
 
-// Whether the diffuse passes should tint their vertices by the luxel chroma.
-// Gated on the lightmap pass as well as its own cvar: the chroma is only half a
-// luxel, and laying it down without the intensity that goes with it would tint a
-// fullbright world rather than light it.
-Q_ALWAYS_INLINE bool LightmapColorEnabled()
+// The surfaces at the head of a texture's chain decide which pass the whole chain belongs to: a
+// texture is only ever sky, liquid or wall.
+Q_ALWAYS_INLINE int ChainFlags(const texture_t * t, const texchain_t chain)
 {
-    return (s_lightmaps->value != 0.0f) && (s_lightmapColor->value != 0.0f);
+    return (t != nullptr && t->texturechains[chain] != nullptr) ? t->texturechains[chain]->flags : -1;
 }
 
-// Draws every texture chain built by RecursiveWorldNode and resets them.
-void DrawTextureChains(const SurfaceDrawState & base)
+// The model's sky surfaces, untextured in the sky's flat colour: QuakeSpasm's r_fastsky.
+void DrawSkyChains(rs::TriangleStream & stream, qmodel_t & model, const texchain_t chain, const math::Mat4 & mvp)
 {
-    SurfaceDrawState state = base;
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::Sky);
 
-    // Lightmap-only debug view: drop the diffuse texture and lay down flat
-    // white, so what survives the lightmap pass over it is the lighting alone.
-    if (s_lightmapOnly->value != 0.0f)
+    stream.SetTransform(mvp);
+    stream.SetDrawFlags(rs::DrawFlags::Untextured);
+    stream.SetTexture(tex::DebugTexture()); // Unsampled, but a batch binds one.
+
+    for (int i = 0; i < model.numtextures; ++i)
     {
-        state.flags = rs::DrawFlags::Untextured;
-        state.rgba  = vu1::PackColorRGBA(255, 255, 255, 0x80);
-    }
-
-    const bool tinted = LightmapColorEnabled();
-
-    // The bake put the luxel chroma in the vertex, which is what a tinted pass
-    // over a fullbright batch draws. Anything else - the lightmap-only view above,
-    // or the chroma switched off - wants a colour the vertex does not hold.
-    state.bakedVertices = tinted && (state.rgba == kFullBright);
-
-    for (int i = 0; i < s_chainTextureCount; ++i)
-    {
-        const tex::Texture * texture = s_chainTextures[i];
-
-        // Flushes what the previous chain gathered, under its own texture.
-        ApplyDrawState(state, *texture);
-
-        for (const mod::ModelSurface * surf = texture->textureChain; surf != nullptr; surf = surf->textureChain)
+        const texture_t * const t = model.textures[i];
+        const int flags = ChainFlags(t, chain);
+        if (flags < 0 || (flags & SURF_DRAWSKY) == 0)
         {
-            // Unlightmapped here means sky: RecursiveWorldNode sends turbulent
-            // and translucent faces down the alpha pass instead.
-            state.lightmapTint = tinted && (surf->lightmapTextureNum != mod::kNotLightmapped);
-
-            for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
-            {
-                GatherPolyTriangles(*poly, state);
-            }
-        }
-
-        texture->textureChain = nullptr; // Reset for the next frame.
-    }
-
-    rs::Submit(*state.stream);
-    s_chainTextureCount = 0;
-}
-
-// ------------------------------------------------------------------------------------------------
-// Lightmap pass
-// ------------------------------------------------------------------------------------------------
-
-// Modulates the surfaces the diffuse pass just laid down by their luxel
-// intensity, one batch per lightmap atlas. This is the second half of the two
-// pass lightmapping: same geometry, same transform, but sampling the atlas
-// through the vertices' second UV set and blending with Cd * As, so each pixel
-// is scaled by how lit it is. Intensity only - see rs::DrawFlags::Modulate for
-// why the GS cannot carry the colour too, and SurfaceDrawState::lightmapTint
-// for where it goes instead.
-//
-// 'base' is the draw state of the pass being lit - the world's or a brush model
-// entity's - so the two agree on transform and culling and their triangles land
-// on the same pixels. Depth writes are masked and the z-test is GREATER_EQUAL,
-// so the pass re-covers exactly what pass one wrote without fighting it.
-void DrawLightmapChains(const SurfaceDrawState & base)
-{
-    if (s_lightmaps->value == 0.0f)
-    {
-        lm::ClearChains(); // Chained anyway while walking; drop them unlit.
-        return;
-    }
-
-    SurfaceDrawState state = base;
-    state.rgba = kFullBright; // alpha 0x80 keeps the luxel's own alpha
-    state.flags = rs::DrawFlags::Modulate;
-
-    // Dynamic lights ride this pass rather than a third one: the Modulate blend
-    // leaves its source-colour term at zero, so the vertex colour was going
-    // spare, and the lit microprogram fills it with the point-light sum while
-    // the blend adds it on top of what the luxels modulate.
-    //
-    // World transform only - the microprogram lights in world space, and a brush
-    // model's vertices are in its own model space (see the same guard below).
-    //
-    // This pass and the diffuse one now run the same microprogram - the flag picks
-    // a colour mode inside it rather than a program of its own - so the two cut
-    // identically whether or not VU1 is doing the clipping. That is the property
-    // that matters: clipping one pass on the EE and the other on the VU leaves the
-    // polygons disagreeing at the seam, and clipping only the diffuse one left the
-    // lightmap rejected whole and the surface fullbright.
-    if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
-    {
-        state.flags = state.flags | rs::DrawFlags::DynamicLights;
-    }
-
-    state.vertexAlpha  = false;
-    state.lightmapUVs  = true;
-    state.lightmapTint = false; // The chroma is the diffuse pass's half; this one carries the intensity.
-
-    // Same vertices as the diffuse pass; the emit swaps in the second UV set and
-    // flattens the colour as it copies.
-    state.bakedVertices = true;
-
-    const int numLightmaps = lm::NumAtlases();
-    for (int i = 0; i < numLightmaps; ++i)
-    {
-        const mod::ModelSurface * const chain = lm::AtlasChain(i);
-        if (chain == nullptr)
-        {
-            continue; // Nothing visible packed into this atlas.
-        }
-
-        const tex::Texture & atlas = lm::AtlasTexture(i);
-        ApplyDrawState(state, atlas);
-
-        for (const mod::ModelSurface * surf = chain; surf != nullptr; surf = surf->lightmapChain)
-        {
-            for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
-            {
-                GatherPolyTriangles(*poly, state);
-            }
-        }
-    }
-
-    rs::Submit(*state.stream);
-    lm::ClearChains();
-}
-
-// ------------------------------------------------------------------------------------------------
-// Light level readback
-// ------------------------------------------------------------------------------------------------
-
-// Quake 2's channel for telling the game code how brightly lit the player is:
-// the client reads r_lightlevel back out of the cvar system every frame and
-// packs it into the usercmd (cl_input.c), where the server uses it to decide
-// how visible the player is. Nothing about it is graphics - the renderer just
-// happens to be the only thing that can sample the lightmaps.
-//
-// The value is the largest of the three sampled colour components scaled by
-// 150, which is what the software renderer's mono light value worked out to.
-// Written straight into cvar_t::value, as ref_gl's R_SetLightLevel does: this
-// runs every frame and the cvar's string form is never read.
-void SetLightLevel(const refdef_t & viewDef)
-{
-    if (viewDef.rdflags & RDF_NOWORLDMODEL)
-    {
-        return; // No world to sample; leave the last value alone (ref_gl does).
-    }
-
-    vec3_t shadeLight = { 1.0f, 1.0f, 1.0f };
-    vec3_t lightSpot  = {}; // Unused here; the shadow anchor is for entity models.
-    CalcPointLightColor(viewDef, viewDef.vieworg, shadeLight, lightSpot);
-
-    float brightest = shadeLight[0];
-    if (shadeLight[1] > brightest) { brightest = shadeLight[1]; }
-    if (shadeLight[2] > brightest) { brightest = shadeLight[2]; }
-
-    s_lightLevel->value = 150.0f * brightest;
-}
-
-// ------------------------------------------------------------------------------------------------
-// Full screen colour blend (ref_gl's R_Flash / R_PolyBlend)
-// ------------------------------------------------------------------------------------------------
-
-// Scales a 0..1 blend channel onto 0..255, clamped: refdef_t::blend comes
-// straight off the wire (cl_ents.c) or out of cl_testblend, and nothing
-// upstream promises the range a cast would need.
-Q_ALWAYS_INLINE u8 BlendChannelToByte(const float channel)
-{
-    const float scaled = channel * 255.0f;
-    return (scaled >= 255.0f) ? 255u
-         : (scaled <= 0.0f)   ? 0u
-                              : static_cast<u8>(scaled);
-}
-
-// The damage/powerup/underwater tint the game code accumulates in
-// refdef_t::blend (SV_CalcBlend in p_view.c), as one blended rectangle over
-// the finished 3D scene.
-//
-// Fills the whole framebuffer rather than the refdef's view rectangle, which
-// is where ref_gl's viewport put it: the 3D path here sets no scissor, so at
-// scr_viewsize < 100 the scene has already been drawn over the border that
-// SCR_TileClear laid down, and tinting only the rectangle would leave that
-// overdrawn border untinted.
-//
-// This opens the deferred 2D batch, which is what puts it under the HUD: every
-// 2D primitive the client draws after re.RenderFrame returns appends to the
-// same batch, and nothing flushes it until rs::EndFrame.
-void RenderBlendedOverlay(const refdef_t & viewDef)
-{
-    if (s_polyblend->value == 0.0f)
-    {
-        return;
-    }
-    if (viewDef.blend[3] <= 0.0f)
-    {
-        return; // Fully transparent: nothing to tint.
-    }
-
-    rs::FillRect(0, 0, gs::Width(), gs::Height(),
-                 BlendChannelToByte(viewDef.blend[0]),
-                 BlendChannelToByte(viewDef.blend[1]),
-                 BlendChannelToByte(viewDef.blend[2]),
-                 BlendChannelToByte(viewDef.blend[3]));
-}
-
-// ------------------------------------------------------------------------------------------------
-// Translucent surface pass
-// ------------------------------------------------------------------------------------------------
-
-// Vertex colour for a deferred surface: ref_gl's R_DrawAlphaSurfaces alphas on
-// the GS's 0x80 = 1.0 scale. Surfaces that are turbulent but not explicitly
-// translucent (lava, slime) still go through the blend at full opacity, as
-// they do there.
-// The colour a translucent surface draws with. The loader bakes this same value
-// into the surface's vertices (see CacheSurfaceVertexColors), so this is now only
-// what the deferred pass breaks its batches on - the vertices carry it themselves.
-Q_ALWAYS_INLINE u32 AlphaSurfaceColor(const int texFlags)
-{
-    const u32 alpha = (texFlags & SURF_TRANS33) ? mod::kTrans33Alpha
-                    : (texFlags & SURF_TRANS66) ? mod::kTrans66Alpha
-                                                : 0x80u;
-    return vu1::PackColorRGBA(128, 128, 128, alpha);
-}
-
-// Draws everything RecursiveWorldNode and DrawBrushModelEntity set aside -
-// glass, water, lava, slime - blended over the finished opaque scene. Called
-// last in the frame, where ref_gl calls R_DrawAlphaSurfaces.
-//
-// Walked in reverse of collection order, which is back to front: the BSP walk
-// that collected them ran front to back (ref_gl reaches the same order by
-// prepending to a linked list). The entries are depth-ordered rather than
-// grouped by texture, so unlike the opaque pass the batch has to break
-// whenever the texture, the transform or the alpha changes.
-//
-// Brush model surfaces were collected after the whole world walk, so reversing
-// puts them ahead of even the farthest world surface. That is a real mis-sort
-// - and the same one ref_gl has - but it only shows when a translucent
-// submodel sits behind translucent world geometry. Sorting the entries by
-// view distance would fix it, at the price of the depth order the BSP walk
-// hands us for free.
-void RenderAlphaSurfaces()
-{
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::AlphaSurfs);
-
-    if (s_alphaSurfaceCount == 0 || s_skipAlphaSurfaces->value != 0.0f)
-    {
-        s_alphaSurfaceCount      = 0;
-        s_alphaEntityMatrixCount = 0;
-        return;
-    }
-
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    SurfaceDrawState state = {
-        .stream = &trisStream,
-        .mvp    = nullptr, // Per entry, below; no entry ever carries null, so the first always switches.
-        .flags  = rs::DrawFlags::Blended,
-        .vertexAlpha = false
-    };
-
-    // The loader baked each translucent surface's own blend colour into its
-    // vertices, which is exactly what this pass draws them with - so the
-    // per-entry 'rgba' below only decides where the batches break.
-    state.bakedVertices = true;
-
-    const tex::Texture * batchTexture = nullptr;
-
-    for (int i = s_alphaSurfaceCount - 1; i >= 0; --i)
-    {
-        const AlphaSurface & entry = s_alphaSurfaces[i];
-
-        const int texFlags = entry.surf->texInfo->flags;
-        const u32 rgba     = AlphaSurfaceColor(texFlags);
-
-        // A turbulent surface runs a different microprogram, which wants its UVs in raw texels
-        // rather than normalized - so these two cannot share a batch with the flat translucent
-        // surfaces this pass interleaves them with, nor with each other across the flowing flag.
-        rs::DrawFlags flags = rs::DrawFlags::Blended;
-        if (texFlags & SURF_WARP)
-        {
-            flags = flags | rs::DrawFlags::Warped;
-            if (texFlags & SURF_FLOWING)
-            {
-                flags = flags | rs::DrawFlags::WarpFlowing;
-            }
-        }
-
-        if (entry.texture != batchTexture || entry.mvp != state.mvp
-            || rgba != state.rgba || flags != state.flags)
-        {
-            // Explicitly, because 'rgba' is gather policy rather than stream state: a run that
-            // differs only in colour still has to break here, and the stream setters below would
-            // not know to. Free when the texture, transform or flags changed too - they flush first.
-            rs::Submit(*state.stream);
-
-            batchTexture = entry.texture;
-            state.mvp    = entry.mvp;
-            state.rgba   = rgba;
-            state.flags  = flags;
-            ApplyDrawState(state, *batchTexture);
-        }
-
-
-        if (texFlags & SURF_WARP)
-        {
-            // Turbulent: its own fan walk; the coordinates animate on the VU.
-            DrawAnimatedWaterPolys(*entry.surf, state);
             continue;
         }
 
-        for (const mod::ModelPoly * poly = entry.surf->polys; poly != nullptr; poly = poly->next)
+        for (const msurface_t * s = t->texturechains[chain]; s != nullptr; s = s->texturechain)
         {
-            GatherPolyTriangles(*poly, state);
+            GatherSurfaceColored(stream, brush::DrawFor(model, *s), s_skyColor);
         }
     }
-
-    rs::Submit(*state.stream);
-
-    s_alphaSurfaceCount      = 0;
-    s_alphaEntityMatrixCount = 0;
+    rs::Submit(stream);
 }
 
-// ------------------------------------------------------------------------------------------------
-// Dynamic Lights (dlights)
-// ------------------------------------------------------------------------------------------------
-
-constexpr float kDLightCutoff = 64.0f;
-
-// Rim points around a flare. ref_gl walks i = 16 down to 0, whose first and
-// last points coincide (a = 2*PI and a = 0) purely to close the fan, so there
-// are 16 distinct ones and 16 wedges.
-constexpr int kNumFlareSegs = 16;
-
-// ref_gl's 0.2 dimming of the light colour, on the 0-255 scale an untextured
-// vertex needs. Not the 128 modulate identity the textured paths use: with
-// PRIM's TME bit clear there is no texture function to be the identity of, so
-// the vertex byte lands on screen as-is and 128 would halve every flare.
-//
-// Clamped at both ends because neither is guaranteed: dlight colours are 0..1
-// by convention, but nothing bounds the top, and the client hands out negative
-// ones for its "dark light" effects (cl_ents.c's V_AddLight(..., -1, -1, -1)),
-// which would wrap catastrophically through the unsigned cast. OpenGL clamps
-// these for free in glColor3f; we do it by hand.
-Q_ALWAYS_INLINE u32 FlareChannel(float colorComponent)
+// The model's wall chains, in up to three passes: the textures, the lightmaps over them, and the
+// fullbright texels over that. 'ent' is null for the world. QuakeSpasm's R_DrawTextureChains on
+// its multipass path ("case 3"), with gl_overbright on.
+void DrawTextureChains(rs::TriangleStream & stream, qmodel_t & model, const entity_t * ent,
+                       const texchain_t chain, const math::Mat4 & mvp)
 {
-    const float scaled = colorComponent * 0.2f * 255.0f;
-    return (scaled >= 255.0f) ? 255u : ((scaled <= 0.0f) ? 0u : static_cast<u32>(scaled));
-}
+    const float entAlpha   = (ent != nullptr) ? ENTALPHA_DECODE(ent->alpha) : 1.0f;
+    const bool  translucent = (entAlpha < 1.0f);
+    const int   frame       = (ent != nullptr) ? ent->frame : 0;
 
-// A Quake2 Dynamic Light (dlight) is a point light simulated with a circular billboarded
-// sprite that follows the light source. This is used to simulate gunshot flares for example.
-// The sprite is rendered with additive blending (e.g. glBlendFunc(GL_ONE, GL_ONE) in ref_gl).
-// This is the fallback codepath for when dynamic lightmaps are not enabled.
-//
-// Geometry is ref_gl's R_RenderDlight: a fan whose rim lies on the camera
-// plane and whose centre is pulled one radius *towards* the camera, so it is
-// really a shallow cone pointed at the eye rather than a flat disc.
-//
-// ref_gl fades the flare out by interpolating the vertex colour from the light
-// colour at the centre to black at the rim, and adding that. We interpolate
-// the vertex *alpha* from 1 to 0 over a flat-coloured fan instead, which the
-// additive blend (Cs * As + Cd) makes arithmetically identical - both add
-// colour * (1 - r) at radius fraction r - and which the flat-shaded gather
-// path can actually express, since only the alpha has to vary per vertex.
-// It also lets the batch's alpha test discard the invisible outer rim rather
-// than blending zeroes over it.
-void RenderDLights(const refdef_t & viewDef)
-{
-    if (s_dynamicLightmaps->value != 0.0f)
-    {
-        // Dynamic lights are simulated via the dynamic lightmap texture instead.
-        return;
-    }
+    // A translucent entity draws its textures alone, as QuakeSpasm's can't multipass one either.
+    const bool lightmaps = s_drawLightmaps && !translucent;
 
-    const int numDlights = viewDef.num_dlights;
-    if (numDlights <= 0)
-    {
-        return;
-    }
+    // Each atlas's visible surfaces, for the lightmap pass, gathered as the diffuse one goes.
+    msurface_t * atlasChains[lm::kMaxAtlases] = {};
 
-    // Untextured, but a batch still binds one.
-    const tex::Texture & texture = tex::DebugTexture();
-
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    SurfaceDrawState state = {
-        .stream = &trisStream,
-        .mvp    = &s_viewProjMatrix, // Billboards are built in world space.
-        .rgba   = 0, // Per light; filled in below.
-        .flags  = rs::DrawFlags::Additive | rs::DrawFlags::Untextured,
-        .vertexAlpha = true // The centre-to-rim fade rides in st.z.
-    };
-
-    ApplyDrawState(state, texture);
-
-    const dlight_t * light = viewDef.dlights;
-    for (int l = 0; l < numDlights; ++l, ++light)
-    {
-        const float radius = light->intensity * 0.35f;
-
-        state.rgba = vu1::PackColorRGBA(FlareChannel(light->color[0]),
-                                        FlareChannel(light->color[1]),
-                                        FlareChannel(light->color[2]), 0x80);
-
-        // The cone apex, at full alpha.
-        GatherCorner centre;
-        centre.position = { light->origin[0] - (s_forwardVec[0] * radius),
-                            light->origin[1] - (s_forwardVec[1] * radius),
-                            light->origin[2] - (s_forwardVec[2] * radius) };
-        centre.st = { 0.0f, 0.0f, 1.0f };
-
-        // The rim, at zero alpha. ref_gl's descending loop is the same ring
-        // walked the other way round, which is why the sine is negated -
-        // keeping that preserves its winding.
-        GatherCorner rim[kNumFlareSegs];
-        for (int i = 0; i < kNumFlareSegs; ++i)
-        {
-            const float angle = (static_cast<float>(i) / kNumFlareSegs) * (math::kPI * 2.0f);
-            const float c     =  math::Cosf(angle) * radius;
-            const float s     = -math::Sinf(angle) * radius;
-
-            rim[i].position = { light->origin[0] + (s_rightVec[0] * c) + (s_upVec[0] * s),
-                                light->origin[1] + (s_rightVec[1] * c) + (s_upVec[1] * s),
-                                light->origin[2] + (s_rightVec[2] * c) + (s_upVec[2] * s) };
-            rim[i].st  = { 0.0f, 0.0f, 0.0f };
-        }
-
-        // Fan to triangle list, the only topology the VU path takes.
-        for (int i = 0; i < kNumFlareSegs; ++i)
-        {
-            GatherCorner wedge[3] = { centre, rim[i], rim[(i + 1) % kNumFlareSegs] };
-            GatherTriangle(wedge, state);
-        }
-
-        PS2_PROFILE_ONLY(++s_drawStats.dlights);
-    }
-
-    rs::Submit(*state.stream);
-}
-
-void MarkDLights(const dlight_t * light, const int bit, const mod::ModelInstance & world, const mod::ModelNode * node)
-{
-    PS2_Assert(s_dynamicLightmaps->value == 1.0f); // Only the per-luxel rebuild path marks.
-
-    if (node->contents != -1)
-    {
-        return;
-    }
-
-    const cplane_t * splitPlane = node->plane;
-    const float dist = DotProduct(light->origin, splitPlane->normal) - splitPlane->dist;
-
-    if (dist > light->intensity - kDLightCutoff)
-    {
-        MarkDLights(light, bit, world, node->children[0]);
-        return;
-    }
-    if (dist < -light->intensity + kDLightCutoff)
-    {
-        MarkDLights(light, bit, world, node->children[1]);
-        return;
-    }
-
-    mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
-    const int numSurfaces = node->numSurfaces;
-
-    // Mark the polygons:
-    for (int i = 0; i < numSurfaces; ++i, ++surf)
-    {
-        if (surf->dlightFrame != s_frameCount)
-        {
-            surf->dlightBits  = 0;
-            surf->dlightFrame = s_frameCount;
-        }
-        surf->dlightBits |= bit;
-    }
-
-    MarkDLights(light, bit, world, node->children[0]);
-    MarkDLights(light, bit, world, node->children[1]);
-}
-
-void PushDLights(const refdef_t & viewDef, const mod::ModelInstance & world)
-{
-    if (s_dynamicLightmaps->value != 1.0f)
-    {
-        // Mode 0 draws flares instead; mode 2 lights per vertex on VU1. Neither
-        // wants surfaces marked - not stamping dlightFrame is exactly what stops
-        // lm::ChainSurface taking its rebuild branch, so the whole per-luxel
-        // path switches itself off from here with no other change.
-        return;
-    }
-
-    const dlight_t * light = viewDef.dlights;
-    const int numDlights = viewDef.num_dlights;
-
-    for (int l = 0; l < numDlights; ++l, ++light)
-    {
-        MarkDLights(light, 1 << l, world, world.Brush().nodes);
-    }
-}
-
-// ------------------------------------------------------------------------------------------------
-// World model pass
-// ------------------------------------------------------------------------------------------------
-
-void RenderWorldModel(const refdef_t & viewDef)
-{
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::World);
-
-    if (viewDef.rdflags & RDF_NOWORLDMODEL)
-    {
-        return; // Menu/loading screens render no world.
-    }
-    if (s_skipWorld->value != 0.0f)
-    {
-        return; // Debug: skip the world pass entirely.
-    }
-
-    const mod::ModelInstance * const world = mod::GetWorldModel();
-    PS2_AssertMsg(world != nullptr, "RenderFrame without a world model!");
-
-    // World visibility pass (bsp traversal):
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::Vis);
-        sky::ClearBounds();
-        PushDLights(viewDef, *world);
-        SetUpViewClusters(viewDef, *world);
-        MarkLeaves(*world);
-
-        // On the call, not inside the function: RecursiveWorldNode recurses, and
-        // a scope in its body would nest with itself and count the descent once
-        // per level. LmChain nests underneath this one.
-        {
-            PS2_PROFILE_SCOPED_EVENT(prof_evt::BspWalk);
-            RecursiveWorldNode(viewDef, *world, world->Brush().nodes, kAllFrustumPlanes);
-        }
-    }
-
-    // One batch for both world passes below; each flushes before the next starts.
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    const SurfaceDrawState state = WorldSurfaceDrawState(trisStream);
-
-    // Diffuse first, then the lightmap over it - ref_gl's DrawTextureChains()
-    // followed by R_BlendLightmaps(). Both passes draw the same triangles with
-    // the same transform, so they share one draw state.
+    // The diffuse pass.
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::TexChains);
-        DrawTextureChains(state);
+
+        const u32 rgba = translucent ? vu1::PackColorRGBA(128, 128, 128, AlphaByte(entAlpha))
+                                     : kModulateIdentity;
+
+        stream.SetTransform(mvp);
+        if (s_lightmapOnly)
+        {
+            // r_lightmap: the walls flat white, so the lightmap pass over them shows the light alone.
+            stream.SetDrawFlags(rs::DrawFlags::Untextured);
+        }
+        else
+        {
+            stream.SetDrawFlags(translucent ? rs::DrawFlags::Blended : rs::DrawFlags::None);
+        }
+
+        for (int i = 0; i < model.numtextures; ++i)
+        {
+            texture_t * const t = model.textures[i];
+            const int flags = ChainFlags(t, chain);
+            if (flags < 0 || (flags & (SURF_DRAWSKY | SURF_DRAWTURB)) != 0)
+            {
+                continue;
+            }
+
+            const texture_t * const anim = TextureAnimation(t, frame);
+            stream.SetTexture(BindableTexture(anim->gltexture));
+
+            for (msurface_t * s = t->texturechains[chain]; s != nullptr; s = s->texturechain)
+            {
+                brush::SurfaceDraw & draw = brush::DrawFor(model, *s);
+
+                if (s_lightmapOnly)
+                {
+                    GatherSurfaceColored(stream, draw, vu1::PackColorRGBA(255, 255, 255, 0x80));
+                }
+                else if (translucent)
+                {
+                    GatherSurfaceColored(stream, draw, rgba);
+                }
+                else
+                {
+                    GatherSurface(stream, draw);
+                }
+
+                if (lightmaps && (s->flags & SURF_DRAWTILED) == 0 && draw.geometry == brush::Geometry::Fan)
+                {
+                    draw.lightmapChain = atlasChains[s->lightmaptexturenum];
+                    atlasChains[s->lightmaptexturenum] = s;
+                }
+            }
+        }
+        rs::Submit(stream);
     }
 
-    // Only profile world lightmaps here.
+    // The lightmap pass: the same triangles over what the diffuse pass laid down, multiplying it by
+    // the luxels. Depth writes are masked and the z-test is GREATER_EQUAL, so it covers exactly what
+    // the first pass wrote.
+    if (lightmaps)
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::LmChains);
-        DrawLightmapChains(state);
+
+        stream.SetTransform(mvp);
+        stream.SetDrawFlags(rs::DrawFlags::Modulate);
+
+        const int numAtlases = lm::NumAtlases();
+        for (int a = 0; a < numAtlases; ++a)
+        {
+            if (atlasChains[a] == nullptr)
+            {
+                continue;
+            }
+
+            stream.SetTexture(lm::AtlasTexture(a));
+            for (const msurface_t * s = atlasChains[a]; s != nullptr; )
+            {
+                const brush::SurfaceDraw & draw = brush::DrawFor(model, *s);
+                GatherSurfaceLightmap(stream, draw);
+                s = draw.lightmapChain;
+            }
+        }
+        rs::Submit(stream);
     }
 
-    // Last of the world, where ref_gl's R_DrawWorld puts it: the opaque pass
-    // above has filled the depth buffer, so the sky only costs fill where it
-    // is actually visible through it.
+    // The fullbright pass: the texels in the fullbright range, added over the lit walls at their
+    // own colour, which QuakeSpasm's no-bright palette left black in the first pass.
+    if (gl_fullbrights.value != 0.0f && !s_lightmapOnly)
     {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::Sky);
-        sky::DrawSkyBox(viewDef, s_viewProjMatrix);
+        stream.SetTransform(mvp);
+        stream.SetDrawFlags(rs::DrawFlags::Additive);
+
+        const u32 rgba = vu1::PackColorRGBA(128, 128, 128, AlphaByte(entAlpha));
+
+        for (int i = 0; i < model.numtextures; ++i)
+        {
+            texture_t * const t = model.textures[i];
+            const int flags = ChainFlags(t, chain);
+            if (flags < 0 || (flags & (SURF_DRAWSKY | SURF_DRAWTURB)) != 0)
+            {
+                continue;
+            }
+
+            const texture_t * const anim = TextureAnimation(t, frame);
+            const tex::Texture * const glow = tex::TextureFor(anim->fullbright);
+            if (glow == nullptr)
+            {
+                continue;
+            }
+
+            stream.SetTexture(*glow);
+            for (const msurface_t * s = t->texturechains[chain]; s != nullptr; s = s->texturechain)
+            {
+                GatherSurfaceColored(stream, brush::DrawFor(model, *s), rgba);
+            }
+        }
+        rs::Submit(stream);
     }
 }
 
-// ------------------------------------------------------------------------------------------------
-// Point lighting (world lightmap sampling for entity models)
-// ------------------------------------------------------------------------------------------------
-
-enum LightSampleResult : int { NoHit = -1, Hit = 0, HitColorSampled = 1 };
-
-// Descends the BSP along the start->end segment looking for the first lit
-// surface it crosses (ref_gl's RecursiveLightPoint): finds the node plane the
-// segment straddles, recurses the near side, and on the way back samples the
-// lightmap of the node surface containing the crossing point - each style's
-// sample scaled by its current lightstyle. Returns -1 for no hit, 0 for a hit
-// with no light data, 1 for a sampled hit ('outColor' and 'outLightSpot' set).
-LightSampleResult RecursiveLightPoint(const mod::ModelInstance & world, const mod::ModelNode * node,
-                                      const lightstyle_t * lightstyles, const vec3_t start, const vec3_t end,
-                                      vec3_t outColor, vec3_t outLightSpot)
+// The opacity a liquid surface draws at: the entity's own alpha if it has one, else the map's or
+// the cvar's for its kind (gl_rmisc.c's GL_WaterAlphaForSurface).
+float WaterAlpha(const entity_t * ent, const msurface_t & surf)
 {
-    if (node->contents != -1)
+    if (ent != nullptr && ent->alpha != ENTALPHA_DEFAULT)
     {
-        return NoHit; // Leaf: didn't hit anything on the way down.
+        return ENTALPHA_DECODE(ent->alpha);
     }
-
-    // Which side(s) of this node's plane does the segment touch?
-    const cplane_t * const plane = node->plane;
-    const float front = DotProduct(start, plane->normal) - plane->dist;
-    const float back  = DotProduct(end,   plane->normal) - plane->dist;
-    const int   side  = (front < 0.0f);
-
-    if ((back < 0.0f) == side)
+    if ((surf.flags & SURF_DRAWLAVA) != 0)
     {
-        // Whole segment on one side; no surface of this node can be crossed.
-        return RecursiveLightPoint(world, node->children[side], lightstyles, start, end, outColor, outLightSpot);
+        return (map_lavaalpha > 0.0f) ? map_lavaalpha : map_wateralpha;
     }
-
-    // The segment crosses the plane at 'mid': trace the near half first.
-    const float frac = front / (front - back);
-
-    vec3_t mid;
-    mid[0] = start[0] + (end[0] - start[0]) * frac;
-    mid[1] = start[1] + (end[1] - start[1]) * frac;
-    mid[2] = start[2] + (end[2] - start[2]) * frac;
-
-    const auto r = RecursiveLightPoint(world, node->children[side], lightstyles, start, mid, outColor, outLightSpot);
-    if (r >= Hit)
+    if ((surf.flags & SURF_DRAWTELE) != 0)
     {
-        return r; // Hit something nearer.
+        return (map_telealpha > 0.0f) ? map_telealpha : map_wateralpha;
     }
-
-    VectorCopy(mid, outLightSpot);
-
-    // Check the crossing point against this node's surfaces.
-    const int numSurfaces = node->numSurfaces;
-    const mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
-    for (int i = 0; i < numSurfaces; ++i, ++surf)
+    if ((surf.flags & SURF_DRAWSLIME) != 0)
     {
-        if (HasFlag(surf->flags, mod::SurfaceFlags::DrawTurb | mod::SurfaceFlags::DrawSky))
-        {
-            continue; // No lightmaps on water/sky.
-        }
+        return (map_slimealpha > 0.0f) ? map_slimealpha : map_wateralpha;
+    }
+    return map_wateralpha;
+}
 
-        const mod::ModelTexInfo * tex = surf->texInfo;
+// The model's liquid surfaces, their texture coordinates bent on VU1, blended when they are
+// translucent: R_DrawTextureChains_Water with r_oldwater's subdivided polygons.
+void DrawWaterChains(rs::TriangleStream & stream, qmodel_t & model, const entity_t * ent,
+                     const texchain_t chain, const math::Mat4 & mvp)
+{
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::TurbSurfs);
 
-        const int s = static_cast<int>(DotProduct(mid, tex->vecs[0]) + tex->vecs[0][3]);
-        const int t = static_cast<int>(DotProduct(mid, tex->vecs[1]) + tex->vecs[1][3]);
+    stream.SetTransform(mvp);
 
-        if (s < surf->textureMins[0] || t < surf->textureMins[1])
+    for (int i = 0; i < model.numtextures; ++i)
+    {
+        texture_t * const t = model.textures[i];
+        const int flags = ChainFlags(t, chain);
+        if (flags < 0 || (flags & SURF_DRAWTURB) == 0)
         {
             continue;
         }
 
-        int ds = s - surf->textureMins[0];
-        int dt = t - surf->textureMins[1];
+        // The chain's first surface decides the opacity for all of it, as in QuakeSpasm.
+        const float alpha = WaterAlpha(ent, *t->texturechains[chain]);
+        const bool  blended = (alpha < 1.0f);
 
-        if (ds > surf->extents[0] || dt > surf->extents[1])
+        stream.SetDrawFlags(blended ? (rs::DrawFlags::Warped | rs::DrawFlags::Blended) : rs::DrawFlags::Warped);
+        stream.SetTexture(BindableTexture(t->gltexture));
+
+        const u32 rgba = vu1::PackColorRGBA(128, 128, 128, AlphaByte(alpha));
+        for (const msurface_t * s = t->texturechains[chain]; s != nullptr; s = s->texturechain)
         {
-            continue;
+            const brush::SurfaceDraw & draw = brush::DrawFor(model, *s);
+            if (blended)
+            {
+                GatherSurfaceColored(stream, draw, rgba);
+            }
+            else
+            {
+                GatherSurface(stream, draw);
+            }
         }
-
-        if (surf->samples == nullptr)
-        {
-            return Hit; // Hit, but the surface carries no light data.
-        }
-
-        // 16-texel lightmap granularity, one RGB triplet per luxel, one
-        // whole map per active style.
-        ds >>= 4;
-        dt >>= 4;
-
-        VectorClear(outColor);
-
-        const u8 * lightmap = surf->samples;
-        lightmap += 3 * (dt * ((surf->extents[0] >> 4) + 1) + ds);
-
-        // Scaled by ps2_lightmap_modulate for the same reason the atlases are
-        // (ref_gl applies gl_modulate in both places): an entity standing on a
-        // surface should take the brightness that surface is drawn at, or
-        // turning the knob up would light the world and leave everything in it
-        // behind.
-        const float modulate = s_lightmapModulate->value * (1.0f / 255.0f);
-
-        for (int map = 0; map < mod::kMaxLightmaps && surf->styles[map] != 255; ++map)
-        {
-            const float * styleRGB = lightstyles[surf->styles[map]].rgb;
-
-            outColor[0] += lightmap[0] * styleRGB[0] * modulate;
-            outColor[1] += lightmap[1] * styleRGB[1] * modulate;
-            outColor[2] += lightmap[2] * styleRGB[2] * modulate;
-
-            lightmap += 3 * ((surf->extents[0] >> 4) + 1) * ((surf->extents[1] >> 4) + 1);
-        }
-
-        return HitColorSampled;
     }
-
-    // Nothing on this node; carry on down the far half of the segment.
-    return RecursiveLightPoint(world, node->children[!side], lightstyles, mid, end, outColor, outLightSpot);
+    rs::Submit(stream);
 }
 
 // ------------------------------------------------------------------------------------------------
-// Brush model entities (inline BSP submodels: doors, plats, trains, buttons)
+// Entities
 // ------------------------------------------------------------------------------------------------
 
-// A surface is drawn when the camera is on its front side by more than this,
-// in world units (ref_gl's BACKFACE_EPSILON). Surfaces the camera is level
-// with are edge-on and contribute nothing.
-constexpr float kBackFaceEpsilon = 0.01f;
-
-// An inline submodel's surfaces live in the world model's surface array but
-// hang off the submodel's own BSP subtree, so the world walk never reaches
-// them - they are drawn here instead, transformed by the entity that carries
-// them. There is no PVS or texture chaining involved: the surface count is
-// small and the transform is per-entity, so each one is gathered immediately
-// and batched only across runs of the same texture.
-void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
+// A brush model entity - a door, a lift, an ammo box: r_brush.c's R_DrawBrushModel. Its surfaces
+// facing the camera chain onto the model's own texture chains and draw through the same passes
+// as the world, under the entity's transform.
+void DrawBrushModel(rs::TriangleStream & stream, entity_t & e)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::EntBrush);
 
-    if (s_skipBrushModels->value != 0.0f)
-    {
-        return; // Debug: skip brush model entities.
-    }
-
-    const auto * model = reinterpret_cast<const mod::ModelInstance *>(entity.model);
-    PS2_Assert(model != nullptr);
-
-    if (model->Brush().numModelSurfaces == 0)
-    {
-        return; // Submodel with no faces of its own (a pure clip brush).
-    }
-
-    // Frustum cull. A rotated submodel has no axis-aligned box that survives
-    // the rotation, so it falls back to the model's bounding sphere.
-    const bool rotated = (entity.angles[0] != 0.0f ||
-                          entity.angles[1] != 0.0f ||
-                          entity.angles[2] != 0.0f);
-    vec3_t mins, maxs;
-    if (rotated)
-    {
-        for (int i = 0; i < 3; ++i)
-        {
-            mins[i] = entity.origin[i] - model->Brush().radius;
-            maxs[i] = entity.origin[i] + model->Brush().radius;
-        }
-    }
-    else
-    {
-        const float * const modelMins = &model->Brush().mins.x;
-        const float * const modelMaxs = &model->Brush().maxs.x;
-        for (int i = 0; i < 3; ++i)
-        {
-            mins[i] = entity.origin[i] + modelMins[i];
-            maxs[i] = entity.origin[i] + modelMaxs[i];
-        }
-    }
-    if (ShouldCullBBox(mins, maxs))
+    if (CullModelForEntity(e))
     {
         return;
     }
 
-    PS2_PROFILE_ONLY(++s_drawStats.entities);
+    qmodel_t & model = *e.model;
 
-    // The per-surface side test runs in model space, so the camera goes there
-    // rather than every surface plane coming out - one transform instead of N.
-    vec3_t modelOrigin;
-    VectorSubtract(viewDef.vieworg, entity.origin, modelOrigin);
-    if (rotated)
+    // The camera in the model's space, for the per-surface side test.
+    vec3_t modelorg;
+    VectorSubtract(r_refdef.vieworg, e.origin, modelorg);
+    if (e.angles[0] != 0.0f || e.angles[1] != 0.0f || e.angles[2] != 0.0f)
     {
         vec3_t temp, forward, right, up;
-        VectorCopy(modelOrigin, temp);
-        math::AngleVectors(entity.angles, forward, right, up);
-
-        modelOrigin[0] =  DotProduct(temp, forward);
-        modelOrigin[1] = -DotProduct(temp, right);
-        modelOrigin[2] =  DotProduct(temp, up);
+        VectorCopy(modelorg, temp);
+        AngleVectors(e.angles, forward, right, up);
+        modelorg[0] =  DotProduct(temp, forward);
+        modelorg[1] = -DotProduct(temp, right);
+        modelorg[2] =  DotProduct(temp, up);
     }
 
-    const math::Mat4 mvp = MakeEntityMatrix(entity, /*flipPitchAngle=*/false) * s_viewProjMatrix;
-
-    // Calculate dynamic lighting for bmodel. Mode 1 only, exactly as PushDLights:
-    // marking here would put this submodel's surfaces back on the per-luxel
-    // rebuild path, and they share atlases with the world, so one lit door would
-    // re-dirty a whole 256x256 atlas and bring back the upload and GS drain the
-    // VU1 path exists to remove.
-    if (s_dynamicLightmaps->value == 1.0f)
+    // Dynamic lights on the model's own surfaces, unless it is an instanced model (the ammo boxes,
+    // whose surfaces every copy shares).
+    if (model.firstmodelsurface != 0 && gl_flashblend.value == 0.0f)
     {
-        const mod::ModelInstance * const world = mod::GetWorldModel();
-        PS2_Assert(world != nullptr);
-
-        const int numDlights = viewDef.num_dlights;
-        const dlight_t * light = viewDef.dlights;
-
-        const mod::ModelInstance::BrushData & modelBrush = model->Brush();
-        for (int l = 0; l < numDlights; ++l, ++light)
+        for (int k = 0; k < MAX_DLIGHTS; ++k)
         {
-            MarkDLights(light, 1 << l, *world, modelBrush.nodes + modelBrush.firstNode);
-        }
-    }
-
-    // ref_gl draws translucent brush models at a flat quarter alpha rather
-    // than the entity's own (glColor4f(1,1,1,0.25) in R_DrawBrushModel).
-    const bool translucent = (entity.flags & RF_TRANSLUCENT) != 0;
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    SurfaceDrawState state = {
-        .stream = &trisStream,
-        .mvp    = &mvp,
-        .rgba   = translucent ? vu1::PackColorRGBA(128, 128, 128, 0x80 / 4) : kFullBright,
-        .flags  = translucent ? rs::DrawFlags::Blended : rs::DrawFlags::None,
-        .vertexAlpha = false
-    };
-
-    // A translucent submodel draws every surface at the entity's alpha rather
-    // than the one the loader baked in, so it rebuilds its vertices.
-    state.bakedVertices = LightmapColorEnabled() && !translucent;
-
-    const bool tinted = LightmapColorEnabled();
-
-    // Consecutive surfaces usually share a texture, so the batch only breaks
-    // when it actually changes.
-    const tex::Texture * batchTexture = nullptr;
-
-    // This entity's transform, parked for the deferred alpha pass on the first
-    // translucent surface that needs it (most models have none at all).
-    const math::Mat4 * alphaMvp = nullptr;
-
-    const mod::ModelInstance::BrushData & brush = model->Brush();
-    mod::ModelSurface * surf = brush.surfaces + brush.firstModelSurface;
-    for (int i = 0; i < brush.numModelSurfaces; ++i, ++surf)
-    {
-        const cplane_t & plane = *surf->plane;
-        const float dot = DotProduct(modelOrigin, plane.normal) - plane.dist;
-
-        const bool planeBack = HasFlag(surf->flags, mod::SurfaceFlags::PlaneBack);
-        if (!(( planeBack && dot < -kBackFaceEpsilon) ||
-              (!planeBack && dot >  kBackFaceEpsilon)))
-        {
-            continue; // Facing away from the camera.
-        }
-
-        if (surf->texInfo->flags & (SURF_TRANS33 | SURF_TRANS66 | SURF_WARP))
-        {
-            // Deferred to the back-to-front alpha pass, along with this
-            // entity's transform: unlike ref_gl's, that pass draws a moving
-            // submodel's water/glass where the submodel actually is rather
-            // than at the map's rest position. Parked on the first such
-            // surface; every later one shares the slot.
-            if (alphaMvp == nullptr)
+            if (static_cast<double>(cl_dlights[k].die) < cl.time || cl_dlights[k].radius == 0.0f)
             {
-                alphaMvp = StoreAlphaEntityMatrix(mvp);
+                continue;
             }
-            if (alphaMvp != nullptr)
+            R_MarkLights(&cl_dlights[k], k, model.nodes + model.hulls[0].firstclipnode);
+        }
+    }
+
+    // gl_rmain.c's R_RotateForEntity with the pitch flipped going in: R_DrawBrushModel's "stupid
+    // quake bug", which brush models carry and alias models do not.
+    const math::Mat4 mvp = EntityMatrix(e, e.angles[PITCH]) * s_viewProj;
+
+    ClearTextureChains(model, chain_model);
+
+    msurface_t * surf = &model.surfaces[model.firstmodelsurface];
+    for (int i = 0; i < model.nummodelsurfaces; ++i, ++surf)
+    {
+        const mplane_t & plane = *surf->plane;
+        const float dot = DotProduct(modelorg, plane.normal) - plane.dist;
+        const bool  back = (surf->flags & SURF_PLANEBACK) != 0;
+        if ((back && dot < -kBackfaceEpsilon) || (!back && dot > kBackfaceEpsilon))
+        {
+            ChainSurface(*surf, chain_model);
+            if ((surf->flags & SURF_DRAWTILED) == 0)
             {
-                PushAlphaSurface(*surf, *TextureAnimation(surf->texInfo, entity.frame), *alphaMvp);
+                lm::UpdateSurface(*surf);
             }
-            continue;
-        }
-
-        // Rebuild the surface's luxels if its lighting moved and chain it for
-        // this entity's lightmap pass below. Before the gather, not after: the
-        // gather samples the chroma those luxels were just rebuilt into, and
-        // would otherwise read a frame behind under a moving dynamic light.
-        //
-        // Skipped entirely for a translucent submodel: its surfaces are blended
-        // into the scene at a flat quarter alpha, so modulating the framebuffer
-        // afterwards would darken whatever shows through them as well.
-        const bool lit = !translucent && (surf->lightmapTextureNum != mod::kNotLightmapped);
-        if (lit)
-        {
-            lm::ChainSurface(*surf, viewDef, s_frameCount);
-        }
-        state.lightmapTint = lit && tinted;
-
-        const tex::Texture * texture = TextureAnimation(surf->texInfo, entity.frame);
-        if (texture != batchTexture)
-        {
-            batchTexture = texture;
-            ApplyDrawState(state, *batchTexture); // flushes what the outgoing texture gathered
-        }
-
-        // Brush models have never been able to skip the EE clipper - the clip
-        // volume is judged in world space and this is not the world's matrix -
-        // so this is false unless the VU clipper is on, which does not care.
-
-        PS2_PROFILE_ONLY(++s_drawStats.surfaces);
-
-        for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
-        {
-            GatherPolyTriangles(*poly, state);
         }
     }
 
-    rs::Submit(*state.stream);
-
-    // Light the surfaces just drawn, in this entity's own space. The chains are
-    // per-atlas and shared with the world pass, but that one has already drawn
-    // and cleared them, so what is queued here is only this model's.
-    if (!translucent)
-    {
-        DrawLightmapChains(state);
-    }
+    DrawSkyChains(stream, model, chain_model, mvp);
+    DrawTextureChains(stream, model, &e, chain_model, mvp);
+    DrawWaterChains(stream, model, &e, chain_model, mvp);
 }
 
-// ------------------------------------------------------------------------------------------------
-// Sprite entities (.sp2: explosions, flashes, the power-up glows)
-// ------------------------------------------------------------------------------------------------
-
-// A sprite is one camera-facing quad, sized and anchored by its frame: the
-// frame's origin_x/origin_y say where in the image the entity's origin sits,
-// so the quad hangs off the view's right/up vectors from there. No culling -
-// it is two triangles, and the clipper rejects it if it is off screen anyway.
-void DrawSpriteEntity(const entity_t & entity)
-{
-    if (s_skipSprites->value != 0.0f)
-    {
-        return; // Debug: skip sprite entities.
-    }
-
-    const auto * model = reinterpret_cast<const mod::ModelInstance *>(entity.model);
-    PS2_Assert(model != nullptr && model->hunkBase != nullptr);
-
-    // The sprite hunk holds the SP2 file image verbatim (see model_load.cpp).
-    const auto * sprite = static_cast<const dsprite_t *>(model->hunkBase);
-    if (sprite->numframes <= 0)
-    {
-        return;
-    }
-
-    // The engine cycles entity.frame freely and expects the sprite to wrap.
-    const int frameNum = (entity.frame >= 0) ? (entity.frame % sprite->numframes) : 0;
-    const dsprframe_t & frame = sprite->frames[frameNum];
-
-    const tex::Texture * skin = model->Sprite().frames[frameNum];
-    if (skin == nullptr)
-    {
-        skin = &tex::DebugTexture(); // Frame's .pcx failed to load.
-    }
-
-    PS2_PROFILE_ONLY(++s_drawStats.entities);
-
-    // Sprite images are rarely power-of-two (48x48, 144x144), and normalized
-    // ST spans the power-of-two TEX0 extent, not the image.
-    float stScaleS, stScaleT;
-    tex::StScaleFor(*skin, &stScaleS, &stScaleT);
-
-    // Clamped because the alpha is whatever the game code put on the entity;
-    // on the GS 0x80 is 1.0 and anything above it reads as overbright.
-    float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
-    alpha = (alpha < 0.0f) ? 0.0f : ((alpha > 1.0f) ? 1.0f : alpha);
-
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    const SurfaceDrawState state = {
-        .stream = &trisStream,
-        .mvp    = &s_viewProjMatrix, // The quad is built in world space already.
-        .rgba   = vu1::PackColorRGBA(128, 128, 128, static_cast<u32>(alpha * 128.0f)),
-        .flags  = (alpha < 1.0f) ? rs::DrawFlags::Blended : rs::DrawFlags::None,
-        .vertexAlpha = false
-    };
-
-    // The four corners, in ref_gl's order: bottom-left, top-left, top-right,
-    // bottom-right, with T running down the image the way the pixels are
-    // stored. 'right' and 'up' are the camera's, which is what makes the quad
-    // face it.
-    const float leftOffset   = -static_cast<float>(frame.origin_x);
-    const float rightOffset  =  static_cast<float>(frame.width - frame.origin_x);
-    const float bottomOffset = -static_cast<float>(frame.origin_y);
-    const float topOffset    =  static_cast<float>(frame.height - frame.origin_y);
-
-    const struct { float along, up, s, t; } layout[4] = {
-        { leftOffset,  bottomOffset, 0.0f, 1.0f },
-        { leftOffset,  topOffset,    0.0f, 0.0f },
-        { rightOffset, topOffset,    1.0f, 0.0f },
-        { rightOffset, bottomOffset, 1.0f, 1.0f },
-    };
-
-    GatherCorner quad[4];
-    for (int i = 0; i < 4; ++i)
-    {
-        quad[i].position = {
-            entity.origin[0] + (s_rightVec[0] * layout[i].along) + (s_upVec[0] * layout[i].up),
-            entity.origin[1] + (s_rightVec[1] * layout[i].along) + (s_upVec[1] * layout[i].up),
-            entity.origin[2] + (s_rightVec[2] * layout[i].along) + (s_upVec[2] * layout[i].up)
-        };
-        quad[i].st = { layout[i].s * stScaleS, layout[i].t * stScaleT, 0.0f };
-    }
-
-    ApplyDrawState(state, *skin);
-
-    GatherCorner triangle[3] = { quad[0], quad[1], quad[2] };
-    GatherTriangle(triangle, state);
-
-    triangle[0] = quad[0];
-    triangle[1] = quad[2];
-    triangle[2] = quad[3];
-    GatherTriangle(triangle, state);
-
-    rs::Submit(*state.stream);
-}
-
-// ------------------------------------------------------------------------------------------------
-// Beam entities (RF_BEAM: the lightning/railgun cylinders)
-// ------------------------------------------------------------------------------------------------
-
-// A beam is a cylinder spanning entity.origin -> entity.oldorigin, built as a
-// ring of segments around that axis. It has no model and no texture: the
-// colour is a palette index in skinnum and the diameter is entity.frame
-// (ref_gl's R_DrawBeam).
-constexpr int kNumBeamSegs = 6;
-
-void DrawBeamEntity(const entity_t & entity)
-{
-    vec3_t direction, normalizedDirection;
-    VectorSubtract(entity.oldorigin, entity.origin, direction);
-    VectorCopy(direction, normalizedDirection);
-
-    if (VectorNormalize(normalizedDirection) == 0.0f)
-    {
-        return; // Zero length. Also how the client's ex_flash explosions - which
-                // borrow RF_BEAM purely as a "don't draw me" marker, comment and
-                // all - end up drawing nothing.
-    }
-
-    vec3_t perpVec;
-    PerpendicularVector(perpVec, normalizedDirection);
-    VectorScale(perpVec, static_cast<float>(entity.frame) / 2.0f, perpVec);
-
-    PS2_PROFILE_ONLY(++s_drawStats.entities);
-
-    const float alpha = (entity.alpha > 0.0f && entity.alpha <= 1.0f) ? entity.alpha : 1.0f;
-
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    const SurfaceDrawState state = {
-        .stream = &trisStream,
-        .mvp    = &s_viewProjMatrix, // Built in world space.
-        .rgba   = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
-        .flags  = rs::DrawFlags::Blended | rs::DrawFlags::Untextured,
-        .vertexAlpha = false
-    };
-
-    math::Vec3 startPoints[kNumBeamSegs];
-    math::Vec3 endPoints[kNumBeamSegs];
-
-    for (int i = 0; i < kNumBeamSegs; ++i)
-    {
-        vec3_t start;
-        RotatePointAroundVector(start, normalizedDirection, perpVec,
-                                (360.0f / kNumBeamSegs) * static_cast<float>(i));
-        VectorAdd(start, entity.origin, start);
-
-        startPoints[i] = { start[0], start[1], start[2] };
-        endPoints[i]   = { start[0] + direction[0],
-                           start[1] + direction[1],
-                           start[2] + direction[2] };
-    }
-
-    // Untextured, but a batch still binds one.
-    const tex::Texture & texture = tex::DebugTexture();
-    ApplyDrawState(state, texture);
-
-    const math::Vec3 zero = { 0.0f, 0.0f, 0.0f };
-
-    // ref_gl walks the ring as one triangle strip of (start[i], end[i],
-    // start[i+1], end[i+1]) groups; expanded to the triangle lists the VU
-    // path takes, each group is the two triangles closing one wall quad.
-    for (int i = 0; i < kNumBeamSegs; ++i)
-    {
-        const int next = (i + 1) % kNumBeamSegs;
-
-        GatherCorner quad[4];
-        quad[0].position = startPoints[i];
-        quad[1].position = endPoints[i];
-        quad[2].position = startPoints[next];
-        quad[3].position = endPoints[next];
-        for (GatherCorner & c : quad)
-        {
-            c.st = zero;
-        }
-
-        GatherCorner triangle[3] = { quad[0], quad[1], quad[2] };
-        GatherTriangle(triangle, state);
-
-        triangle[0] = quad[2];
-        triangle[1] = quad[1];
-        triangle[2] = quad[3];
-        GatherTriangle(triangle, state);
-    }
-
-    rs::Submit(*state.stream);
-}
-
-// ------------------------------------------------------------------------------------------------
-// Null models (placeholder for an entity whose model is missing)
-// ------------------------------------------------------------------------------------------------
-
-// ref_gl's R_DrawNullModel: a small octahedron lit by the world at the
-// entity's position, so a model that failed to load is loudly visible instead
-// of silently absent.
-void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
-{
-    vec3_t color = { 1.0f, 1.0f, 1.0f };
-    if (!(entity.flags & RF_FULLBRIGHT))
-    {
-        vec3_t lightSpot = {};
-        CalcPointLightColor(viewDef, entity.origin, color, lightSpot);
-    }
-
-    PS2_PROFILE_ONLY(++s_drawStats.entities);
-
-    const auto channel = [](float c) -> u32
-    {
-        const float scaled = c * 128.0f; // 128 = the GS modulate identity.
-        return (scaled >= 255.0f) ? 255u : ((scaled <= 0.0f) ? 0u : static_cast<u32>(scaled));
-    };
-
-    // Null models take the brush convention: ref_gl calls R_RotateForEntity
-    // directly here, without the pitch flip the alias path wraps it in.
-    const math::Mat4 mvp = MakeEntityMatrix(entity, /*flipPitchAngle=*/false) * s_viewProjMatrix;
-
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-    const SurfaceDrawState state = {
-        .stream = &trisStream,
-        .mvp    = &mvp,
-        .rgba   = vu1::PackColorRGBA(channel(color[0]), channel(color[1]), channel(color[2]), 0x80),
-        .flags  = rs::DrawFlags::None,
-        .vertexAlpha = false
-    };
-
-    constexpr float kRadius = 16.0f;
-    constexpr float kApex   = 16.0f;
-
-    // The square ring in the entity's XY plane both fans close over.
-    math::Vec3 ring[5];
-    for (int i = 0; i <= 4; ++i)
-    {
-        const float angle = static_cast<float>(i) * math::kHalfPI;
-        ring[i] = { kRadius * math::Cosf(angle), kRadius * math::Sinf(angle), 0.0f };
-    }
-
-    // The pink checkerboard doubles as the "this model is missing" signal;
-    // ref_gl draws the octahedron untextured, in flat shadelight.
-    const tex::Texture & texture = tex::DebugTexture();
-    ApplyDrawState(state, texture);
-
-    for (int half = 0; half < 2; ++half)
-    {
-        GatherCorner apex;
-        apex.position = { 0.0f, 0.0f, (half == 0) ? -kApex : kApex };
-        apex.st = { 0.5f, 0.5f, 0.0f };
-
-        for (int i = 0; i < 4; ++i)
-        {
-            // The top half walks the ring backwards, so both cones wind the
-            // same way seen from outside.
-            const int a = (half == 0) ? i : (4 - i);
-            const int b = (half == 0) ? (i + 1) : (3 - i);
-
-            GatherCorner triangle[3];
-            triangle[0] = apex;
-            triangle[1].position = ring[a];
-            triangle[1].st = { 0.0f, 1.0f, 0.0f };
-            triangle[2].position = ring[b];
-            triangle[2].st = { 1.0f, 1.0f, 0.0f };
-
-            GatherTriangle(triangle, state);
-        }
-    }
-
-    rs::Submit(*state.stream);
-}
-
-// ------------------------------------------------------------------------------------------------
-// Particles
-// ------------------------------------------------------------------------------------------------
-
-// The client's particle list as camera-facing billboards, expanded entirely on
-// VU1: the EE writes one quadword per particle - packed colour and world origin
-// - and transforms nothing.
-//
-// Each particle is a soft round sprite anchored at its origin and spanning the
-// camera's (up + right), blown up 1.5x as ref_gl does. Because up and right are
-// orthogonal to forward, every corner shares the anchor's depth, so the quad
-// projects to an axis-aligned screen rectangle and draws as a single GS sprite
-// (see particles.vcl). The distance blow-up that keeps far particles a pixel
-// wide rides along in the microprogram.
-//
-// Blended, and DrawFlags::Blended masks depth writes, which is what keeps a
-// cloud of them from z-fighting itself (ref_gl's glDepthMask(FALSE)).
-void RenderParticles(const refdef_t & viewDef)
-{
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::Particles);
-
-    const int numParticles = (viewDef.num_particles < MAX_PARTICLES) ? viewDef.num_particles : MAX_PARTICLES;
-    if (numParticles <= 0 || s_skipParticles->value != 0.0f)
-    {
-        return;
-    }
-
-    const tex::Texture & texture = tex::ParticleTexture();
-
-    // The billboard's diagonal: ref_gl's 1.5x blow-up of the camera basis, and
-    // the only direction the microprogram needs, since the sprite is described
-    // by its anchor corner and the opposite one.
-    const math::Vec3 quadOffset = {
-        (s_upVec[0] + s_rightVec[0]) * 1.5f,
-        (s_upVec[1] + s_rightVec[1]) * 1.5f,
-        (s_upVec[2] + s_rightVec[2]) * 1.5f,
-    };
-
-    // One qword per particle, gathered straight into the command buffer and referenced in place
-    // by the DMA.
-    auto * __restrict particles = rs::Begin<vu1::ParticleVertex *>(numParticles);
-
-    // Through cursors of our own. 'particles' goes to rs::Submit by reference, so its address
-    // escapes and gcc kept it in memory, reloading it - and the source array out of viewDef - on
-    // every particle.
-    vu1::ParticleVertex * __restrict out = particles;
-    const particle_t * __restrict in = viewDef.particles;
-
-    for (int i = 0; i < numParticles; ++i, ++in, ++out)
-    {
-        const float alpha = (in->alpha < 0.0f) ? 0.0f : ((in->alpha > 1.0f) ? 1.0f : in->alpha);
-
-        // Converted through int: alpha * 128 is at most 128, and a float to u32 conversion costs
-        // a compare and a branch per particle for the half of the range it cannot reach.
-        const u32 alphaByte = static_cast<u32>(static_cast<int>(alpha * 128.0f));
-        const u32 color     = (global_palette[in->color & 0xFF] & 0x00FFFFFF) | (alphaByte << 24);
-
-        // The billboard is one qword, so it goes out as one: colour, then the position's bits.
-        StoreQword(out, color,
-                   bits_to_u32(in->origin[0]),
-                   bits_to_u32(in->origin[1]),
-                   bits_to_u32(in->origin[2]));
-    }
-
-    rs::Submit(particles, s_viewProjMatrix, texture, quadOffset);
-}
-
-// ------------------------------------------------------------------------------------------------
-// Entity pass
-// ------------------------------------------------------------------------------------------------
-
-void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
+// The frame's entities: gl_rmain.c's R_DrawEntitiesOnList, one pass for the opaque ones and one,
+// after the water, for the translucent ones. Brush models only so far.
+void DrawEntitiesOnList(rs::TriangleStream & stream, const bool alphaPass)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::Entities);
 
-    if (s_skipEntities->value != 0.0f)
+    if (r_drawentities.value == 0.0f)
     {
-        return; // Debug: skip all entity models.
+        return;
     }
 
-    const int numEntities = viewDef.num_entities;
-    for (int e = 0; e < numEntities; ++e)
+    for (int i = 0; i < cl_numvisedicts; ++i)
     {
-        const entity_t & entity = viewDef.entities[e];
+        entity_t & e = *cl_visedicts[i];
 
-        // Translucents draw after every solid, so they blend over a finished
-        // opaque scene rather than whatever happened to be drawn so far.
-        const bool translucent = (entity.flags & RF_TRANSLUCENT) != 0;
-        if (translucent != isTranslucentPass)
+        const bool translucent = ENTALPHA_DECODE(e.alpha) < 1.0f;
+        if (translucent != alphaPass)
         {
             continue;
         }
 
-        // Debug: Skip drawing the weapon model.
-        if ((entity.flags & RF_WEAPONMODEL) && s_skipWeaponModel->value != 0.0f)
+        if (e.model->type == mod_brush)
         {
-            continue;
-        }
-
-        // RF_BEAM wins over whatever model the entity carries - the client
-        // attaches one to its ex_flash explosions and still expects a beam
-        // (a degenerate, invisible one) rather than that model.
-        if (entity.flags & RF_BEAM)
-        {
-            DrawBeamEntity(entity);
-            continue;
-        }
-
-        // entity_t::model is opaque outside the refresh module, hence the cast.
-        const auto * model = reinterpret_cast<const mod::ModelInstance *>(entity.model);
-        if (model == nullptr || s_forceNullModels->value != 0.0f)
-        {
-            DrawNullModelEntity(viewDef, entity);
-            continue;
-        }
-
-        switch (model->type)
-        {
-        case mod::ModelType::AliasMD2:
-            md2::DrawAliasMD2Entity(viewDef, entity, (entity.flags & RF_WEAPONMODEL)
-                                                    ? s_weaponViewProjMatrix
-                                                    : s_viewProjMatrix);
-            break;
-
-        case mod::ModelType::Brush:
-            DrawBrushModelEntity(viewDef, entity);
-            break;
-
-        case mod::ModelType::Sprite:
-            DrawSpriteEntity(entity);
-            break;
+            DrawBrushModel(stream, e);
         }
     }
 }
+
+// ------------------------------------------------------------------------------------------------
+// Frame setup (gl_rmain.c's R_SetupView)
+// ------------------------------------------------------------------------------------------------
+
+void SetupView()
+{
+    // Before the surfaces are marked, which rebuilds the lightmaps they touch.
+    R_PushDlights();
+    R_AnimateLight();
+    ++r_framecount;
+
+    VectorCopy(r_refdef.vieworg, r_origin);
+    AngleVectors(r_refdef.viewangles, vpn, vright, vup);
+
+    r_oldviewleaf = r_viewleaf;
+    r_viewleaf    = Mod_PointInLeaf(r_origin, cl.worldmodel);
+
+    V_SetContentsColor(r_viewleaf->contents);
+    V_CalcBlend();
+
+    // Under water, slime or lava, r_waterwarp sways the field of view.
+    float fovx = r_refdef.fov_x;
+    float fovy = r_refdef.fov_y;
+    if (r_waterwarp.value != 0.0f)
+    {
+        const int contents = r_viewleaf->contents;
+        if (contents == CONTENTS_WATER || contents == CONTENTS_SLIME || contents == CONTENTS_LAVA)
+        {
+            const float sway = math::Sinf(static_cast<float>(cl.time) * 1.5f) * 0.03f;
+            fovx = 2.0f * math::RadToDeg(std::atan(std::tan(math::DegToRad(r_refdef.fov_x) * 0.5f) * (0.97f + sway)));
+            fovy = 2.0f * math::RadToDeg(std::atan(std::tan(math::DegToRad(r_refdef.fov_y) * 0.5f) * (1.03f - sway)));
+        }
+    }
+
+    SetFrustum(fovx, fovy);
+    SetupTransforms(fovx, fovy);
+    SetUpTextureSampling(fovy);
+
+    MarkSurfaces();
+
+    // The cheat-safe draw modes take in single player only.
+    const bool singlePlayer = (cl.maxclients == 1);
+    s_lightmapOnly  = singlePlayer && r_lightmap.value != 0.0f;
+    s_drawLightmaps = !(singlePlayer && r_fullbright.value != 0.0f) && (cl.worldmodel->lightdata != nullptr);
+}
+
+// r_wateralpha and its kin set the map's liquid opacity directly when changed, as in QuakeSpasm.
+void SetWaterAlpha(cvar_t * var) { map_wateralpha = var->value; }
+void SetLavaAlpha(cvar_t * var)  { map_lavaalpha  = var->value; }
+void SetTeleAlpha(cvar_t * var)  { map_telealpha  = var->value; }
+void SetSlimeAlpha(cvar_t * var) { map_slimealpha = var->value; }
 
 } // namespace
 
@@ -2477,229 +995,114 @@ void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
 
 void Init()
 {
-    s_skipWorld         = Cvar_Get("ps2_skip_world",          "0",   0); // Debug: skips drawing all world geometry/walls.
-    s_skipAlphaSurfaces = Cvar_Get("ps2_skip_alpha_surfaces", "0",   0); // Debug: skips drawing the translucent glass/water pass.
-    s_skipBrushModels   = Cvar_Get("ps2_skip_brushmodels",    "0",   0); // Debug: skips drawing world brush models (props/doors/static objects).
-    s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0",   0); // Debug: skips drawing sprites.
-    s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0",   0); // Debug: skips drawing entities.
-    s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0",   0); // Debug: skips drawing particles.
-    s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
-    s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0); // Debug: skips drawing the weapon model.
-    s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   CVAR_ARCHIVE); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
-    s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", CVAR_ARCHIVE); // Brightness of the VU1 point lights.
-    s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1",   0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.
-    s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0",   0); // Debug: 1 drops the diffuse textures, showing the lighting alone.
-    s_lightmapColor     = Cvar_Get("ps2_lightmap_color",      "1",   CVAR_ARCHIVE); // Debug: 0 drops the per-vertex luxel chroma, leaving lighting monochrome.
-    s_polyblend         = Cvar_Get("ps2_polyblend",           "1",   0); // ref_gl's gl_polyblend: the full screen damage/powerup/underwater tint.
-    s_mipFilter         = Cvar_Get("ps2_mip_filter",   "bilinear",   CVAR_ARCHIVE); // nearest, bilinear or trilinear: walls and model skins.
-    s_mipBias           = Cvar_Get("ps2_mip_bias",            "0",   CVAR_ARCHIVE); // Wall mip level bias, in levels; positive is blurrier.
+    Cvar_RegisterVariable(&r_norefresh);
+    Cvar_RegisterVariable(&r_drawentities);
+    Cvar_RegisterVariable(&r_drawworld);
+    Cvar_RegisterVariable(&r_fullbright);
+    Cvar_RegisterVariable(&r_lightmap);
+    Cvar_RegisterVariable(&r_wateralpha);
+    Cvar_RegisterVariable(&r_lavaalpha);
+    Cvar_RegisterVariable(&r_telealpha);
+    Cvar_RegisterVariable(&r_slimealpha);
+    Cvar_RegisterVariable(&r_dynamic);
+    Cvar_RegisterVariable(&r_novis);
+    Cvar_RegisterVariable(&r_oldskyleaf);
+    Cvar_RegisterVariable(&r_waterwarp);
+    Cvar_RegisterVariable(&gl_fullbrights);
+    Cvar_RegisterVariable(&gl_farclip);
+    Cvar_RegisterVariable(&s_mipFilter);
+    Cvar_RegisterVariable(&s_mipBias);
+    Cvar_SetCallback(&s_mipFilter, MipFilterChanged);
 
-    // Registered by the lightmap manager, which owns it; this resolves the same
-    // object so the entity lighting can scale by it too.
-    s_lightmapModulate = Cvar_Get("ps2_lightmap_modulate", "1", CVAR_ARCHIVE);
-
-    // Already registered by the client; this just resolves the same object.
-    s_lightLevel = Cvar_Get("r_lightlevel", "0", 0);
-
-    sky::Init();
-    md2::Init();
+    Cvar_SetCallback(&r_wateralpha, SetWaterAlpha);
+    Cvar_SetCallback(&r_lavaalpha,  SetLavaAlpha);
+    Cvar_SetCallback(&r_telealpha,  SetTeleAlpha);
+    Cvar_SetCallback(&r_slimealpha, SetSlimeAlpha);
 }
 
-void BeginRegistration()
+// gl_rmisc.c's R_ParseWorldspawn: a map can set its liquids' opacity in worldspawn.
+void NewMap()
 {
-    PS2_PROFILE_ONLY(s_drawStats = {});
+    map_wateralpha = r_wateralpha.value;
+    map_lavaalpha  = r_lavaalpha.value;
+    map_telealpha  = r_telealpha.value;
+    map_slimealpha = r_slimealpha.value;
 
-    // New map: forget the previous map's clusters so the first frame re-marks.
-    s_viewCluster     = kInvalidCluster;
-    s_viewCluster2    = kInvalidCluster;
-    s_oldViewCluster  = kInvalidCluster;
-    s_oldViewCluster2 = kInvalidCluster;
-}
-
-#if PS2_QUAKE_PROFILE
-DrawStats & GetStats()
-{
-    return s_drawStats;
-}
-#endif // PS2_QUAKE_PROFILE
-
-math::Mat4 MakeEntityMatrix(const entity_t & entity, const bool flipPitchAngle)
-{
-    const float pitch = flipPitchAngle ? entity.angles[PITCH] : -entity.angles[PITCH];
-
-    // The translation never needs a matrix multiply of its own. Under the
-    // row-vector convention, post-multiplying a pure rotation by a translation
-    // leaves rows 0-2 untouched and makes row 3 the offset - so writing it in
-    // costs three stores where the multiply cost 16 FMACs.
-    const auto withOrigin = [&entity](math::Mat4 m) -> math::Mat4
+    const char * data = COM_Parse(cl.worldmodel->entities);
+    if (data == nullptr || com_token[0] != '{')
     {
-        m.m[3][0] = entity.origin[0];
-        m.m[3][1] = entity.origin[1];
-        m.m[3][2] = entity.origin[2];
-        m.m[3][3] = 1.0f;
-        return m;
-    };
-
-    // Most entities only yaw - monsters, items, gibs - and for those the pitch
-    // and roll rotations are identity matrices being multiplied in for nothing.
-    // Building the yaw rotation directly costs one sine/cosine pair against the
-    // three the general path takes, and skips two 4x4 multiplies.
-    if (entity.angles[PITCH] == 0.0f && entity.angles[ROLL] == 0.0f)
-    {
-        const float radians = math::DegToRad(entity.angles[YAW]);
-        const float c = math::Cosf(radians);
-        const float s = math::Sinf(radians);
-
-        return withOrigin(math::Mat4 {{ {    c,    s, 0.0f, 0.0f },
-                                        {   -s,    c, 0.0f, 0.0f },
-                                        { 0.0f, 0.0f, 1.0f, 0.0f },
-                                        { 0.0f, 0.0f, 0.0f, 1.0f } }});
-    }
-
-    return withOrigin(math::RotationX(math::DegToRad(-entity.angles[ROLL])) *
-                      math::RotationY(math::DegToRad(pitch))                *
-                      math::RotationZ(math::DegToRad(entity.angles[YAW])));
-}
-
-void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
-                         vec3_t outColor, vec3_t outLightSpot)
-{
-    const mod::ModelInstance * world = mod::GetWorldModel();
-
-    if (world == nullptr || world->Brush().lightData == nullptr)
-    {
-        // No world or a map compiled without light data: fullbright.
-        VectorSet(outColor, 1.0f, 1.0f, 1.0f);
         return;
     }
 
-    // Trace straight down; 2048 units reaches the floor from anywhere sane.
-    const vec3_t endPoint = { point[0], point[1], point[2] - 2048.0f };
-
-    vec3_t sampled = {};
-    const auto r = RecursiveLightPoint(*world, world->Brush().nodes, viewDef.lightstyles,
-                                       point, endPoint, sampled, outLightSpot);
-    if (r == NoHit)
+    for (;;)
     {
-        VectorClear(outColor); // Left the world without hitting anything.
-    }
-    else
-    {
-        VectorCopy(sampled, outColor);
-    }
-
-    // Add the frame's dynamic lights, falling off linearly with distance.
-    const dlight_t * dl = viewDef.dlights;
-    const int numDlights = viewDef.num_dlights;
-    for (int i = 0; i < numDlights; ++i, ++dl)
-    {
-        vec3_t dist;
-        VectorSubtract(point, dl->origin, dist);
-
-        // Out of range lights are the common case - a shot lights the room it
-        // is in, not the entities elsewhere in the PVS - and they can be
-        // rejected on the squared distance, before paying for the root.
-        const float distSqr = DotProduct(dist, dist);
-        if (distSqr >= (dl->intensity * dl->intensity))
+        data = COM_Parse(data);
+        if (data == nullptr || com_token[0] == '}')
         {
-            continue; // Would contribute zero or less; the test below agrees.
+            return;
         }
 
-        const float add = (dl->intensity - math::Sqrtf(distSqr)) * (1.0f / 256.0f);
-        if (add > 0.0f)
+        char key[128];
+        q_strlcpy(key, (com_token[0] == '_') ? (com_token + 1) : com_token, sizeof(key));
+        for (size_t len = std::strlen(key); len > 0 && key[len - 1] == ' '; --len)
         {
-            outColor[0] += add * dl->color[0];
-            outColor[1] += add * dl->color[1];
-            outColor[2] += add * dl->color[2];
+            key[len - 1] = '\0';
         }
+
+        data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+        if (data == nullptr)
+        {
+            return;
+        }
+
+        const float value = static_cast<float>(std::atof(com_token));
+        if      (std::strcmp(key, "wateralpha") == 0) { map_wateralpha = value; }
+        else if (std::strcmp(key, "lavaalpha")  == 0) { map_lavaalpha  = value; }
+        else if (std::strcmp(key, "telealpha")  == 0) { map_telealpha  = value; }
+        else if (std::strcmp(key, "slimealpha") == 0) { map_slimealpha = value; }
     }
 }
 
-bool FrustumCullsPoints(const math::Vec4 * points, int numPoints)
+void SetSkyFlatColor(const u8 r, const u8 g, const u8 b)
 {
-    // Each point's mask has one bit per side plane it is outside of; the AND
-    // across all points is nonzero exactly when one plane excludes them all.
-    // (Conservative: a box crossing a frustum corner passes and draws.)
-    u32 aggregate = ~0u;
-    for (int i = 0; i < numPoints; ++i)
-    {
-        // One transform yields all four signed plane distances at once; the
-        // point's w must be 1 for the -dist row to land. Callers build these
-        // corners with w = 1 already (see ShouldCullEntity).
-        const math::Vec4 distances = math::Transform(points[i], s_frustumMatrix);
-
-        u32 mask = 0;
-        if (distances.x < 0.0f) { mask |= (1u << 0); }
-        if (distances.y < 0.0f) { mask |= (1u << 1); }
-        if (distances.z < 0.0f) { mask |= (1u << 2); }
-        if (distances.w < 0.0f) { mask |= (1u << 3); }
-
-        aggregate &= mask;
-        if (aggregate == 0)
-        {
-            return false; // No plane excludes every point seen so far.
-        }
-    }
-    return true;
+    s_skyColor = vu1::PackColorRGBA(r, g, b, 0x80);
 }
 
-SphereCull FrustumCullsSphere(const vec3_t center, const float radius)
+void RenderView()
 {
-    // The side planes all pass through the eye and carry unit normals (they are
-    // rotations of the view basis - see SetUpFrustum), so the dot product minus
-    // 'dist' is a true signed distance and comparing it against a radius is
-    // exact rather than an approximation.
-    bool allInside = true;
-
-    for (const cplane_t & plane : s_frustum)
+    if (r_norefresh.value != 0.0f)
     {
-        const float distance = DotProduct(center, plane.normal) - plane.dist;
-
-        if (distance < -radius)
-        {
-            return SphereCull::Outside; // Wholly behind this plane.
-        }
-        if (distance < radius)
-        {
-            allInside = false; // Crosses it; some corner could be either side.
-        }
+        return;
+    }
+    if (cl.worldmodel == nullptr)
+    {
+        Sys_Error("R_RenderView: NULL worldmodel");
     }
 
-    return allInside ? SphereCull::Inside : SphereCull::Straddling;
-}
-
-void RenderFrame(const refdef_t & viewDef)
-{
     PS2_PROFILE_SCOPED_EVENT(prof_evt::View);
 
-    SetupFrame(viewDef);
+    SetupView();
 
-    // Opaque world surfaces and skybox, followed by opaque and translucent entities.
-    RenderWorldModel(viewDef);
-    RenderEntities(viewDef, /*isTranslucentPass=*/false);
-    RenderEntities(viewDef, /*isTranslucentPass=*/true);
+    // One stream for every pass of the frame; each submits before the next one starts.
+    auto stream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
 
-    // Simulated light sources with additive blending. Before the two passes
-    // below, where ref_gl's R_RenderView puts R_RenderDlights: all three are
-    // depth-write masked, so what the order decides is which of them get to
-    // blend *over* a flare. Water and particles in front of one should dim it.
-    RenderDLights(viewDef);
+    if (r_drawworld.value != 0.0f)
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::World);
+        DrawSkyChains(stream, *cl.worldmodel, chain_world, s_viewProj);
+        DrawTextureChains(stream, *cl.worldmodel, nullptr, chain_world, s_viewProj);
+    }
 
-    // Particles next, as ref_gl does: they are blended and depth-write
-    // masked, so they need the opaque scene already laid down behind them.
-    RenderParticles(viewDef);
+    DrawEntitiesOnList(stream, false);
 
-    // Then the translucent world and brush model surfaces the passes above
-    // set aside, blended over the whole finished scene.
-    RenderAlphaSurfaces();
+    if (r_drawworld.value != 0.0f)
+    {
+        DrawWaterChains(stream, *cl.worldmodel, nullptr, chain_world, s_viewProj);
+    }
 
-    // Last, over the finished scene: ref_gl's R_Flash/R_PolyBlend.
-    // (powerups/damange fullscreen blended polygon).
-    RenderBlendedOverlay(viewDef);
+    DrawEntitiesOnList(stream, true);
 
-    // Nothing to draw: hands the light at the camera back to the game code.
-    // Where ref_gl's R_RenderFrame calls R_SetLightLevel.
-    SetLightLevel(viewDef);
+    rs::Submit(stream);
 }
 
 } // namespace ps2::view

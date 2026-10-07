@@ -11,8 +11,18 @@ bracket, the screenshot readback), `draw.cpp` (`Draw_*`), `texmgr.cpp` (`TexMgr_
 `refresh.cpp` (`R_*`). Under them, from the Quake II port: `render_system.*` (`ps2::rs`: VIF1
 chains, batches, `DrawTriangles`, `Submit`), `cmd_buffer.*`, `gs.*` (GS front-end, register
 values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap_atlas.*`,
-`clip.*` (EE sky clipper), `vu1.*` (VU memory layout, microprogram declarations). `view.cpp`,
-`md2.cpp`, `sky.cpp` and `lightmap.*` are still Quake II's, unbuilt until the 3D phase.
+`clip.*` (EE sky clipper), `vu1.*` (VU memory layout, microprogram declarations). The 3D world:
+`view.cpp` (`R_RenderView`), `brush.cpp` (per-surface draw data, built by `R_NewMap`) and
+`lightmap.cpp`. `md2.cpp` and `sky.cpp` are still Quake II's, unbuilt until their part of the
+3D phase.
+
+- **Set the mip constant every frame** (`rs::SetTextureSampling`, from the view's focal
+  length; see `view.cpp`'s `SetUpTextureSampling`). Its default of 0 has the GS pick levels by
+  log2 of the depth alone, and the walls come out blotchy, sampled from their smallest levels.
+- **Five fixed CLUTs, one per 8-bit `tex::PixelFormat`**: Quake's palette (255 transparent),
+  no-bright (224-255 black), fullbright-only (0-223 alpha 0, the rest at 0x80 for additive), the
+  0..1 alpha ramp (particles) and the 0..255 light ramp (lightmaps, overbright). Walls sample
+  with RGB components, so the palette's transparent 255 doesn't cut them.
 
 ## Frame model: 2D and 3D interleave
 

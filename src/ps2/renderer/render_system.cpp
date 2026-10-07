@@ -812,7 +812,7 @@ bool BuildBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx,
     out[3]  = gs::ContextReg(GS_REG_MIPTBP1, drawCtx);
     out[4]  = gs::MakeTex1(texture, s_textureSampling);
     out[5]  = gs::ContextReg(GS_REG_TEX1, drawCtx);
-    out[6]  = gs::MakeTex0(texture, tex::TakesIntensity(texture.type));
+    out[6]  = gs::MakeTex0(texture);
     out[7]  = gs::ContextReg(GS_REG_TEX0, drawCtx);
     out[8]  = gs::MakeAlphaBlend(blendMode);
     out[9]  = gs::ContextReg(GS_REG_ALPHA, drawCtx);

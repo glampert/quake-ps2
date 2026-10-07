@@ -99,6 +99,7 @@ typedef struct texture_s
 	int					anim_min, anim_max;		// time for this frame min <=time< max
 	struct texture_s	*anim_next;		// in the animation sequence
 	struct texture_s	*alternate_anims;	// bmodels in frmae 1 use these
+	int					ps2_pad[2];		// [PS2_QUAKE]: 80 bytes rather than 72, so the pixels that follow a BSP texture on the hunk start 16-byte aligned: the GS uploads them in place
 } texture_t;
 
 
@@ -494,6 +495,8 @@ typedef struct qmodel_s
 	int			vboindexofs;    // offset in vbo of the hdr->numindexes unsigned shorts
 	int			vboxyzofs;      // offset in vbo of hdr->numposes*hdr->numverts_vbo meshxyz_t
 	int			vbostofs;       // offset in vbo of hdr->numverts_vbo meshst_t
+
+	void		*ps2_render;	// [PS2_QUAKE]: the PS2 renderer's draw data for a brush model, built by R_NewMap. Not after 'cache', which zone.c's Cache_Free needs last
 
 //
 // additional model data

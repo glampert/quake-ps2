@@ -22,6 +22,8 @@ More come back as each subsystem is ported.
 | `ps2_fb_dither` | 0 | 0 | Arch. | The GS's ordered dither, which hides the banding of a 16-bit framebuffer on gradients. Live. |
 | `ps2_fb_16bit` | 1 | 1 | Arch. | 16-bit (5:5:5) framebuffers instead of 32-bit: 560 KB of VRAM each instead of 1120 KB, which the texture heap gets. Read once as the GS comes up, from `config.cfg` (or `+ps2_fb_16bit 0` on the command line), so a change applies on the next run. |
 | `in_keyboard` | 1 | 1 | Arch. | The USB keyboard. Its IOP driver (usbd and ps2kbd) loads the first time this is on: at boot it is read from `config.cfg` ahead of time, so with it off there the driver never loads. Switching it off lets go of any keys the keyboard holds. Live. |
+| `ps2_mip_filter` | bilinear | bilinear | Arch. | How the walls filter, as QuakeSpasm's `gl_texturemode` does: `nearest`, `bilinear` (between texels, the nearest mip level) or `trilinear` (between levels too, at twice the texture reads). Live. |
+| `ps2_mip_bias` | 0 | 0 | Arch. | Shifts the mip levels the walls sample, in levels; positive is blurrier. The GS picks a level by depth alone, so floors seen at a grazing angle come out sharper than their texel density calls for. Live. |
 | `ps2_debug_overlays` | 1 | 0 | Arch. | Master switch for the debug panels below, all but the FPS counter. Each panel also has its own switch. |
 | `ps2_show_fps` | 1 | 0 | Arch. | FPS counter, top right: green while every frame made its vsync, yellow once one missed, red at half the refresh rate or below. |
 | `ps2_show_profile` | 1 | 0 | Arch. | Frame times per profiled event, under the FPS counter. Draws in profile builds only. |
