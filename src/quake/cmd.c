@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cmd.c -- Quake script command processing module
 
 #include "quakedef.h"
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]
 
 void Cmd_ForwardToServer (void);
 
@@ -283,6 +284,10 @@ void Cmd_Exec_f (void)
 	}
 	Con_Printf ("execing %s\n",Cmd_Argv(1));
 
+	// [PS2_QUAKE]: the PS2's additions to the defaults (the gamepad's binds, always run) run
+	// right after default.cfg. Cbuf_InsertText puts its text first in line, so they go in first.
+	if (!strcmp(Cmd_Argv(1), "default.cfg"))
+		Cbuf_InsertText (PS2_DefaultConfig ());
 	Cbuf_InsertText (f);
 	if (f != default_cfg) {
 		Hunk_FreeToLowMark (mark);

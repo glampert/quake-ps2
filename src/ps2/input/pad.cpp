@@ -54,17 +54,17 @@ bool GamePad::Init()
     if (!ps2::sys::LoadRomModuleOnce("rom0:SIO2MAN") ||
         !ps2::sys::LoadRomModuleOnce("rom0:PADMAN"))
     {
-        Com_Printf("WARNING: failed to load pad IOP modules - gamepad disabled!\n");
+        Con_Printf("WARNING: failed to load pad IOP modules - gamepad disabled!\n");
         return false;
     }
     if (padInit(0) != 1)
     {
-        Com_Printf("WARNING: padInit failed - gamepad disabled!\n");
+        Con_Printf("WARNING: padInit failed - gamepad disabled!\n");
         return false;
     }
     if (padPortOpen(kPadPort, kPadSlot, m_dmaArea) == 0)
     {
-        Com_Printf("WARNING: padPortOpen failed - gamepad disabled!\n");
+        Con_Printf("WARNING: padPortOpen failed - gamepad disabled!\n");
         return false;
     }
 
@@ -118,7 +118,7 @@ void GamePad::Update()
         const unsigned char request = padGetReqState(kPadPort, kPadSlot);
         if ((request == PAD_RSTAT_COMPLETE || request == PAD_RSTAT_FAILED) && Connected(state))
         {
-            Com_DPrintf("Gamepad connected.\n");
+            Con_DPrintf("Gamepad connected.\n");
 
             // Only a pad with an analog mode can have motors, and they take their
             // mapping after the mode is set - the mode switch resets it.
@@ -145,7 +145,7 @@ void GamePad::Update()
             m_hasMotors = (padGetReqState(kPadPort, kPadSlot) == PAD_RSTAT_COMPLETE);
             m_sentSmall = kMotorsUnknown;
             m_status = Status::Ready;
-            Com_DPrintf("Gamepad vibration motors %s.\n", m_hasMotors ? "enabled" : "failed to enable");
+            Con_DPrintf("Gamepad vibration motors %s.\n", m_hasMotors ? "enabled" : "failed to enable");
         }
         break;
 

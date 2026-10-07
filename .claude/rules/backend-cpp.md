@@ -33,7 +33,9 @@ paths:
 - Types and **all** functions, including file-local `static`/anonymous-namespace helpers:
   PascalCase (`ps2::gs::Init`, `QwordCount`).
 - Variables: camelCase. Private members: `m_`. Public struct members: no prefix.
-- File/local statics: `s_` (`s_frame`). Exported globals: `g_`.
+- File/local statics: `s_` (`s_frame`). Exported globals: `g_`. A file-scope variable is
+  declared `static` even inside an anonymous namespace (`static cvar_t s_gsLatency = ...`);
+  constants and functions there aren't.
 - Namespaces stay lowercase (`ps2::gs`, `ps2::rs`, `ps2::tex`). Leave `k`-prefixed constants
   as they are.
 - A helper written in lowerCamelCase gets renamed to PascalCase, callers included.

@@ -49,7 +49,8 @@ Two PS2 headers sit at the seam. `src/ps2/renderer/gl_types.h` gives quakedef.h 
 names QuakeSpasm's headers are written with, and nothing else: with no GL function declared,
 a stray GL call fails to compile. `src/ps2/engine_hooks.h` declares what engine files call in
 the backend that no QuakeSpasm header declares (the status bar's alpha and scissor, the view
-blend, the screenshot readback) and the engine state the backend reads (`active_particles`).
+blend, the screenshot readback, the PS2's additions to `default.cfg` that `cmd.c` runs right
+after it) and the engine state the backend reads (`active_particles`).
 
 ## Known engine quirks
 
@@ -60,7 +61,23 @@ Record QuakeSpasm quirks here as they are found.
   map is running (say from `autoexec.cfg`), it does neither.
 - QuakeSpasm's own `default.cfg`, with gamepad binds (`LSHOULDER`, `RTRIGGER`, ...), is
   embedded as `default_cfg.h` but used only when no `default.cfg` exists. id's `pak0.pak` has
-  one without them, so the pad's keys start unbound unless the input layer seeds binds.
+  one without them, so `Cmd_Exec_f` runs the backend's `PS2_DefaultConfig` (the pad's binds)
+  right after any `default.cfg`. Binds made in `IN_Init` wouldn't last: it runs before
+  `quake.rc`, and `default.cfg` opens with `unbindall`.
+- The main menu's Quit exits at once (QuakeSpasm's "Quit now!"; the Y/N box only with
+  `-fitz`), through `Host_Shutdown`, which writes `id1/config.cfg` and the console history,
+  `history.txt`, in the user dir (on `host:`, `build/<config>/`).
+- `Key_Event` prints "`<KEY>` is unbound, hit F4 to set." for an unbound key numbered 200 or
+  more on every press, in menus too. Every pad key is one, which is why Circle, the menus'
+  Back, has a default bind.
+- Input is polled twice a frame: `Sys_SendKeyEvents` runs `IN_Commands` and
+  `IN_SendKeyEvents`, then `Host_Frame` runs `IN_Commands` again. `SCR_ModalMessage` (the
+  "start a new game?" prompt) and `Con_NotifyBox` loop on `Sys_SendKeyEvents` from inside a key
+  handler, so the input layer re-enters itself: a key's state must be updated before its
+  `Key_Event`, as in_sdl.c does.
+- Typed text goes through `Char_Event`, already shifted (SDL2's text input), and only while
+  `Key_TextEntry()` says the engine takes text. `Key_Event` takes keys by position, and keys.c
+  has no `keyshift[]` table, unlike Quake II's.
 - `Cmd_AddCommand` after `Host_Init` has finished is a `Sys_Error` ("Cmd_AddCommand after
   host_initialized"). Anything that registers commands must run inside `Host_Init`.
 - `Host_Init` queues `vid_unlock` to run after the configs; the backend registers it as a

@@ -22,8 +22,8 @@ lists every backend cvar. Add new ones there, with their debug/release defaults 
 The port is brought up in phases: compile, headless boot, game data, 2D, input, 3D, then sound, music
 and saves. Until its phase lands:
 
-- QuakeSpasm files a phase will replace (`gl_texmgr.c`, `in_sdl.c`, the GL world/model/sky
-  files) stay in `src/quake` unbuilt, as reference.
+- QuakeSpasm files a phase will replace (`gl_texmgr.c`, the GL world/model/sky files) stay in
+  `src/quake` unbuilt, as reference.
 - Backend files still written against Quake 2 stay in `src/ps2` outside the Makefile source lists.
 - **Unused files are deleted, not parked.** Each phase deletes what it made unused. The pristine
   sources are in the first commit (and in the quake2-ps2 repo for the backend).

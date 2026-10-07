@@ -21,16 +21,17 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 
 ### Status
 
-**Early bring-up.** QuakeSpasm boots on the PS2 and runs its game loop headless: in PCSX2 it
-finds the game data on `host:`, plays the attract-mode demos through, and loads and runs every
-shareware map, logging the console to stdout, with nothing drawn yet. Its PC-sized limits are
-cut down to fit the PS2's 32 MB. The port is brought up in phases, each checked in PCSX2:
+**Early bring-up.** QuakeSpasm boots and runs on the PS2: in PCSX2 it finds the game data on
+`host:`, draws its console, menus and status bar, and takes the DualShock pad and a USB
+keyboard, through the attract-mode demos and every shareware map. The 3D view stays blank
+until its phase. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is brought
+up in phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless. *Done.*
 4. 2D: console, menus, HUD. *Done.*
-5. Input: DualShock and USB keyboard.
+5. Input: DualShock and USB keyboard. *Done.*
 6. 3D: world, lightmaps, water, sky, models, sprites, particles.
 7. Sound, CD music, save games.
 
@@ -170,6 +171,45 @@ clear colour until the 3D phase.
   (see [CVARS.md](CVARS.md)).
 - **Screenshots.** `screenshot` reads the last finished frame back out of VRAM, turning the GS
   bus around for it, and writes `id1/spasmNNNN.tga`.
+
+---
+
+## Input
+
+[input.cpp](src/ps2/input/input.cpp) implements QuakeSpasm's `IN_*` seam, in place of its SDL
+`in_sdl.c`, over the DualShock pad ([pad.cpp](src/ps2/input/pad.cpp): libpad on the ROM's PADMAN,
+locked into analog mode) and a USB keyboard ([keyboard.cpp](src/ps2/input/keyboard.cpp): the
+ps2kbd driver, read raw).
+
+**The pad** follows QuakeSpasm's game controller model. Each button sends one of the controller
+keys QuakeSpasm already has, so the menus take it (Cross is Enter, Circle is Back) and it binds
+like any other key (`bind RTRIGGER +attack`). id's `default.cfg` binds none of them, so the PS2
+adds the binds below right after it runs (`PS2_DefaultConfig`, called from `cmd.c`), which puts
+them back on the options menu's "Reset to defaults" too. Most are QuakeSpasm's own pad binds.
+
+| Button | Key | Default bind |
+| --- | --- | --- |
+| Cross / Circle | `ABUTTON` / `BBUTTON` | `+jump` / `+movedown` (swim down) |
+| Square / Triangle | `XBUTTON` / `YBUTTON` | |
+| L1 / R1 | `LSHOULDER` / `RSHOULDER` | `impulse 12` / `impulse 10` (previous / next weapon) |
+| L2 / R2 | `LTRIGGER` / `RTRIGGER` | `+jump` / `+attack` |
+| L3 / R3 | `LTHUMB` / `RTHUMB` | |
+| D-pad | the arrow keys | id's `+forward`, `+back`, `+left`, `+right` |
+| Start / Select | `ESCAPE` / `TAB` | the menu / id's `+showscores` |
+
+The left stick moves and strafes and the right one turns and looks, through QuakeSpasm's `joy_*`
+cvars (dead zones, response exponents, sensitivities, `joy_invert`, `joy_swapmovelook`) at its
+defaults. The defaults also turn `cl_alwaysrun` on, so the stick's deflection sets the pace all
+the way up to a run. Outside a game the left stick works as the arrow keys, and held buttons
+repeat, so menus scroll. Unlike QuakeSpasm's, `joy_enable 0` switches off only the sticks: the
+pad is all the input most PS2s have.
+
+**A USB keyboard** is optional (`in_keyboard`). It sends keys by position, as on a US layout, and
+types through QuakeSpasm's text input (`Char_Event`) with Shift applied; the last key pressed
+repeats while held. `in_debugkeys 1` prints every pad button and keyboard usage as it arrives,
+mapped or not. `in_keyboardmap <usage> <key>` points a USB usage at another key: PCSX2's
+passthrough keyboard sends usage 0x34, the apostrophe, for the host's `` ` ``, so 0x34 opens the
+console by default, and `in_keyboardmap 0x34 '` gives the apostrophe back on real hardware.
 
 ---
 

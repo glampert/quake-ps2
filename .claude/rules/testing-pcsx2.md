@@ -19,7 +19,8 @@
   and its boot `Missing host mapping for QKey` warnings are harmless. It sends HID usage
   `0x34` for the host's `` ` `` key, never `0x35`.
 - `Pad: DS2 Config Finished ... VS: Normal - VL: Normal` in the log means the vibration motors
-  were mapped (`padSetActAlign`).
+  were mapped (`padSetActAlign`). `AL: On - AB: Locked` in the same line means the pad took the
+  DualShock (analog) mode `pad.cpp` asks for, locked so the Analog button can't drop it.
 
 ## Working with the user's machine
 
@@ -41,9 +42,18 @@
   run` creates: `ln -s $PWD/id1 build/release/id1`.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
+- **The user can drive the pad** (a host controller bound to PCSX2's `[Pad1]`) and the
+  passthrough keyboard, which Claude can't. With `in_debugkeys 1` in `autoexec.cfg` every press
+  lands in the log (`pad: Cross down -> ABUTTON`, `keyboard: usage 0x04 down -> a`). Until the
+  3D view exists, bind a spare button to `viewpos` (prints position and angles) to show the
+  sticks moving the player, and start the test in a map (`map e1m1` in `autoexec.cfg`): over the
+  attract demo the camera is the demo's. Ask the user to close the PCSX2 window at the end
+  rather than quit from the menu (see below).
 - Runs read and rewrite `id1/config.cfg` (gitignored; QuakeSpasm writes it on quit).
   **Back it up before a scripted or perf run and restore it after.** Start every run of a
-  comparison from the same config.
+  comparison from the same config. The main menu's Quit exits at once, writing it and
+  `build/<config>/history.txt` (the console history): clean both up after a user's test that
+  quit that way.
 
 ## Scripting a session
 

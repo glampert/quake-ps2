@@ -3,7 +3,9 @@
 Every cvar registered by the PS2 backend under [src/ps2/](src/ps2/), with its default in the
 debug (`make`) and release (`make release`) builds. See the [README](README.md) for the
 bigger picture. QuakeSpasm's own cvars are not listed here, including the ones the backend
-registers in place of the QuakeSpasm files it replaced (`gamma`, `r_lerpmodels`, ...).
+registers in place of the QuakeSpasm files it replaced (`gamma`, `r_lerpmodels`, the `joy_*`
+cvars, ...). Where one of those means something different on the PS2 (`joy_enable`,
+`in_debugkeys`), the README's section on that subsystem says so.
 
 - **Arch.** marks `CVAR_ARCHIVE` cvars: they are written to `config.cfg` and read back on
   the next boot, so the value in your config, not the default, is what a run starts with.
@@ -19,6 +21,7 @@ More come back as each subsystem is ported.
 | `ps2_gs_latency` | 1 | 1 | Arch. | 1 leaves each frame drawing on the GS and shows it at the start of the next, so the GS rasterises while the EE builds the next frame, for one frame of input lag. 0 waits for the GS and flips at the end of each frame. Live. |
 | `ps2_fb_dither` | 0 | 0 | Arch. | The GS's ordered dither, which hides the banding of a 16-bit framebuffer on gradients. Live. |
 | `ps2_fb_16bit` | 1 | 1 | Arch. | 16-bit (5:5:5) framebuffers instead of 32-bit: 560 KB of VRAM each instead of 1120 KB, which the texture heap gets. Read once as the GS comes up, from `config.cfg` (or `+ps2_fb_16bit 0` on the command line), so a change applies on the next run. |
+| `in_keyboard` | 1 | 1 | Arch. | The USB keyboard. Its IOP driver (usbd and ps2kbd) loads the first time this is on: at boot it is read from `config.cfg` ahead of time, so with it off there the driver never loads. Switching it off lets go of any keys the keyboard holds. Live. |
 | `ps2_debug_overlays` | 1 | 0 | Arch. | Master switch for the debug panels below, all but the FPS counter. Each panel also has its own switch. |
 | `ps2_show_fps` | 1 | 0 | Arch. | FPS counter, top right: green while every frame made its vsync, yellow once one missed, red at half the refresh rate or below. |
 | `ps2_show_profile` | 1 | 0 | Arch. | Frame times per profiled event, under the FPS counter. Draws in profile builds only. |

@@ -48,7 +48,7 @@ paths:
   bounce buffers) must be `alignas(64)` and sized in whole 64-byte units. The DMAC ignores
   low address bits, and 64 bytes is the D-cache line, so a neighbour's dirty line can be
   written back over the DMA'd bytes. A plain `static char[128]` only gets 8-byte alignment.
-  Check with `mips64r5900el-ps2-elf-nm build/debug/quake2_unstripped.elf | grep <sym>`.
+  Check with `mips64r5900el-ps2-elf-nm build/debug/quake_unstripped.elf | grep <sym>`.
   `SyncDCache(buf, buf + size)` before the transfer is the matching half.
 
 ## IOP modules, ROM FILEIO, memory card
@@ -56,7 +56,7 @@ paths:
 - Boot (`system/iop_boot.cpp`): the `host:` fast path doesn't reset the IOP.
   `sbv_patch_enable_lmb()` alone lets `SifExecModuleBuffer` load embedded IRX without
   disturbing open `host:` handles. The USB path does a full IOP reset, then sbv patches and
-  BDM. Game data is located *before* `Qcommon_Init`.
+  BDM. Game data is located *before* `Host_Init`.
 - `rom0:FILEIO`'s `remove()` RPC handler lacks a `break`: every `remove(path)` on the fio
   backend also runs `mkdir(path)`. `sbv_patch_fileio()` fixes it (applied on the host: path;
   `ps2::sys::FileIoRemovePatched()` reports it). fio has no `rename()` (`ENOSYS`). The USB

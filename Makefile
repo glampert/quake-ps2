@@ -75,6 +75,8 @@ PS2_CXX_SRC =                         \
 	ps2/math/vec_mat.cpp              \
 	ps2/net/net.cpp                   \
 	ps2/input/input.cpp               \
+	ps2/input/pad.cpp                 \
+	ps2/input/keyboard.cpp            \
 	ps2/audio/snd.cpp                 \
 	ps2/audio/cd_audio.cpp            \
 	ps2/renderer/gs.cpp               \
@@ -131,6 +133,8 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/renderer/texture.cpp          \
 	ps2/renderer/scrap_atlas.cpp      \
 	ps2/system/iop_boot.cpp           \
+	ps2/input/keyboard.cpp            \
+	ps2/input/pad.cpp                 \
 	ps2/renderer/vid.cpp              \
 	ps2/tests/draw_cube.cpp           \
 	ps2/debug/scr_print.cpp           \
