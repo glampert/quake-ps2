@@ -48,7 +48,7 @@ value, or to id's original, and tagged `[PS2_QUAKE]` where it is defined (2026-1
 
 Measure with `ps2_memstats` and `hunk_print` before raising any of them.
 
-## Measured (debug build, shareware data, sound off, nothing rendered)
+## Measured (debug build, shareware data; the first figures with sound off and nothing rendered)
 
 - e1m1 before the limits pass: ELF + system 5.75 MB (`.bss` 3.96 MB), hunk 12.42 MB in use,
   untagged malloc 7.78 MB, **2.44 MB** of RAM left.
@@ -58,7 +58,9 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   4.42, e1m3 4.33, **e1m4 4.71** (the peak), e1m5 4.33, e1m6 3.88, e1m7 2.83, e1m8 3.62 MB.
   About 1.8 MB of it is fixed: zone, progs, sockets, particles, console.
 - The 16 MB hunk is a placeholder. The sound cache (which lives in the hunk) and the renderer
-  aren't in yet; size it once they are.
+  aren't in yet; size it once they are. With sound on (2026-10-08), demo1's sounds hold 3.26 MB
+  of the hunk's cache: 122 sounds, kept resampled to the 22050 Hz mixing rate (twice their
+  11025 Hz size; 44100 would be four times).
 - Renderer, outside the hunk, so far: the frame's DMA chain, one 1 MB block
   (`MemTag::Renderer`) that `VID_Init` allocates for the whole run, and the `ps2::tex` pool
   (640 `Texture` slots) in `.bss`. Boot shows 3.13 MB for ELF + system with the 2D in. In

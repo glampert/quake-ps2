@@ -49,6 +49,10 @@ levels of a BSP texture and keeps the light samples one byte per luxel (no `.lit
 float rather than ericw's double. `mathlib.c`'s `VectorLength` and `VectorNormalize` use
 `sqrtf`: libm's `sqrt` is double, and soft-float.
 
+For sound: `snd_dma.c` defaults `snd_mixspeed` to 22050 instead of 44100 (the README's Sound
+section says why), and `host.c` wraps the `S_Update` calls in the `SndMix` profile probe
+(`ps2/debug/engine_profile.h`), the first of the engine probes to be placed.
+
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the
 loading plaque, and `screenshot`, TGA only, over `PS2_ReadPixels`; it also defaults

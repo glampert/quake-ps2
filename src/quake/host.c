@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "bgmusic.h"
+#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]: the SndMix probe below
 #include <setjmp.h>
 
 /*
@@ -753,6 +754,7 @@ void _Host_Frame (float time)
 
 // update audio
 	BGM_Update();	// adds music raw samples and/or advances midi driver
+	PS2Quake_ProfileBegin(PS2_PROF_SND_MIX); // [PS2_QUAKE]: the mixer's cost, for the profiler
 	if (cls.signon == SIGNONS)
 	{
 		S_Update (r_origin, vpn, vright, vup);
@@ -760,6 +762,7 @@ void _Host_Frame (float time)
 	}
 	else
 		S_Update (vec3_origin, vec3_origin, vec3_origin, vec3_origin);
+	PS2Quake_ProfileEnd(PS2_PROF_SND_MIX); // [PS2_QUAKE]
 
 	CDAudio_Update();
 

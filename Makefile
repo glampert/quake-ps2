@@ -78,6 +78,8 @@ PS2_CXX_SRC =                         \
 	ps2/input/pad.cpp                 \
 	ps2/input/keyboard.cpp            \
 	ps2/audio/snd.cpp                 \
+	ps2/audio/audsrv_device.cpp       \
+	ps2/audio/mix_ring.cpp            \
 	ps2/audio/cd_audio.cpp            \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
@@ -139,6 +141,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/renderer/texture.cpp          \
 	ps2/renderer/scrap_atlas.cpp      \
 	ps2/system/iop_boot.cpp           \
+	ps2/audio/audsrv_device.cpp       \
 	ps2/renderer/brush.cpp            \
 	ps2/input/keyboard.cpp            \
 	ps2/input/pad.cpp                 \

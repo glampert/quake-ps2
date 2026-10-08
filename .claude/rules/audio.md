@@ -6,12 +6,49 @@ paths:
 
 # Audio and CD music
 
-> **Quake II facts.** Everything below was measured or decided on the Quake II port. Keep
-> what still holds and rewrite the rest when this subsystem is ported to Quake 1.
+## Sound (`snd.cpp`, `audsrv_device.*`, `mix_ring.*`)
 
-The README's "Sound" section covers `AudsrvDevice` and `MixRing`. The decisions and
-measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
-`tools/host/musenc.cpp`, `make music`):
+The README's "Sound" section has the design. The facts behind it:
+
+- **audsrv's IOP thread never checks its queue for data.** It takes a feed (512 samples at
+  48 kHz: 235 frames, 10.7 ms, at 22050 Hz) every tick whether or not the EE wrote any, so a
+  queue that runs dry replays the stale ring (ten feeds, 106 ms) in a loop: a buzz through every
+  level load. The Quake II port fed it once a frame from the main thread and has that bug. Here
+  the feeder thread pads with silence instead. Read `iop/sound/audsrv/src/audsrv.c` in the SDK
+  sources before changing anything about the queue.
+- **audsrv doesn't play until the first `audsrv_play_audio()`.** `audsrv_set_format` leaves
+  the ring half full (1175 frames at 22050) with `playing` off, and the read cursor stays put
+  until a play call turns it on. A feeder that only tops the queue up to 940 frames never made
+  that call, and the game stayed silent. `AudsrvDevice::Init` sends one frame of silence.
+- **audsrv's EE library is single-threaded:** every call goes through one static `sbuff` and
+  one RPC client. Only the feeder calls it once `SNDDMA_Init` returns.
+- **The R5900 has no LL/SC.** The feeder and the main thread share only single loads and
+  stores (`std::atomic` with relaxed order compiles to plain `lw`/`sw`; check `nm` for
+  `__atomic`/`__sync` calls after changing them). No read-modify-write across threads.
+- **Timer alarms:** `SetTimerAlarm`'s handler runs inside ps2sdk's T2 interrupt handler, and
+  returning a nonzero interval re-arms it (`timer.c`), so one call gives a periodic tick.
+  Don't call `ExitHandler()` in the callback: the T2 handler does it once its alarm list is
+  done (`DelayThread`'s callback does, which kernel.h's comment says not to).
+- **Verified by trace (PCSX2, 2026-10-08):** the feeder woke every 5.008-5.012 ms, through a
+  `map` load too, so a higher-priority thread woken from the alarm does preempt the main
+  thread. The submit cursor advanced at 22050 frames a second (`soundinfo` twice, 10 s apart),
+  and during a load the queue bottomed at 235 frames while silence was padded in.
+- **PCSX2 can't dump its audio here.** `[SPU2/Debug] Log_WAVE_Output` writes nothing in the
+  release PCSX2 build. Checking the sound itself needs the user's ears.
+- **Rate (22050):** see the README. audsrv's upsamplers are sample-and-hold lookup tables
+  (`upsamplers.c`), so a low output rate also images more on the way to 48 kHz.
+- **Cost (PCSX2, debug, demo1, frame log):** `SndMix` (all of `S_Update` on the main thread)
+  635 µs a frame when the main thread submitted, 415 µs with the feeder. `Sound` is now the
+  feeder's wall time per frame, ~450 µs, mostly spent blocked on the IOP. demo1's sounds take
+  3.26 MB of the hunk's cache (122 sounds, all but one 8-bit).
+
+## CD music
+
+> **Quake II facts.** Everything below was measured or decided on the Quake II port. Keep
+> what still holds and rewrite the rest when music is ported to Quake 1.
+
+The decisions and measurements behind CD music (`cd_audio.cpp`, `music_stream.*`,
+`spu_adpcm.h`, `tools/host/musenc.cpp`, `make music`):
 
 - **Format (the user's choice):** SPU2 ADPCM, 22050 Hz stereo (= `dma.speed`, so no
   resampling), 2048-byte chunk interleave so the files stay SPU2-voice-streamable later, and a

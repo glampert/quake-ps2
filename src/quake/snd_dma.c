@@ -77,7 +77,11 @@ cvar_t		precache = {"precache", "1", CVAR_NONE};
 cvar_t		loadas8bit = {"loadas8bit", "0", CVAR_NONE};
 
 cvar_t		sndspeed = {"sndspeed", "11025", CVAR_NONE};
-cvar_t		snd_mixspeed = {"snd_mixspeed", "44100", CVAR_NONE};
+// [PS2_QUAKE]: the PS2 mixes at 22050 Hz, not 44100. Quake's sounds are 11025 Hz, and every one is
+// stored resampled to the output rate (ResampleSfx), so 44100 would quadruple the sound cache and
+// the paint loops, and the lowpass filter that comes with it (S_LowpassFilter) costs more EE time
+// again. 22050 halves both, and is the CD music's rate, so the soundtrack plays unresampled.
+cvar_t		snd_mixspeed = {"snd_mixspeed", "22050", CVAR_NONE};
 
 #if defined(_WIN32)
 #define SND_FILTERQUALITY_DEFAULT "5"

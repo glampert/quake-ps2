@@ -25,8 +25,9 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 `host:`, draws its console, menus and status bar, and takes the DualShock pad and a USB
 keyboard, through the attract-mode demos and every shareware map. The 3D view draws all of it:
 the world - textured, lightmapped, with its fullbright texels, warping water and scrolling sky -
-and the brush models, monsters, items, view weapon, sprites and particles. Its PC-sized limits
-are cut down to fit the PS2's 32 MB. The port is brought up in phases, each checked in PCSX2:
+and the brush models, monsters, items, view weapon, sprites and particles, and the sound effects
+play through the SPU2. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is
+brought up in phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
@@ -35,7 +36,7 @@ are cut down to fit the PS2's 32 MB. The port is brought up in phases, each chec
 5. Input: DualShock and USB keyboard. *Done.*
 6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which no
    shareware map uses.
-7. Sound, CD music, save games.
+7. Sound, CD music, save games. *Sound is in.*
 
 This section says what works as each phase lands.
 
@@ -251,6 +252,44 @@ repeats while held. `in_debugkeys 1` prints every pad button and keyboard usage 
 mapped or not. `in_keyboardmap <usage> <key>` points a USB usage at another key: PCSX2's
 passthrough keyboard sends usage 0x34, the apostrophe, for the host's `` ` ``, so 0x34 opens the
 console by default, and `in_keyboardmap 0x34 '` gives the apostrophe back on real hardware.
+
+---
+
+## Sound
+
+QuakeSpasm's mixer (`snd_dma.c`, `snd_mix.c`, `snd_mem.c`) runs unchanged. The backend
+([audio/](src/ps2/audio/)) implements its `SNDDMA_*` seam in place of `snd_sdl.c`:
+
+- [`AudsrvDevice`](src/ps2/audio/audsrv_device.h) brings up `libsd.irx` and `audsrv.irx` (both
+  embedded in the ELF) and opens a 16-bit stereo stream. The SPU2 is only reachable from the IOP,
+  so every mixed byte crosses SIF through audsrv's RPCs, and audsrv upsamples it to the SPU2's
+  48 kHz.
+- [`MixRing`](src/ps2/audio/mix_ring.h) is the 64 KB buffer the mixer paints into. The play
+  position reported back to the engine is how far the backend has submitted, not where the SPU2
+  is, as WinQuake's waveOut backend did: it advances at the playback rate and never goes back,
+  which is what QuakeSpasm's `GetSoundtime` needs.
+- **The feeder** ([snd.cpp](src/ps2/audio/snd.cpp)) plays the part a sound card's DMA plays on a
+  PC. It is a thread one priority level above the main thread, woken every 5 ms by a timer
+  alarm, that keeps audsrv's queue 43 ms deep from what the mixer has painted. audsrv's IOP
+  thread never checks for an empty queue: fed once a frame, any stall longer than its 106 ms
+  queue (a level load, a save) would replay the last 106 ms in a loop, a loud buzz. The feeder
+  carries on through a stall, padding the queue with silence once the painted audio runs out,
+  without moving the position the engine reads back, so the mix picks up where it stopped. The
+  IOP round trips happen on its thread too, off the main thread's frame.
+
+**The mixing rate** is 22050 Hz: QuakeSpasm's `snd_mixspeed`, which defaults to 22050 on the PS2
+instead of 44100. Quake's sound effects are 11025 Hz, and each is kept resampled to the mixing
+rate in the hunk's cache, so 44100 would quadruple that (3.3 MB at 22050 in demo1) and the
+mixing, and bring in QuakeSpasm's lowpass filter on top. 22050 is also the CD music's rate.
+`-mixspeed <rate>` on the command line picks another rate audsrv takes: 11025, 12000, 22050,
+24000, 32000, 44100 or 48000. Sound starts before `config.cfg` runs, so the cvar itself can't
+change it.
+
+In PCSX2 (debug build, demo1) the mixing costs about 0.42 ms of the main thread's frame. The
+feeder is awake about 0.45 ms a frame, most of it waiting on the IOP while the main thread
+runs. A new sound reaches the speakers after `_snd_mixahead` (0.1 s) plus the 43 ms queue.
+`-nosound` turns sound off, as on QuakeSpasm, and an IOP driver that doesn't come up only costs
+the sound.
 
 ---
 

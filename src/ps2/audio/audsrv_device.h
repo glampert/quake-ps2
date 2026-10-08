@@ -9,8 +9,9 @@
  *
  *        The SPU2 is only reachable from the IOP - there is no EE-side mapping of its
  *        registers - so every byte the mixer produces crosses SIF through audsrv. All
- *        of its entry points are blocking RPCs, but none of the ones used here waits on
- *        buffer space, so the whole path stays on the main thread.
+ *        of its entry points are blocking RPCs, and audsrv's EE library runs every one of
+ *        them through a single static buffer, so only one thread may call into it: once
+ *        Init has returned, that is snd.cpp's feeder thread.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -37,9 +38,17 @@ public:
 
     bool Available() const { return m_ready; }
 
+    // What audsrv's IOP thread takes from the queue each time it wakes, 93.75 times a
+    // second: 512 samples at 48kHz, in frames at the stream's rate. 235 at 22050Hz.
+    int FeedFrames() const { return m_feedFrames; }
+
+    // The most the queue can hold, in frames: ten feeds (106ms at any rate), less the
+    // guard frame FreeBytes() holds back.
+    int CapacityFrames() const { return (m_feedFrames * 10) - 1; }
+
     // Free space in audsrv's IOP ring buffer, rounded down to whole stereo frames and
     // with one frame held back (see the guard note in the .cpp). Zero when the queue
-    // is full, which is the normal steady state - it is what paces submission.
+    // is full.
     int FreeBytes() const;
 
     // Appends to the IOP ring. sizeBytes must be a multiple of kFrameBytes and no
@@ -53,7 +62,8 @@ private:
     // fail the module load and leak the EE-side RPC thread audsrv_init() spawns.
     static bool StartIopSide();
 
-    bool m_ready = false;
+    bool m_ready      = false;
+    int  m_feedFrames = 0;
 };
 
 } // namespace ps2::audio

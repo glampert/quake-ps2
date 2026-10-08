@@ -3,17 +3,20 @@
  * Brief: PCM output device over the audsrv IOP driver. See audsrv_device.h.
  *
  *  audsrv keeps a ring buffer on the IOP sized to ten of its 512-sample feed blocks -
- *  9400 bytes, about 100ms, at 22050Hz/16bit/stereo - and a thread that drains it into
+ *  9400 bytes, about 106ms, at 22050Hz/16bit/stereo - and a thread that drains it into
  *  the SPU2 93.75 times a second, upsampling to the SPU2's native 48kHz on the way.
- *  Two of its quirks shape everything below:
+ *  Three of its quirks shape everything below and in snd.cpp:
  *
  *   - audsrv_play_audio() copies only as much as the ring has room for, but the EE-side
  *     wrapper advances its source pointer by the size it was *asked* for. Submitting
  *     more than audsrv_available() therefore drops audio silently.
  *   - The ring reports "write cursor == read cursor" as empty rather than full, so
  *     filling it right to the last byte makes a full queue read back as drained.
+ *   - The IOP thread never checks the queue for data: it takes a feed's worth every
+ *     time, so a queue left to run dry replays its stale contents - the last 106ms -
+ *     over and over until it is fed again. snd.cpp's feeder thread exists for that.
  *
- *  FreeBytes() answers both: it is the only size Enqueue() may ever be handed.
+ *  FreeBytes() answers the first two: it is the only size Enqueue() may ever be handed.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -65,7 +68,7 @@ bool AudsrvDevice::StartIopSide()
     const int err = audsrv_init();
     if (err != AUDSRV_ERR_NOERROR)
     {
-        Com_Printf("WARNING: audsrv_init failed (%d: %s)\n", err, audsrv_get_error_string());
+        Con_Printf("WARNING: audsrv_init failed (%d: %s)\n", err, audsrv_get_error_string());
         return false;
     }
 
@@ -90,16 +93,25 @@ bool AudsrvDevice::Init(const int sampleRateHz)
     const int err = audsrv_set_format(&format);
     if (err != AUDSRV_ERR_NOERROR)
     {
-        Com_Printf("WARNING: audsrv_set_format(%dHz, %d bit, %d ch) failed (%d: %s)\n",
+        Con_Printf("WARNING: audsrv_set_format(%dHz, %d bit, %d ch) failed (%d: %s)\n",
                    sampleRateHz, kSampleBits, kChannels, err, audsrv_get_error_string());
         return false;
     }
 
-    // Quake scales every sample by s_volume as it mixes (snd_scaletable / snd_vol),
-    // so the hardware side stays wide open.
+    // Quake scales every sample by its volume cvar as it mixes (snd_scaletable /
+    // snd_vol), so the hardware side stays wide open.
     audsrv_set_volume(MAX_VOLUME);
 
-    m_ready = true;
+    // audsrv_set_format leaves the ring half full (of whatever it last held: silence, on a
+    // fresh IOP), and the IOP thread doesn't move through it until the first
+    // audsrv_play_audio() switches playback on. A queue only ever topped up to below that
+    // half would never start, so one frame of silence starts it here.
+    alignas(16) static const u8 s_startFrame[kFrameBytes] = {};
+    audsrv_play_audio(reinterpret_cast<const char *>(s_startFrame), kFrameBytes);
+
+    // As audsrv_set_format sizes its feed: 512 output samples' worth at this rate.
+    m_feedFrames = (512 * sampleRateHz) / 48000;
+    m_ready      = true;
     return true;
 }
 
@@ -110,10 +122,9 @@ void AudsrvDevice::Shutdown()
         return;
     }
 
-    // Deliberately not audsrv_quit(): leaving the IOP modules and the audsrv EE RPC
-    // thread up makes snd_restart - which cl_main.c triggers on s_khz changes and
-    // cinematics - a plain audsrv_set_format() instead of a full teardown. Nothing
-    // on the PS2 ever returns from main() anyway.
+    // Deliberately not audsrv_quit(): QuakeSpasm shuts sound down only on the way out
+    // (Host_Shutdown), and leaving the IOP modules and the audsrv EE RPC thread up means
+    // a later Init would be a plain audsrv_set_format() instead of a full bring-up.
     audsrv_stop_audio();
     m_ready = false;
 }
