@@ -77,6 +77,7 @@ PS2_CXX_SRC =                         \
 	ps2/input/input.cpp               \
 	ps2/input/pad.cpp                 \
 	ps2/input/keyboard.cpp            \
+	ps2/input/rumble.cpp              \
 	ps2/audio/snd.cpp                 \
 	ps2/audio/audsrv_device.cpp       \
 	ps2/audio/mix_ring.cpp            \

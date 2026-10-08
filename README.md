@@ -255,6 +255,12 @@ the way up to a run. Outside a game the left stick works as the arrow keys, and 
 repeat, so menus scroll. Unlike QuakeSpasm's, `joy_enable 0` switches off only the sticks: the
 pad is all the input most PS2s have.
 
+**Rumble** ([rumble.cpp](src/ps2/input/rumble.cpp)) answers what happens to the player with short
+bursts on the pad's two motors, which overlap when they run at the same time: each weapon's shots
+(by the muzzle flash the server flags on the player), damage taken (from `V_ParseDamage`, stronger
+the harder the hit), pickups (the bonus flash every pickup sends) and powerups coming on. It is
+off in menus, the console, demos and while paused; `in_rumble 0` turns it off.
+
 **A USB keyboard** is optional (`in_keyboard`). It sends keys by position, as on a US layout, and
 types through QuakeSpasm's text input (`Char_Event`) with Shift applied; the last key pressed
 repeats while held. `in_debugkeys 1` prints every pad button and keyboard usage as it arrives,

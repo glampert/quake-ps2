@@ -20,6 +20,7 @@
 #include "ps2/engine_hooks.h"
 #include "ps2/input/keyboard.h"
 #include "ps2/input/pad.h"
+#include "ps2/input/rumble.h"
 #include "ps2/system/sys.h"
 #include "ps2/save/save_system.h"
 
@@ -467,6 +468,7 @@ void IN_Init()
     {
         Con_Printf("Gamepad input initialised.\n");
     }
+    ps2::input::InitRumble(s_gamepad);
 
     // Quiet when no keyboard driver comes up: it is optional hardware.
     SyncKeyboardEnabled();
@@ -488,6 +490,7 @@ void IN_Commands()
 {
     s_gamepad.Update();
     SendPadKeys();
+    ps2::input::UpdateRumble();
 }
 
 // Drains the keyboard's queue into key events, and repeats the held key.

@@ -280,6 +280,8 @@ void V_ParseDamage (void)
 	for (i=0 ; i<3 ; i++)
 		from[i] = MSG_ReadCoord (cl.protocolflags);
 
+	PS2_RumbleDamage (armor, blood); // [PS2_QUAKE]: the pad's rumble
+
 	count = blood*0.5 + armor*0.5;
 	if (count < 10)
 		count = 10;
@@ -354,6 +356,8 @@ When you run over an item, the server sends this command
 */
 void V_BonusFlash_f (void)
 {
+	PS2_RumblePickup (); // [PS2_QUAKE]: the pad's rumble
+
 	cl.cshifts[CSHIFT_BONUS].destcolor[0] = 215;
 	cl.cshifts[CSHIFT_BONUS].destcolor[1] = 186;
 	cl.cshifts[CSHIFT_BONUS].destcolor[2] = 69;

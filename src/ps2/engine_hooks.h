@@ -40,6 +40,12 @@ void PS2_ResetScissor2D(void);
 // V_PolyBlend's full-screen tint: damage, powerups, underwater. 'rgba' is v_blend, each 0 to 1.
 void PS2_DrawPolyBlend(const float rgba[4]);
 
+// The pad's rumble for what view.c hears about the player (src/ps2/input/rumble.cpp): damage
+// taken, from V_ParseDamage, with the armor and health it cost; and a pickup, from the bonus
+// flash ("bf") every item's touch sends.
+void PS2_RumbleDamage(int armor, int blood);
+void PS2_RumblePickup(void);
+
 // ------------------------------------------------------------------------------------------------
 // Screenshots (gl_screen.c)
 // ------------------------------------------------------------------------------------------------
