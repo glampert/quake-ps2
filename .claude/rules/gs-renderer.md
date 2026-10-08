@@ -11,10 +11,10 @@ bracket, the screenshot readback), `draw.cpp` (`Draw_*`), `texmgr.cpp` (`TexMgr_
 `refresh.cpp` (`R_*`). Under them, from the Quake II port: `render_system.*` (`ps2::rs`: VIF1
 chains, batches, `DrawTriangles`, `Submit`), `cmd_buffer.*`, `gs.*` (GS front-end, register
 values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap_atlas.*`,
-`clip.*` (EE sky clipper), `vu1.*` (VU memory layout, microprogram declarations). The 3D view:
-`view.cpp` (`R_RenderView`: the world, the entity passes, the glows), `brush.cpp` (per-surface
-draw data, built by `R_NewMap`), `lightmap.cpp`, `alias.cpp` (MDL models), `sprite.cpp` and
-`particles.cpp`. `sky.cpp` is still Quake II's, unbuilt until its part of the 3D phase.
+`vu1.*` (VU memory layout, microprogram declarations). The 3D view: `view.cpp` (`R_RenderView`:
+the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, built by
+`R_NewMap`), `lightmap.cpp`, `alias.cpp` (MDL models), `sprite.cpp`, `particles.cpp` and
+`sky.cpp`. VU1 clips everything: the Quake II port's EE clipper (`clip.*`) went with its sky.
 
 - **Set the mip constant every frame** (`rs::SetTextureSampling`, from the view's focal
   length; see `view.cpp`'s `SetUpTextureSampling`). Its default of 0 has the GS pick levels by
@@ -31,6 +31,13 @@ draw data, built by `R_NewMap`), `lightmap.cpp`, `alias.cpp` (MDL models), `spri
 - **Only one stream may claim the command buffer at a time.** An alias model draws through a
   `LerpStream` of its own, so the view submits its `TriangleStream` before each alias model
   (`rs::Submit` is free when the stream is empty).
+- **A stream holds its transform by pointer**, so a pass that gathers under a local matrix (a
+  brush entity's) must submit before the matrix goes out of scope; a later local at the same
+  address would otherwise draw the earlier vertices under the new matrix.
+- **The z-test has no "farther" (LEQUAL in the GS's inverted depth)**: NEVER, ALWAYS, GEQUAL
+  and GREATER only. QuakeSpasm's sky needs it (its layers draw where the sky surfaces' depth
+  is), so sky.cpp draws the layers first, then the surfaces with `DrawFlags::DepthOnly` - a
+  blend that keeps the framebuffer, `(0 - 0) * As + Cd`, with depth writes on.
 
 ## Frame model: 2D and 3D interleave
 

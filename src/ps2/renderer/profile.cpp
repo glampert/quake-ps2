@@ -114,9 +114,7 @@ struct FrameSample
     u32 cycles[kNumEvents];
 
     // rs::DrawStats
-    int tris, trisClipped, trisCulled;
-    int trisClipNearOnly, trisClipNoNear, trisClipMixed, trisClipFar, clipMaxVerts;
-    int batches, particles;
+    int tris, batches, particles;
 
     // vram::Stats. Uploads are bursty around map transitions and each one that
     // followed an eviction also forced a GS drain, so these are the first thing
@@ -181,9 +179,7 @@ void WriteBatch()
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
                     "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,"
-                    "tris,trisClipped,trisCulled,"
-                    "clipNear,clipNoNear,clipMixed,clipFar,clipMaxV,"
-                    "batches,particles,"
+                    "tris,batches,particles,"
                     "vramUploads,vramOomSyncs,vramResident,"
                     "chainKB,chainKicks,chainDrains\n");
         std::printf("FLOG#note,timings are microseconds\n");
@@ -209,11 +205,8 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-                          s.tris, s.trisClipped, s.trisCulled,
-                          s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed,
-                          s.trisClipFar, s.clipMaxVerts,
-                          s.batches, s.particles,
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          s.tris, s.batches, s.particles,
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
                           s.chainKB, s.chainKicks, s.chainDrains);
         }
@@ -286,16 +279,9 @@ void FrameLogCapture()
     // These still hold the finished frame's values here: rs::BeginFrame, which clears the
     // submission counters, has not run yet for the new frame.
     const rs::DrawStats & r = rs::GetStats();
-    s.tris             = r.trisDrawn;
-    s.trisClipped      = r.trisClipped;
-    s.trisCulled       = r.trisCulled;
-    s.trisClipNearOnly = r.trisClipNearOnly;
-    s.trisClipNoNear   = r.trisClipNoNear;
-    s.trisClipMixed    = r.trisClipMixed;
-    s.trisClipFar      = r.trisClipFar;
-    s.clipMaxVerts     = r.clipMaxVerts;
-    s.batches          = r.drawBatches;
-    s.particles        = r.particles;
+    s.tris      = r.trisDrawn;
+    s.batches   = r.drawBatches;
+    s.particles = r.particles;
 
     const vram::Stats v = vram::GetStats();
     s.vramUploads  = v.uploadsThisFrame;

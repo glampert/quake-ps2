@@ -23,18 +23,18 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 
 **Early bring-up.** QuakeSpasm boots and runs on the PS2: in PCSX2 it finds the game data on
 `host:`, draws its console, menus and status bar, and takes the DualShock pad and a USB
-keyboard, through the attract-mode demos and every shareware map. The 3D view draws the world -
-textured, lightmapped, with its fullbright texels and warping water - and the brush models,
-monsters, items, view weapon, sprites and particles; the sky's scrolling layers are still to
-come. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is brought up in
-phases, each checked in PCSX2:
+keyboard, through the attract-mode demos and every shareware map. The 3D view draws all of it:
+the world - textured, lightmapped, with its fullbright texels, warping water and scrolling sky -
+and the brush models, monsters, items, view weapon, sprites and particles. Its PC-sized limits
+are cut down to fit the PS2's 32 MB. The port is brought up in phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless. *Done.*
 4. 2D: console, menus, HUD. *Done.*
 5. Input: DualShock and USB keyboard. *Done.*
-6. 3D: world, lightmaps, water, sky, models, sprites, particles. *In progress: the sky remains.*
+6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which no
+   shareware map uses.
 7. Sound, CD music, save games.
 
 This section says what works as each phase lands.
@@ -148,8 +148,8 @@ either way, as on the desktop, and is the way to script a session.
 ## Rendering
 
 QuakeSpasm draws through the public functions of its OpenGL renderer, and the backend
-implements those directly, with no GL underneath. The 2D and the 3D view draw; the sky's
-scrolling layers are the rest of the 3D phase.
+implements those directly, with no GL underneath. All of it draws but fog (`gl_fog.c` still
+parses it, so a map that sets it plays, unfogged).
 
 - **Video and the frame** ([vid.cpp](src/ps2/renderer/vid.cpp)). `VID_Init` brings the GS up at
   640x448 with two framebuffers, 16-bit by default (`ps2_fb_16bit`), and a 16-bit z-buffer.
@@ -177,7 +177,13 @@ scrolling layers are the rest of the 3D phase.
   corners of a 32-unit grid their surfaces are cut on (so `gl_subdivide_size` does nothing).
   Brush entities run the same passes
   under their own transform. With `gl_flashblend` the dynamic lights glow as additive fans
-  instead of lighting the walls. The sky draws flat in QuakeSpasm's `r_fastsky` colour for now.
+  instead of lighting the walls.
+- **Sky** ([sky.cpp](src/ps2/renderer/sky.cpp)), in place of `gl_sky.c`: QuakeSpasm's two
+  scrolling layers on a box around the camera, tessellated by `r_sky_quality` (12, at most 16
+  here) and drawn only over what the sky surfaces in view cover; `r_fastsky` draws the flat
+  colour. The GS's z-test can't pass "farther", which QuakeSpasm's drawing order needs, so the
+  order turns round: the layers go down first, then the sky surfaces' depth alone, then the
+  world. Skyboxes (`sky`, worldspawn's `sky`) need external images, which the PS2 doesn't load.
 - **Alias models** ([alias.cpp](src/ps2/renderer/alias.cpp)), in place of `r_alias.c` and
   `gl_mesh.c`: the monsters, items and view weapon, lerped between two poses on VU1. The EE
   copies each corner's two pose words into the frame as they are, and VU1 converts, lerps and

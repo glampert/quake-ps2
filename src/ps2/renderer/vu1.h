@@ -198,10 +198,9 @@ constexpr float kGuardBandScale = 1.0f / kGuardBandNdcLimit;
 // triangle with it through the ADC bit. Clipping a hair early means a survivor is strictly
 // inside and the judgement can only agree.
 //
-// clip::kClipEpsilon is the EE clipper's version of this and exists for the same reason. This one
-// is relative rather than absolute, so the margin holds at any depth; 0.1% of the guard band is
-// some five hundred times the rounding it covers and still far below anything visible, the band
-// being about five times the half-screen.
+// Relative rather than absolute, so the margin holds at any depth: 0.1% of the guard band is some
+// five hundred times the rounding it covers and still far below anything visible, the band being
+// about five times the half-screen.
 constexpr float kVuClipShrink = 0.001f;
 
 // What the clipper multiplies a plane distance by before reading its sign.

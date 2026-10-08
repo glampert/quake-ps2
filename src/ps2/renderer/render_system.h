@@ -11,7 +11,6 @@
 #include "ps2/common.h"
 #include "ps2/debug/profile.h"
 #include "ps2/math/vec_mat.h"
-#include "ps2/renderer/clip.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
@@ -26,9 +25,10 @@ namespace ps2::rs {
 
 // Optional batch draw flags (OR-able).
 //
-// Blended, Additive and Modulate pick a blend equation and are mutually exclusive - passing more
-// than one asserts. Each also turns the prim's ABE bit on and masks depth writes, so a blended
-// batch sorts against opaque geometry but never occludes it. The rest are independent.
+// Blended, Additive, Modulate and DepthOnly pick a blend equation and are mutually exclusive -
+// passing more than one asserts. Each turns the prim's ABE bit on, and the first three mask depth
+// writes, so a blended batch sorts against opaque geometry but never occludes it. The rest are
+// independent.
 //
 // Modulate scales the framebuffer by the batch's *alpha*; the GS blend unit has no second colour,
 // so a luxel's colour cannot come through here and arrives via the diffuse pass's vertex colour
@@ -45,6 +45,7 @@ enum class DrawFlags : u32
     DynamicLights = 1 << 6, // Colour summed from SetDynamicLights on the VU, not taken from the vertex.
     Warped        = 1 << 7, // Run the warp block on VU1: UVs arrive in raw texels and animate there.
     WarpFlowing   = 1 << 8, // With Warped: also drift the surface along S (SURF_FLOWING).
+    DepthOnly     = 1 << 9, // Writes depth alone, the colour left as it was: the sky's surfaces.
 };
 
 constexpr DrawFlags operator|(DrawFlags a, DrawFlags b)
@@ -92,35 +93,13 @@ constexpr float CullSignFor(const FaceCull cull)
 // ------------------------------------------------------------------------------------------------
 
 #if PS2_QUAKE_PROFILE
-// What the renderer submitted this frame; what the view decided to submit is view::DrawStats.
-// Counted by the streams and the draws below, so no caller adds to it. Cleared by BeginFrame.
+// What the renderer submitted this frame. Counted by the streams and the draws below, so no caller
+// adds to it. Cleared by BeginFrame.
 struct DrawStats
 {
-    // VU1 clips, so what it cuts and drops is invisible from here: trisDrawn counts
-    // what was *handed* to it, and the three below now describe only sky, the one
-    // path that still cuts on the EE. They were every draw's numbers before the
-    // clipper moved.
+    // VU1 clips, so what it cuts and drops is invisible from here: this counts what was *handed*
+    // to it.
     int trisDrawn;   // Triangles handed to VU1.
-    int trisClipped; // Of those, re-cut on the EE first.
-    int trisCulled;  // Dropped whole on the EE, entirely outside the volume.
-
-    // How 'trisClipped' splits by which planes the triangle straddled; the three
-    // partition it. See CountClippedTriangle for what the split is for.
-    int trisClipNearOnly;
-    int trisClipNoNear;
-    int trisClipMixed;
-
-    // Straddled the far plane, on top of whatever else it straddled - so this
-    // overlaps the three above rather than partitioning with them. Far is the
-    // plane a VU1 clipper would most like to drop: skipping it costs one corner
-    // off the worst-case fan, 8 instead of 9, which is a whole output triangle
-    // off what a window has to reserve.
-    int trisClipFar;
-
-    // Most corners the clipper has handed back this frame. The worst case is 9
-    // and what a window must reserve is driven by it, but what actually happens
-    // is the number worth designing against.
-    int clipMaxVerts;
     int drawBatches; // VU1 batches submitted (one or more per texture).
     int particles;   // Particle billboards submitted.
 };
@@ -133,44 +112,6 @@ extern DrawStats g_drawStats;
 Q_ALWAYS_INLINE DrawStats & GetStats()
 {
     return detail::g_drawStats;
-}
-
-// Bins a clipped triangle by the planes it straddled, and counts it.
-//
-// The split is what says whether a VU1 clipper handling only the near plane could
-// stand on its own: 'trisClipNearOnly' is what such a clipper would cut correctly
-// and by itself, while the other two are triangles it would either not help with
-// at all or cut only for the microprogram to reject the survivors whole - the
-// guard band is judged again after the cut.
-Q_ALWAYS_INLINE void CountClippedTriangle(const u32 planesCrossed, const int survivors)
-{
-    DrawStats & stats = GetStats();
-    ++stats.trisClipped;
-
-    if ((planesCrossed & clip::kPlaneFarBit) != 0)
-    {
-        ++stats.trisClipFar;
-    }
-    if (survivors > stats.clipMaxVerts)
-    {
-        stats.clipMaxVerts = survivors;
-    }
-
-    const bool crossesNear  = (planesCrossed &  clip::kPlaneNearBit) != 0;
-    const bool crossesOther = (planesCrossed & ~clip::kPlaneNearBit) != 0;
-
-    if (crossesNear && !crossesOther)
-    {
-        ++stats.trisClipNearOnly;
-    }
-    else if (crossesOther && !crossesNear)
-    {
-        ++stats.trisClipNoNear;
-    }
-    else
-    {
-        ++stats.trisClipMixed;
-    }
 }
 
 // High-water of one GIF block, in qwords. Measured against the command buffer half it must fit
@@ -428,16 +369,13 @@ void SetTextureSampling(const gs::TextureSampling & sampling);
 // Gathered triangles on their way to the world/lit microprogram.
 class TriangleStream final
 {
-    // 'maxVerts' is a whole number of triangles, and at least one worst-case clipped triangle:
-    // PushClippedTriangle fans a cut polygon in one go and cannot split it across two cycles.
+    // 'maxVerts' is a whole number of triangles.
     explicit TriangleStream(const int maxVerts)
         : m_maxVerts{ maxVerts }
         , m_claimQwords{ cmdbuf::CalcAllocCost<vu1::DrawVertex>(maxVerts)
                        + DrawTrianglesChainCost(maxVerts) }
     {
         PS2_AssertMsg((maxVerts % 3) == 0, "Stream capacity must be a whole number of triangles!");
-        PS2_AssertMsg(maxVerts >= (clip::kMaxClippedVerts - 2) * 3,
-                      "Stream capacity must hold one worst-case clipped triangle!");
     }
 
 public:
@@ -488,13 +426,6 @@ public:
             Flush();
             m_drawFlags = flags;
         }
-    }
-
-    // What the clipper cuts against, and what the flush draws under.
-    Q_ALWAYS_INLINE const math::Mat4 & Transform() const
-    {
-        PS2_AssertMsg(m_mvp != nullptr, "No transform set - call SetTransform first!");
-        return *m_mvp;
     }
 
     // --------------------------------------------------------------------------------------------
@@ -562,45 +493,6 @@ public:
         return m_verts[m_vertCount++];
     }
 
-    // Clips one triangle against the volume the VU judges and appends the survivors, fanned. Calls
-    // BeginVerts itself for the post-clip count, so a caller gathering only through this never
-    // calls it at all, and counts the culled/clipped/drawn triangles for the caller.
-    //
-    // The corners arrive with position, UVs and colour payload set; the clipper fills in their
-    // distances. 'vertexColor' packs one survivor's final GS colour.
-    void PushClippedTriangle(clip::ClipVertex (&corners)[3], const u32 vertexColor)
-    {
-        const clip::ClipVertex * verts = nullptr;
-        u32 planesCrossed = 0;
-        const int count = clip::ClipTriangle(corners, Transform(),
-                                             clip::SharedScratch(),
-                                             &verts, &planesCrossed);
-
-        if (count == 0)
-        {
-            PS2_PROFILE_ONLY(++GetStats().trisCulled);
-            return;
-        }
-
-#if PS2_QUAKE_PROFILE
-        if (planesCrossed != 0)
-        {
-            CountClippedTriangle(planesCrossed, count);
-        }
-#endif // PS2_QUAKE_PROFILE
-
-        // The survivors fan-triangulate.
-        const int numTriangles = count - 2;
-        BeginVerts(numTriangles * 3);
-
-        for (int v = 1; v < count - 1; ++v)
-        {
-            EmitVertex(verts[0],     vertexColor);
-            EmitVertex(verts[v],     vertexColor);
-            EmitVertex(verts[v + 1], vertexColor);
-        }
-    }
-
     Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
 
 private:
@@ -657,18 +549,6 @@ private:
         FlushPending2D();
         cmdbuf::Reserve(m_claimQwords);
         m_verts = cmdbuf::AllocMax<vu1::DrawVertex>(m_maxVerts);
-    }
-
-    Q_ALWAYS_INLINE void EmitVertex(const clip::ClipVertex & v, const u32 rgba)
-    {
-        vu1::DrawVertex & dst = m_verts[m_vertCount++];
-        dst.position = { v.pos.x, v.pos.y, v.pos.z };
-        dst.rgba     = rgba;
-        dst.s        = v.st.x;
-        dst.t        = v.st.y;
-        // The two lightmap lanes go unwritten: no microprogram reads them, and a clipped
-        // vertex has no second UV set to put there - the pass that wants one feeds it
-        // through 'st' instead (see SurfaceDrawState::lightmapUVs).
     }
 
 private:

@@ -2,7 +2,7 @@
  * File: refresh.cpp
  * Brief: The refresh: QuakeSpasm's render.h seam (R_Init, R_NewMap, R_RenderView, ...), the
  *        renderer state and cvars the client and the kept renderer files read, and the load-time
- *        renderer hooks gl_model.c calls for the sky.
+ *        renderer hooks gl_model.c calls that no other module owns.
  *        The Quake 1 counterpart of the Quake II port's ref.cpp.
  *
  *        R_Init and R_NewMap are gl_rmisc.c's - cvars, particles, light styles, efrags, fog - with
@@ -16,6 +16,7 @@
 #include "ps2/renderer/alias.h"
 #include "ps2/renderer/brush.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/renderer/sky.h"
 #include "ps2/renderer/view.h"
 
 extern "C" {
@@ -91,6 +92,7 @@ void R_Init()
 
     ps2::view::Init();
     ps2::alias::Init();
+    ps2::sky::Init();
 
     R_InitParticles();
     ClearColorChanged(&r_clearcolor);
@@ -122,6 +124,7 @@ void R_NewMap()
     r_visframecount = 0;
 
     Fog_NewMap();          // global fog, from worldspawn
+    ps2::sky::NewMap();    // a skybox, from worldspawn
     ps2::view::NewMap();   // the liquids' opacity, from worldspawn
 }
 
@@ -157,44 +160,6 @@ void GL_SubdivideSurface(msurface_t * fa)
 {
     (void)fa;
 }
-
-// For now only the sky's flat colour, which the view draws sky surfaces in: gl_sky.c's average
-// of the opaque texels of the front layer, the left half of the 256x128 image (index 0 is the
-// layer's transparent colour), as it works it out for r_fastsky.
-void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)
-{
-    (void)mod;
-
-    const int halfWidth = static_cast<int>(mt->width / 2);
-    const int height    = static_cast<int>(mt->height);
-    const byte * const src = static_cast<const byte *>(static_cast<const void *>(mt + 1));
-
-    u32 r = 0, g = 0, b = 0, count = 0;
-    for (int y = 0; y < height; ++y)
-    {
-        for (int x = 0; x < halfWidth; ++x)
-        {
-            const byte p = src[(y * static_cast<int>(mt->width)) + x];
-            if (p != 0)
-            {
-                const u32 rgba = d_8to24table[p];
-                r += rgba & 0xFFu;
-                g += (rgba >> 8) & 0xFFu;
-                b += (rgba >> 16) & 0xFFu;
-                ++count;
-            }
-        }
-    }
-
-    if (count > 0)
-    {
-        ps2::view::SetSkyFlatColor(static_cast<u8>(r / count), static_cast<u8>(g / count),
-                                   static_cast<u8>(b / count));
-    }
-}
-void Sky_LoadTextureQ64(qmodel_t * mod, texture_t * mt) { (void)mod; (void)mt; }
-void Sky_LoadSkyBox(const char * name)                  { (void)name; }
-void Sky_ClearAll() {}
 
 // No external replacement textures (textures/*.tga and the like) on the PS2: the textures come
 // from the BSP, the WAD and the models.

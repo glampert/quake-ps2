@@ -72,5 +72,7 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   loaded, all 61 shareware ones would be 388 KB) and 1.72 MB of `TexImage`, most of it skin
   copies (a skin is about 60 KB; its glow texture shares the copy, which saved 0.57 MB). 7.3 MB
   of RAM was left. The models' poses are in the hunk's cache, as QuakeSpasm keeps them.
-  Cutting the water on a 32-unit grid adds to `WorldMdl`: 1.20 MB on e1m3.
+  Cutting the water on a 32-unit grid adds to `WorldMdl`: e1m4, the wettest map, went from
+  1.10 to 1.62 MB. A map cycle that loads every shareware model ends with 5 MB of RAM left.
+  The sky's two layers are 80 KB (`TexImage`).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

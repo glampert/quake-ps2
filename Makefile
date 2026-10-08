@@ -87,7 +87,6 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/vu1.cpp              \
 	ps2/renderer/cmd_buffer.cpp       \
 	ps2/renderer/render_system.cpp    \
-	ps2/renderer/clip.cpp             \
 	ps2/renderer/vid.cpp              \
 	ps2/renderer/draw.cpp             \
 	ps2/renderer/texmgr.cpp           \
@@ -96,6 +95,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/alias.cpp            \
 	ps2/renderer/sprite.cpp           \
 	ps2/renderer/particles.cpp        \
+	ps2/renderer/sky.cpp              \
 	ps2/renderer/view.cpp             \
 	ps2/renderer/refresh.cpp          \
 	ps2/renderer/overlays.cpp         \

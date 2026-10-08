@@ -124,6 +124,7 @@ enum class BlendMode
     Additive,    // (Cs -  0) * As / 128 + Cd : flares and glows
     Modulate,    // (Cd -  0) * As / 128 +  0 : scales the framebuffer, adds nothing of its own
     ModulateAdd, // (Cd -  0) * As / 128 + Cs : that, plus the draw's own colour on top
+    KeepDest,    // ( 0 -  0) * As / 128 + Cd : the framebuffer as it was, for a draw that writes depth alone
 };
 
 // ALPHA for 'mode'.
@@ -147,6 +148,10 @@ Q_ALWAYS_INLINE u64 MakeAlphaBlend(const BlendMode mode)
     case BlendMode::ModulateAdd :
         return GS_SET_ALPHA(BLEND_COLOR_DEST, BLEND_COLOR_ZERO,
                             BLEND_ALPHA_SOURCE, BLEND_COLOR_SOURCE, 0x80);
+
+    case BlendMode::KeepDest :
+        return GS_SET_ALPHA(BLEND_COLOR_ZERO, BLEND_COLOR_ZERO,
+                            BLEND_ALPHA_FIXED, BLEND_COLOR_DEST, 0x80);
 
     case BlendMode::Blend :
     default :

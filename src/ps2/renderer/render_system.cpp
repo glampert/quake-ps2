@@ -754,12 +754,17 @@ inline gs::BlendMode BlendModeFor(DrawFlags flags)
 {
     const int blendModes = static_cast<int>(HasDrawFlag(flags, DrawFlags::Blended))
                          + static_cast<int>(HasDrawFlag(flags, DrawFlags::Additive))
-                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::Modulate));
-    PS2_AssertMsg(blendModes <= 1, "Pick one blend mode - Blended, Additive and Modulate are exclusive!");
+                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::Modulate))
+                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::DepthOnly));
+    PS2_AssertMsg(blendModes <= 1, "Pick one blend mode - Blended, Additive, Modulate and DepthOnly are exclusive!");
 
     if (HasDrawFlag(flags, DrawFlags::Additive))
     {
         return gs::BlendMode::Additive;
+    }
+    if (HasDrawFlag(flags, DrawFlags::DepthOnly))
+    {
+        return gs::BlendMode::KeepDest;
     }
     if (HasDrawFlag(flags, DrawFlags::Modulate))
     {
@@ -805,10 +810,12 @@ bool BuildBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx,
     const gs::BlendMode blendMode = BlendModeFor(flags);
 
     // A blend mode was asked for, as opposed to the equation every batch writes: that is what
-    // turns the ABE bit on and masks depth writes.
-    const bool blended = HasDrawFlag(flags, DrawFlags::Blended)
-                      || HasDrawFlag(flags, DrawFlags::Additive)
-                      || HasDrawFlag(flags, DrawFlags::Modulate);
+    // turns the ABE bit on and masks depth writes - all but DepthOnly's, which only writes depth.
+    const bool depthOnly = HasDrawFlag(flags, DrawFlags::DepthOnly);
+    const bool blended   = HasDrawFlag(flags, DrawFlags::Blended)
+                        || HasDrawFlag(flags, DrawFlags::Additive)
+                        || HasDrawFlag(flags, DrawFlags::Modulate)
+                        || depthOnly;
 
     // The texture bind with its mip levels, the blend function and the depth-write mask...
     out[0]  = GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1);
@@ -821,7 +828,7 @@ bool BuildBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx,
     out[7]  = gs::ContextReg(GS_REG_TEX0, drawCtx);
     out[8]  = gs::MakeAlphaBlend(blendMode);
     out[9]  = gs::ContextReg(GS_REG_ALPHA, drawCtx);
-    out[10] = gs::MakeZBuf(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite));
+    out[10] = gs::MakeZBuf((blended && !depthOnly) || HasDrawFlag(flags, DrawFlags::NoDepthWrite));
     out[11] = gs::ContextReg(GS_REG_ZBUF, drawCtx);
 
     return blended;

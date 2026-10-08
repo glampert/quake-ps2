@@ -34,6 +34,7 @@
 #include "ps2/renderer/particles.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/renderer/sky.h"
 #include "ps2/renderer/sprite.h"
 #include "ps2/renderer/texmgr.h"
 #include "ps2/renderer/texture.h"
@@ -123,9 +124,6 @@ Q_ALWAYS_INLINE u32 AlphaByte(const float alpha)
 
 // World to clip: the frame's view-projection. World geometry draws under it as it is.
 static math::Mat4 s_viewProj = {};
-
-// The sky's flat colour (see SetSkyFlatColor), packed as a GS vertex colour.
-static u32 s_skyColor = vu1::PackColorRGBA(64, 64, 96, 0x80);
 
 // QuakeSpasm's cheat-safe draw modes (R_SetupView): r_fullbright and r_lightmap only take in single
 // player, and there a map without light data draws fullbright. The lightmap pass runs unless the
@@ -590,32 +588,6 @@ Q_ALWAYS_INLINE int ChainFlags(const texture_t * t, const texchain_t chain)
     return (t != nullptr && t->texturechains[chain] != nullptr) ? t->texturechains[chain]->flags : -1;
 }
 
-// The model's sky surfaces, untextured in the sky's flat colour: QuakeSpasm's r_fastsky.
-void DrawSkyChains(rs::TriangleStream & stream, qmodel_t & model, const texchain_t chain, const math::Mat4 & mvp)
-{
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::Sky);
-
-    stream.SetTransform(mvp);
-    stream.SetDrawFlags(rs::DrawFlags::Untextured);
-    stream.SetTexture(tex::DebugTexture()); // Unsampled, but a batch binds one.
-
-    for (int i = 0; i < model.numtextures; ++i)
-    {
-        const texture_t * const t = model.textures[i];
-        const int flags = ChainFlags(t, chain);
-        if (flags < 0 || (flags & SURF_DRAWSKY) == 0)
-        {
-            continue;
-        }
-
-        for (const msurface_t * s = t->texturechains[chain]; s != nullptr; s = s->texturechain)
-        {
-            GatherSurfaceColored(stream, brush::DrawFor(model, *s), s_skyColor);
-        }
-    }
-    rs::Submit(stream);
-}
-
 // The model's wall chains, in up to three passes: the textures, the lightmaps over them, and the
 // fullbright texels over that. 'ent' is null for the world. QuakeSpasm's R_DrawTextureChains on
 // its multipass path ("case 3"), with gl_overbright on.
@@ -886,7 +858,7 @@ void DrawBrushModel(rs::TriangleStream & stream, entity_t & e)
         }
     }
 
-    DrawSkyChains(stream, model, chain_model, mvp);
+    // Its sky surfaces went with the world's, ahead of everything (sky::Draw).
     DrawTextureChains(stream, model, &e, chain_model, mvp);
     DrawWaterChains(stream, model, &e, chain_model, mvp);
 }
@@ -1203,11 +1175,6 @@ void NewMap()
     }
 }
 
-void SetSkyFlatColor(const u8 r, const u8 g, const u8 b)
-{
-    s_skyColor = vu1::PackColorRGBA(r, g, b, 0x80);
-}
-
 void RenderView()
 {
     if (r_norefresh.value != 0.0f)
@@ -1226,10 +1193,12 @@ void RenderView()
     // One stream for every pass of the frame; each submits before the next one starts.
     auto stream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
 
+    // The sky first: its layers go under everything, and its surfaces' depth ahead of the world.
+    sky::Draw(stream);
+
     if (r_drawworld.value != 0.0f)
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::World);
-        DrawSkyChains(stream, *cl.worldmodel, chain_world, s_viewProj);
         DrawTextureChains(stream, *cl.worldmodel, nullptr, chain_world, s_viewProj);
     }
 

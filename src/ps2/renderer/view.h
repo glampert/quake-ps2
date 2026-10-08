@@ -26,9 +26,6 @@ void NewMap();
 // Draws the 3D view r_refdef describes: R_RenderView. Inside the frame, ahead of the 2D.
 void RenderView();
 
-// The sky's flat colour, as QuakeSpasm averages it for r_fastsky. Sky_LoadTexture sets it.
-void SetSkyFlatColor(u8 r, u8 g, u8 b);
-
 // ------------------------------------------------------------------------------------------------
 // What the entity drawers share with the view, valid while RenderView runs
 // ------------------------------------------------------------------------------------------------

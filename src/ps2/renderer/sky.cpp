@@ -1,41 +1,41 @@
 /* ================================================================================================
  * File: sky.cpp
- * Brief: Skybox rendering, ported from ref_gl's gl_warp.c.
+ * Brief: The sky: QuakeSpasm's gl_sky.c on the VU1 path. See sky.h.
  *
- *  Quake's sky is not geometry the map ships. SURF_SKY faces are holes: they
- *  are never rasterized, and all the world pass does with one is project it
- *  onto an imaginary cube centred on the eye and remember which part of which
- *  cube face it covered (AddSurface). Once the world is down, DrawSkyBox draws
- *  exactly those parts - at most six textured quads, usually one or two, and
- *  nothing at all indoors.
+ *  A sky texture is two layers, a solid back one and a front one with holes, each scrolling at its
+ *  own speed, and what shows through a sky surface is decided by direction alone: the layers sit
+ *  on a flattened sphere around the camera. QuakeSpasm draws them on a box around the camera, each
+ *  face tessellated finely enough for its per-vertex texture coordinates to follow the sphere, and
+ *  only over the parts of it the sky surfaces in view cover (their bounds on each face, found by
+ *  cutting each surface along the planes between the faces).
  *
- *  Projecting a polygon onto the cube is the fiddly half: one large enough to span a cube edge
- *  belongs to two faces at once, so ClipSkyPolygon first cuts it along the six diagonal planes
- *  through the origin that separate the faces. Binning by centroid instead leaves a wedge of sky
- *  untextured wherever a polygon straddles an edge.
- *
- *  The cube is drawn at a finite 2300 units, as ref_gl draws it, so the world's
- *  depth values reject the parts of it hidden behind geometry - the sky costs
- *  fill only where it is actually visible. It writes no depth of its own
- *  (rs::DrawFlags::NoDepthWrite), which is where this departs from ref_gl:
- *  there the sky occluded anything drawn later past 2300 units, which on the
- *  larger outdoor maps eats distant entities and rail trails.
+ *  It draws the surfaces first, writing their depth, then the box behind them with a depth test
+ *  that passes only where a sky surface is. The GS can't test for "farther": its z-test passes
+ *  nearer or equal, or greater. So the order turns round here - the box goes down first, before
+ *  anything else in the frame and with no depth of its own, over the bounds alone; then the sky
+ *  surfaces write their depth and nothing else; then the world draws over the box wherever it is
+ *  in front, and is hidden wherever a sky surface is in front of it. The one difference: a gap in
+ *  a map that shows the void would show sky here, where QuakeSpasm shows the clear colour.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/renderer/sky.h"
 #include "ps2/renderer/view.h"
+#include "ps2/renderer/brush.h"
 #include "ps2/renderer/texture.h"
-#include "ps2/renderer/model.h"
-#include "ps2/renderer/clip.h"
-#include "ps2/renderer/vu1.h"
-#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/profile.h"
+#include "ps2/renderer/render_system.h"
+#include "ps2/renderer/vu1.h"
+#include "ps2/math/vec_mat.h"
 
 #include <cmath>
-#include <cstdio>
 #include <cstring>
+
+extern "C" {
+// The view's.
+extern cvar_t r_drawworld, r_drawentities;
+} // extern "C"
 
 namespace ps2::sky {
 namespace {
@@ -44,43 +44,41 @@ namespace {
 // Cvars and constants
 // ------------------------------------------------------------------------------------------------
 
-static const cvar_t * s_skipSky    = nullptr;
-static const cvar_t * s_fullBounds = nullptr;
-static const cvar_t * s_skyMip     = nullptr;
+// QuakeSpasm's: the flat colour in place of the layers; how finely a box face is tessellated (cells
+// across a top or bottom face, twice that up a side); the front layer's opacity.
+static cvar_t s_fastSky    = ps2::MakeCvar("r_fastsky",     "0",  CVAR_NONE);
+static cvar_t s_skyQuality = ps2::MakeCvar("r_sky_quality", "12", CVAR_NONE);
+static cvar_t s_skyAlpha   = ps2::MakeCvar("r_skyalpha",    "1",  CVAR_NONE);
 
-// Half-extent of the sky cube, in world units (ref_gl's magic 2300). The
-// corners reach 2300*sqrt(3) = 3983, just inside the world projection's 4096
-// far plane - which is the constraint that picked the number.
-constexpr float kSkyDistance = 2300.0f;
+// r_sky_quality's ceiling here, which sizes the face grid below. QuakeSpasm has none.
+constexpr int kMaxSkyQuality = 16;
 
-// Vertex colour for the sky: GS modulate 128 = texels unchanged, alpha 0x80 = 1.0.
-constexpr u32 kSkyColor = vu1::PackColorRGBA(128, 128, 128, 0x80);
+// Half the size of the box the layers are drawn on, in world units. Any size would do - the box is
+// drawn first, with no depth, and only directions matter to the layers - while it stays clear of
+// the near plane and inside the far one.
+constexpr float kBoxSize = 1024.0f;
 
-// The six faces, in the order their suffixes name them.
-constexpr int kNumSkyFaces = 6;
+// The six faces of the box.
+constexpr int kNumFaces = 6;
 
-// ref_gl's ON_EPSILON, the plane-side slack of the cube-face split.
+// gl_sky.c's ON_EPSILON, the plane-side slack of the cut between faces.
 constexpr float kOnPlaneEpsilon = 0.1f;
 
-// Which side of a splitting plane a vertex fell on (ref_gl's SIDE_*, which
-// live in the renderers' own headers rather than the shared game ones).
-enum PlaneSide : u8 { kSideFront, kSideBack, kSideOn };
-
-// Room for one sky polygon mid-split. Stock maps top out at 20 vertices on a
-// single sky face; each of the six planes can add one more, and ClipSkyPolygon
-// appends a wrap-around copy of the first vertex past the end (as ref_gl does,
-// hence its own MAX_CLIP_VERTS-2 guard).
-constexpr int kMaxSkyClipVerts = 40;
+// Room for one sky polygon mid-cut: a convex polygon gains at most a corner per plane, and the cut
+// writes a copy of the first corner past the last.
+constexpr int kMaxSkyClipVerts = 72;
 constexpr int kSkyClipStages   = 6;
 
+// The GS modulate identity at full alpha.
+constexpr u32 kModulateIdentity = vu1::PackColorRGBA(128, 128, 128, 0x80);
+
 // ------------------------------------------------------------------------------------------------
-// ref_gl tables (gl_warp.c), kept verbatim
+// gl_sky.c's tables, kept verbatim
 // ------------------------------------------------------------------------------------------------
 
-// The six diagonal planes through the origin that separate the cube's faces.
-// Un-normalized on purpose: only the sign of the dot product and the ratio of
-// two distances matter, and neither cares about scale.
-static const vec3_t s_skyClip[kNumSkyFaces] = {
+// The planes through the camera that separate the box's faces. Unnormalized on purpose: only the
+// sign of the dot product and the ratio of two distances matter.
+static const vec3_t s_skyClip[kNumFaces] = {
     {  1.0f,  1.0f, 0.0f },
     {  1.0f, -1.0f, 0.0f },
     {  0.0f, -1.0f, 1.0f },
@@ -89,20 +87,18 @@ static const vec3_t s_skyClip[kNumSkyFaces] = {
     { -1.0f,  0.0f, 1.0f }
 };
 
-// Face-local (s, t, dist) -> world direction, and its inverse. An entry k means
-// "component |k|-1, negated when k is negative", where 1/2/3 stand for s, t and
-// the face's own axis.
-static const int s_stToVec[kNumSkyFaces][3] = {
+// Face-local (s, t, distance) to a world direction, and back. An entry k means component |k|-1,
+// negated when k is negative, where 1, 2 and 3 stand for s, t and the face's own axis.
+static const int s_stToVec[kNumFaces][3] = {
     {  3, -1,  2 },
     { -3,  1,  2 },
     {  1,  3,  2 },
     { -1, -3,  2 },
-    { -2, -1,  3 }, // 0 degrees yaw, look straight up
-    {  2, -1, -3 }  // look straight down
+    { -2, -1,  3 }, // straight up
+    {  2, -1, -3 }  // straight down
 };
 
-// s = [0]/[2], t = [1]/[2]
-static const int s_vecToSt[kNumSkyFaces][3] = {
+static const int s_vecToSt[kNumFaces][3] = {
     { -2,  3,  1 },
     {  2,  3, -1 },
     {  1,  3,  2 },
@@ -111,63 +107,198 @@ static const int s_vecToSt[kNumSkyFaces][3] = {
     { -2,  1, -3 }
 };
 
-// Cube face index -> index into s_faces[]. The cube's axis order and the order
-// the suffixes load in are not the same; this is applied at draw time only.
-static const int s_skyTexOrder[kNumSkyFaces] = { 0, 2, 1, 3, 4, 5 };
-
-// 3D Studio environment map suffixes, the order s_faces[] is loaded in.
-static const char * const s_suffixes[kNumSkyFaces] = { "rt", "bk", "lf", "ft", "up", "dn" };
-
 // ------------------------------------------------------------------------------------------------
 // Sky state
 // ------------------------------------------------------------------------------------------------
 
-static char s_skyName[MAX_QPATH] = {};
-static float s_skyRotate = 0.0f;
-static vec3_t s_skyAxis  = {}; // Normalized; zero when there is no rotation.
+// The map's layers: the back one through Quake's palette, the front one as RGBA, its holes
+// transparent - GL's alpha blend, filtered, wants a colour in them, which an 8-bit image can only
+// have as the palette's 255 (see FixAlphaEdges). Both in one block of pixels.
+static const tex::Texture * s_solidLayer = nullptr;
+static const tex::Texture * s_alphaLayer = nullptr;
+static void *               s_layerPixels = nullptr;
+static u32                  s_layerBytes  = 0;
 
-static const tex::Texture * s_faces[kNumSkyFaces] = {};
+// The flat colour r_fastsky draws: the front layer's opaque texels averaged.
+static u32 s_flatColor = vu1::PackColorRGBA(64, 64, 96, 0x80);
 
-// The visible extent of each cube face this frame, in face-local [-1, 1] ST.
-// An empty interval (mins > maxs) means no sky surface reached that face.
-static float s_skyMins[2][kNumSkyFaces];
-static float s_skyMaxs[2][kNumSkyFaces];
+// What the frame's sky surfaces cover of each box face, in face-local [-1, 1] coordinates. An empty
+// interval (mins > maxs) means none of them reached it.
+static float s_skyMins[2][kNumFaces];
+static float s_skyMaxs[2][kNumFaces];
 
-// Working buffers for ClipSkyPolygon, indexed by the stage that produced them.
-// File-level rather than stack: at ~2.3 KB a frame, six deep and nested inside
-// the world walk's own recursion, this was the largest stack consumer in the
-// renderer for no reason. Safe because a stage's output is read only by the
-// stage below it, and the first child's whole subtree finishes before the
-// second child starts.
+// ClipSkyPolygon's working buffers, by the stage that fills them: a stage's output is only read by
+// the stage below it, and the first piece's whole subtree finishes before the second starts.
 static vec3_t s_skyClipVerts[kSkyClipStages][2][kMaxSkyClipVerts];
 
-// Triangle gather buffer, flushed per face (a span of the frame chain, referenced
-// in place by DMA). Six faces of two triangles, each of which can leave the clipper
-// as a 9-gon, so 7 triangles: 42 verts per face is the true ceiling.
-constexpr int kBatchMaxVerts = 3 * 64;
-// One stream per pass; see rs::TriangleStream.
-
-// The sky draws at a finite distance so the world can occlude it, and must not
-// occlude anything drawn after it in return - hence the masked depth writes.
-constexpr rs::DrawFlags kSkyDrawFlags = rs::DrawFlags::NoDepthWrite;
+// A box face's grid, filled per face per frame as the vertices the back layer draws with, then
+// turned in place into the front layer's: the same but for a constant added to the texture
+// coordinates, and the colour. Built once and copied into each triangle, a corner costs the copy.
+static vu1::DrawVertex s_grid[(kMaxSkyQuality + 1) * ((2 * kMaxSkyQuality) + 1)];
 
 // ------------------------------------------------------------------------------------------------
-// Bounds accumulation (ref_gl's DrawSkyPolygon / ClipSkyPolygon)
+// Loading
 // ------------------------------------------------------------------------------------------------
 
-// Picks the cube face a fully split polygon lands on and grows that face's ST
-// bounds to cover it. Draws nothing, despite ref_gl's name for it.
-void AccumulateSkyPolygon(const int nump, const vec3_t * vecs)
+// Whether 'n' is a power of two, as a tiling layer must be (see tex::StScaleFor).
+constexpr bool IsPowerOfTwo(const int n)
 {
-    // The polygon is on one face by now, so the sum of its vertices points at
-    // that face; the dominant component picks the axis and its sign the side.
+    return n > 0 && (n & (n - 1)) == 0;
+}
+
+void ClearLayers()
+{
+    if (s_solidLayer == nullptr && s_alphaLayer == nullptr)
+    {
+        return;
+    }
+
+    // The frame the GS may still be drawing can be uploading them.
+    rs::FinishFrameInFlight();
+
+    if (s_solidLayer != nullptr)
+    {
+        tex::Destroy(*s_solidLayer);
+        s_solidLayer = nullptr;
+    }
+    if (s_alphaLayer != nullptr)
+    {
+        tex::Destroy(*s_alphaLayer);
+        s_alphaLayer = nullptr;
+    }
+    heap::Free(s_layerPixels, s_layerBytes, heap::MemTag::TexImage);
+    s_layerPixels = nullptr;
+    s_layerBytes  = 0;
+}
+
+// QuakeSpasm's TexMgr_AlphaEdgeFix: each transparent texel takes the average colour of its opaque
+// neighbours, wrapping round the edges as the layer tiles, so filtering blends a hole's edge
+// towards the cloud rather than towards whatever colour the hole had.
+void FixAlphaEdges(u32 * const texels, const int width, const int height)
+{
+    for (int y = 0; y < height; ++y)
+    {
+        const int rows[3] = { (y + height - 1) % height, y, (y + 1) % height };
+        for (int x = 0; x < width; ++x)
+        {
+            u32 & texel = texels[(y * width) + x];
+            if ((texel >> 24) != 0)
+            {
+                continue;
+            }
+
+            const int cols[3] = { (x + width - 1) % width, x, (x + 1) % width };
+            u32 r = 0, g = 0, b = 0, n = 0;
+            for (const int row : rows)
+            {
+                for (const int col : cols)
+                {
+                    const u32 neighbour = texels[(row * width) + col];
+                    if ((neighbour >> 24) != 0)
+                    {
+                        r += neighbour & 0xFFu;
+                        g += (neighbour >> 8) & 0xFFu;
+                        b += (neighbour >> 16) & 0xFFu;
+                        ++n;
+                    }
+                }
+            }
+            if (n != 0)
+            {
+                texel = (r / n) | ((g / n) << 8) | ((b / n) << 16); // alpha stays 0
+            }
+        }
+    }
+}
+
+// Makes the two layer textures over one block, each width x height: the back one as the palette
+// indices 'backIndex(x, y)' gives, the front one as the RGBA texels 'frontTexel(x, y)' does, whose
+// average opaque colour becomes the flat sky's. Read straight out of the texture, which is in the
+// BSP file's buffer: the hunk's temporary space, which anything taken from it now would free.
+template<typename BackIndex, typename FrontTexel>
+void CreateLayers(const qmodel_t & model, const texture_t & mt, const int width, const int height,
+                  BackIndex backIndex, FrontTexel frontTexel)
+{
+    const int count = width * height;
+    s_layerBytes  = static_cast<u32>(count * 5);
+    s_layerPixels = heap::AllocAligned(heap::MemAlign(16), s_layerBytes, heap::MemTag::TexImage);
+
+    byte * const backPixels  = static_cast<byte *>(s_layerPixels);
+    u32 *  const frontPixels = static_cast<u32 *>(static_cast<void *>(backPixels + count));
+
+    u32 r = 0, g = 0, b = 0, opaque = 0;
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            const int i = (y * width) + x;
+            backPixels[i] = backIndex(x, y);
+
+            const u32 texel = frontTexel(x, y);
+            frontPixels[i] = texel;
+            if ((texel >> 24) != 0)
+            {
+                r += texel & 0xFFu;
+                g += (texel >> 8) & 0xFFu;
+                b += (texel >> 16) & 0xFFu;
+                ++opaque;
+            }
+        }
+    }
+    FixAlphaEdges(frontPixels, width, height);
+
+    if (opaque != 0)
+    {
+        s_flatColor = vu1::PackColorRGBA(r / opaque, g / opaque, b / opaque, 0x80);
+    }
+
+    char name[MAX_QPATH];
+    q_snprintf(name, sizeof(name), "%s:%s_back", model.name, mt.name); // truncated as QuakeSpasm truncates it
+    s_solidLayer = &tex::Create(name, backPixels, width, height, tex::PixelFormat::Palette8,
+                                tex::TexComponents::RGB, tex::ImageType::Sky);
+
+    q_snprintf(name, sizeof(name), "%s:%s_front", model.name, mt.name);
+    s_alphaLayer = &tex::Create(name, frontPixels, width, height, tex::PixelFormat::RGBA32,
+                                tex::TexComponents::RGBA, tex::ImageType::Sky);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Bounds (gl_sky.c's Sky_ProjectPoly, Sky_ClipPoly)
+// ------------------------------------------------------------------------------------------------
+
+void ClearBounds()
+{
+    for (int i = 0; i < kNumFaces; ++i)
+    {
+        s_skyMins[0][i] = s_skyMins[1][i] =  9999.0f;
+        s_skyMaxs[0][i] = s_skyMaxs[1][i] = -9999.0f;
+    }
+}
+
+bool AnyBounds()
+{
+    for (int i = 0; i < kNumFaces; ++i)
+    {
+        if (s_skyMins[0][i] < s_skyMaxs[0][i] && s_skyMins[1][i] < s_skyMaxs[1][i])
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Picks the face a fully cut, camera-relative polygon lands on and grows that face's bounds to it.
+void ProjectSkyPolygon(const int nump, const vec3_t * vecs)
+{
+    // The polygon is on one face by now, so the sum of its corners points at it: the dominant
+    // component picks the axis, its sign the side.
     vec3_t v = { 0.0f, 0.0f, 0.0f };
     for (int i = 0; i < nump; ++i)
     {
         VectorAdd(vecs[i], v, v);
     }
 
-    const vec3_t av = { std::fabs(v[0]), std::fabs(v[1]), std::fabs(v[2]) };
+    const float av[3] = { std::fabs(v[0]), std::fabs(v[1]), std::fabs(v[2]) };
 
     int axis;
     if (av[0] > av[1] && av[0] > av[2])
@@ -183,7 +314,6 @@ void AccumulateSkyPolygon(const int nump, const vec3_t * vecs)
         axis = (v[2] < 0.0f) ? 5 : 4;
     }
 
-    // Project onto the face and grow its bounds.
     for (int i = 0; i < nump; ++i)
     {
         const float * const vec = vecs[i];
@@ -192,76 +322,72 @@ void AccumulateSkyPolygon(const int nump, const vec3_t * vecs)
         const float dv = (j > 0) ? vec[j - 1] : -vec[-j - 1];
         if (dv < 0.001f)
         {
-            continue; // Don't divide by zero.
+            continue; // on the camera, or behind the face: no projection
         }
 
         j = s_vecToSt[axis][0];
-        const float s = (j < 0) ? -vec[-j - 1] / dv : vec[j - 1] / dv;
+        const float s = ((j < 0) ? -vec[-j - 1] : vec[j - 1]) / dv;
 
         j = s_vecToSt[axis][1];
-        const float t = (j < 0) ? -vec[-j - 1] / dv : vec[j - 1] / dv;
+        const float t = ((j < 0) ? -vec[-j - 1] : vec[j - 1]) / dv;
 
-        if (s < s_skyMins[0][axis]) { s_skyMins[0][axis] = s; }
-        if (t < s_skyMins[1][axis]) { s_skyMins[1][axis] = t; }
-        if (s > s_skyMaxs[0][axis]) { s_skyMaxs[0][axis] = s; }
-        if (t > s_skyMaxs[1][axis]) { s_skyMaxs[1][axis] = t; }
+        s_skyMins[0][axis] = (s < s_skyMins[0][axis]) ? s : s_skyMins[0][axis];
+        s_skyMins[1][axis] = (t < s_skyMins[1][axis]) ? t : s_skyMins[1][axis];
+        s_skyMaxs[0][axis] = (s > s_skyMaxs[0][axis]) ? s : s_skyMaxs[0][axis];
+        s_skyMaxs[1][axis] = (t > s_skyMaxs[1][axis]) ? t : s_skyMaxs[1][axis];
     }
 }
 
-// Splits an eye-relative polygon along the cube's face-dividing planes, one
-// stage per plane, until every piece belongs to exactly one face.
-//
-// 'vecs' must have room for one vertex past 'nump': the split writes a
-// wrap-around copy of the first vertex there so the edge loop can read i+1
-// without a modulo.
+// Cuts a camera-relative polygon along the planes between the faces, one stage per plane, until
+// each piece is on one face. 'vecs' must have room for one corner past 'nump': the cut writes a
+// copy of the first there, so the edge walk can read i + 1 without a modulo.
 void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 {
     if (nump > kMaxSkyClipVerts - 2)
     {
-        Com_DPrintf("WARNING: ClipSkyPolygon overflow (%d verts), sky polygon dropped.\n", nump);
+        Con_DPrintf("ClipSkyPolygon: %d corners, sky polygon dropped\n", nump);
         return;
     }
     if (stage == kSkyClipStages)
     {
-        AccumulateSkyPolygon(nump, vecs); // Fully split: it is on one face now.
+        ProjectSkyPolygon(nump, vecs);
         return;
     }
 
     const float * const norm = s_skyClip[stage];
 
+    enum Side : u8 { kFront, kBack, kOn };
     float dists[kMaxSkyClipVerts];
-    PlaneSide sides[kMaxSkyClipVerts];
+    Side  sides[kMaxSkyClipVerts];
 
     bool front = false;
     bool back  = false;
-
     for (int i = 0; i < nump; ++i)
     {
         const float d = DotProduct(vecs[i], norm);
         if (d > kOnPlaneEpsilon)
         {
             front    = true;
-            sides[i] = kSideFront;
+            sides[i] = kFront;
         }
         else if (d < -kOnPlaneEpsilon)
         {
             back     = true;
-            sides[i] = kSideBack;
+            sides[i] = kBack;
         }
         else
         {
-            sides[i] = kSideOn;
+            sides[i] = kOn;
         }
         dists[i] = d;
     }
 
     if (!front || !back)
     {
-        ClipSkyPolygon(nump, vecs, stage + 1); // Entirely on one side; nothing to cut.
+        ClipSkyPolygon(nump, vecs, stage + 1); // all on one side: nothing to cut
         return;
     }
 
-    // Close the edge loop.
     sides[nump] = sides[0];
     dists[nump] = dists[0];
     VectorCopy(vecs[0], vecs[nump]);
@@ -273,115 +399,376 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
     {
         const float * const v = vecs[i];
 
-        // A convex polygon cut by a plane keeps at most nump+1 vertices per
-        // side, and BSP faces are convex, so neither side can reach the end of
-        // its buffer. Asserted rather than assumed: these are fixed-size and
-        // the writes below happen before the recursion re-checks the count.
-        PS2_AssertMsg(newc[0] + 2 <= kMaxSkyClipVerts && newc[1] + 2 <= kMaxSkyClipVerts,
-                      "Sky polygon split overflowed its buffer!");
-
         switch (sides[i])
         {
-        case kSideFront:
+        case kFront:
             VectorCopy(v, newv[0][newc[0]]);
-            newc[0]++;
+            ++newc[0];
             break;
-        case kSideBack:
+        case kBack:
             VectorCopy(v, newv[1][newc[1]]);
-            newc[1]++;
+            ++newc[1];
             break;
-        case kSideOn:
+        case kOn:
             VectorCopy(v, newv[0][newc[0]]);
-            newc[0]++;
+            ++newc[0];
             VectorCopy(v, newv[1][newc[1]]);
-            newc[1]++;
-            break;
-        default:
+            ++newc[1];
             break;
         }
 
-        if (sides[i] == kSideOn || sides[i + 1] == kSideOn || sides[i + 1] == sides[i])
+        if (sides[i] == kOn || sides[i + 1] == kOn || sides[i + 1] == sides[i])
         {
-            continue; // This edge doesn't cross the plane.
+            continue;
         }
 
         const float frac = dists[i] / (dists[i] - dists[i + 1]);
         for (int j = 0; j < 3; ++j)
         {
-            const float e = v[j] + frac * (vecs[i + 1][j] - v[j]);
+            const float e = v[j] + (frac * (vecs[i + 1][j] - v[j]));
             newv[0][newc[0]][j] = e;
             newv[1][newc[1]][j] = e;
         }
-        newc[0]++;
-        newc[1]++;
+        ++newc[0];
+        ++newc[1];
     }
 
     ClipSkyPolygon(newc[0], newv[0], stage + 1);
     ClipSkyPolygon(newc[1], newv[1], stage + 1);
 }
 
-// ------------------------------------------------------------------------------------------------
-// Drawing
-// ------------------------------------------------------------------------------------------------
-
-// Clips one sky triangle against the volume the VU judges and appends the
-// survivors to the gather buffer. A cube face is a single quad spanning 90
-// degrees, so unlike most geometry here this is expected to clip, not
-// exceptional: at the world projection's scale the guard band runs out around
-// 79 degrees off-axis.
-//
-// The sky is flat-shaded: every vertex takes the same colour, whatever the
-// clipper left behind.
-Q_ALWAYS_INLINE void PushSkyTriangle(rs::TriangleStream & trisStream, clip::ClipVertex (&corners)[3])
+// The face the camera-relative direction 'v' points at: the dominant component's axis, its sign
+// the side. -1 when two components tie for it, which leaves the face for the full cut to settle.
+int FaceOf(const float * const v)
 {
-    trisStream.PushClippedTriangle(corners, kSkyColor);
+    const float ax = std::fabs(v[0]);
+    const float ay = std::fabs(v[1]);
+    const float az = std::fabs(v[2]);
+    if (ax > ay && ax > az)
+    {
+        return (v[0] < 0.0f) ? 1 : 0;
+    }
+    if (ay > ax && ay > az)
+    {
+        return (v[1] < 0.0f) ? 3 : 2;
+    }
+    if (az > ax && az > ay)
+    {
+        return (v[2] < 0.0f) ? 5 : 4;
+    }
+    return -1;
 }
 
-// One corner of a cube face: face-local ST in [-1, 1] to a world-space vertex
-// on the cube around 'eye', with the texture coordinates that go with it.
+// Grows the bounds by one sky surface, its corners in the model's space under 'toWorld', or in the
+// world's when that is null: Sky_ProcessPoly's half that QuakeSpasm's bounds come from.
 //
-// The ST inset is not cosmetic. Texture wrapping is REPEAT for the whole GS
-// environment and sky faces filter bilinearly, so a coordinate landing exactly
-// on 0 or 1 blends with the texel that wrapped around from the opposite edge
-// and draws a bright seam along the cube's edges. Half a texel in from each
-// side is enough to keep the filter kernel inside the image; the width comes
-// from the face itself so it stays right whatever ps2_skymip did to it.
-clip::ClipVertex MakeSkyVertex(float s, float t, const int axis,
-                               const tex::Texture & face,
-                               const vec3_t eye, const float rotateDegrees)
+// Most sky polygons lie within one face's view: when every corner points at the same face, so
+// does the whole polygon - a face's view is a convex cone, and so is the polygon - and its corners
+// go straight to the projection, with none of the cut's six stages.
+void AddSkySurface(const brush::SurfaceDraw & draw, const math::Mat4 * const toWorld)
 {
-    const vec3_t b = { s * kSkyDistance, t * kSkyDistance, kSkyDistance };
+    if (draw.geometry != brush::Geometry::Fan || draw.numVerts < 3 || draw.numVerts > kMaxSkyClipVerts - 2)
+    {
+        return;
+    }
 
-    vec3_t v;
+    vec3_t verts[kMaxSkyClipVerts];
+    for (int i = 0; i < draw.numVerts; ++i)
+    {
+        const math::Vec3 & p = draw.verts[i].position;
+        math::Vec3 world = p;
+        if (toWorld != nullptr)
+        {
+            const math::Vec4 w = math::Transform(math::Vec4{ p.x, p.y, p.z, 1.0f }, *toWorld);
+            world = { w.x, w.y, w.z };
+        }
+        verts[i][0] = world.x - r_origin[0];
+        verts[i][1] = world.y - r_origin[1];
+        verts[i][2] = world.z - r_origin[2];
+    }
+
+    const int face = FaceOf(verts[0]);
+    bool oneFace = (face >= 0);
+    for (int i = 1; i < draw.numVerts && oneFace; ++i)
+    {
+        oneFace = (FaceOf(verts[i]) == face);
+    }
+
+    if (oneFace)
+    {
+        ProjectSkyPolygon(draw.numVerts, verts);
+    }
+    else
+    {
+        ClipSkyPolygon(draw.numVerts, verts, 0);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// The frame's sky surfaces (Sky_ProcessTextureChains, Sky_ProcessEntities)
+// ------------------------------------------------------------------------------------------------
+
+// Whether a brush model has any sky surface at all, which next to none of a map's doors and lifts
+// do: those are passed over before their transforms are worked out.
+bool HasSkySurfaces(const qmodel_t & model)
+{
+    const msurface_t * surf = &model.surfaces[model.firstmodelsurface];
+    for (int i = 0; i < model.nummodelsurfaces; ++i, ++surf)
+    {
+        if ((surf->flags & SURF_DRAWSKY) != 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A brush entity whose sky surfaces may show: one with any, in view and not invisible. Its model to
+// world transform, as the view draws it (R_DrawBrushModel's flipped pitch included).
+bool EntitySkyTransform(const entity_t & e, math::Mat4 * const outToWorld)
+{
+    if (e.model->type != mod_brush || !HasSkySurfaces(*e.model) || view::CullModelForEntity(e) ||
+        e.alpha == ENTALPHA_ZERO)
+    {
+        return false;
+    }
+    const vec3_t angles = { -e.angles[PITCH], e.angles[YAW], e.angles[ROLL] };
+    *outToWorld = view::EntityMatrix(e.origin, angles, e.scale);
+    return true;
+}
+
+// Whether a brush entity's sky surface faces the camera, from 'modelorg', the camera in the
+// model's space - R_DrawBrushModel's test.
+bool FacesCamera(const msurface_t & surf, const vec3_t modelorg)
+{
+    constexpr float kBackfaceEpsilon = static_cast<float>(BACKFACE_EPSILON);
+
+    const float dot = DotProduct(modelorg, surf.plane->normal) - surf.plane->dist;
+    return ((surf.flags & SURF_PLANEBACK) != 0 && dot < -kBackfaceEpsilon) ||
+           ((surf.flags & SURF_PLANEBACK) == 0 && dot >  kBackfaceEpsilon);
+}
+
+// Calls 'visit(draw, mvp, toWorld)' for every sky surface in view: the world's, off its texture
+// chains (toWorld null), then those of the brush entities that face the camera - and 'endModel()'
+// after each model's, before the transforms it was handed go: a stream holds its transform by
+// pointer, so a pass gathering under them has to flush there.
+template<typename Visit, typename EndModel>
+void ForEachSkySurface(Visit & visit, EndModel & endModel)
+{
+    const math::Mat4 & viewProj = view::ViewProjection();
+
+    if (r_drawworld.value != 0.0f)
+    {
+        const qmodel_t & world = *cl.worldmodel;
+        for (int i = 0; i < world.numtextures; ++i)
+        {
+            const texture_t * const t = world.textures[i];
+            if (t == nullptr || t->texturechains[chain_world] == nullptr ||
+                (t->texturechains[chain_world]->flags & SURF_DRAWSKY) == 0)
+            {
+                continue;
+            }
+            for (const msurface_t * s = t->texturechains[chain_world]; s != nullptr; s = s->texturechain)
+            {
+                visit(brush::DrawFor(world, *s), viewProj, static_cast<const math::Mat4 *>(nullptr));
+            }
+        }
+        endModel();
+    }
+
+    if (r_drawentities.value == 0.0f)
+    {
+        return;
+    }
+
+    for (int i = 0; i < cl_numvisedicts; ++i)
+    {
+        const entity_t & e = *cl_visedicts[i];
+
+        math::Mat4 toWorld;
+        if (!EntitySkyTransform(e, &toWorld))
+        {
+            continue;
+        }
+
+        // The camera in the model's space.
+        vec3_t modelorg;
+        VectorSubtract(r_refdef.vieworg, e.origin, modelorg);
+        if (e.angles[0] != 0.0f || e.angles[1] != 0.0f || e.angles[2] != 0.0f)
+        {
+            vec3_t temp, forward, right, up, angles;
+            VectorCopy(modelorg, temp);
+            VectorCopy(e.angles, angles);
+            AngleVectors(angles, forward, right, up);
+            modelorg[0] =  DotProduct(temp, forward);
+            modelorg[1] = -DotProduct(temp, right);
+            modelorg[2] =  DotProduct(temp, up);
+        }
+
+        const qmodel_t & model = *e.model;
+        const math::Mat4 mvp = toWorld * viewProj;
+        const msurface_t * surf = &model.surfaces[model.firstmodelsurface];
+        for (int j = 0; j < model.nummodelsurfaces; ++j, ++surf)
+        {
+            if ((surf->flags & SURF_DRAWSKY) != 0 && FacesCamera(*surf, modelorg))
+            {
+                visit(brush::DrawFor(model, *surf), mvp, &toWorld);
+            }
+        }
+        endModel();
+    }
+}
+
+// Appends a surface's fan, every corner in one colour, under 'mvp'.
+void GatherFan(rs::TriangleStream & stream, const brush::SurfaceDraw & draw, const math::Mat4 & mvp,
+               const u32 rgba)
+{
+    if (draw.geometry != brush::Geometry::Fan)
+    {
+        return;
+    }
+
+    stream.SetTransform(mvp);
+
+    const vu1::DrawVertex * const src = draw.verts;
+    vu1::DrawVertex * __restrict dst = stream.ReserveVerts((draw.numVerts - 2) * 3);
+    for (int t = 1; t < draw.numVerts - 1; ++t)
+    {
+        vu1::CopyDrawVertex(dst[0], src[0]);
+        vu1::CopyDrawVertex(dst[1], src[t]);
+        vu1::CopyDrawVertex(dst[2], src[t + 1]);
+        dst[0].rgba = rgba;
+        dst[1].rgba = rgba;
+        dst[2].rgba = rgba;
+        dst += 3;
+    }
+    stream.CommitVerts(dst);
+}
+
+// ------------------------------------------------------------------------------------------------
+// The layers (gl_sky.c's Sky_DrawSkyLayers, Sky_DrawFace, Sky_DrawFaceQuad, Sky_GetTexCoord)
+// ------------------------------------------------------------------------------------------------
+
+// How far a layer has scrolled, in texels: 'speed' a second, wrapped to the 128-texel layer while
+// it is still a double, as QuakeSpasm wraps it.
+float LayerScroll(const float speed)
+{
+    const double scroll = cl.time * static_cast<double>(speed);
+    return static_cast<float>(scroll - (std::floor(scroll / 128.0) * 128.0));
+}
+
+// A grid vertex of face 'axis' at face-local (s, t) in [-1, 1], as the back layer draws it: its
+// place on the box around the camera, and the layer's texture coordinates there - Sky_GetTexCoord's
+// flattened sphere, the direction's height tripled and the result spread over the 128-texel layer.
+void MakeGridVertex(vu1::DrawVertex & out, const float s, const float t, const int axis, const float scroll)
+{
+    const float b[3] = { s * kBoxSize, t * kBoxSize, kBoxSize };
+
+    float dir[3];
     for (int j = 0; j < 3; ++j)
     {
         const int k = s_stToVec[axis][j];
-        v[j] = (k < 0) ? -b[-k - 1] : b[k - 1];
+        dir[j] = (k < 0) ? -b[-k - 1] : b[k - 1];
     }
 
-    if (rotateDegrees != 0.0f)
+    const float flatZ  = dir[2] * 3.0f;
+    const float length = (6.0f * 63.0f) / math::Sqrtf((dir[0] * dir[0]) + (dir[1] * dir[1]) + (flatZ * flatZ));
+
+    out.position   = { r_origin[0] + dir[0], r_origin[1] + dir[1], r_origin[2] + dir[2] };
+    out.lightmap_s = 0.0f;
+    out.rgba       = kModulateIdentity;
+    out.s          = (scroll + (dir[0] * length)) * (1.0f / 128.0f);
+    out.t          = (scroll + (dir[1] * length)) * (1.0f / 128.0f);
+    out.lightmap_t = 0.0f;
+}
+
+// Appends the grid's cells, two triangles each: QuakeSpasm's quad (i, j), (i, j + 1),
+// (i + 1, j + 1), (i + 1, j), fanned.
+void EmitGridCells(rs::TriangleStream & stream, const int columns, const int rows)
+{
+    for (int j = 0; j < rows - 1; ++j)
     {
-        vec3_t rotated;
-        RotatePointAroundVector(rotated, s_skyAxis, v, rotateDegrees);
-        VectorCopy(rotated, v);
+        const vu1::DrawVertex * const row0 = &s_grid[j * columns];
+        const vu1::DrawVertex * const row1 = &s_grid[(j + 1) * columns];
+
+        vu1::DrawVertex * __restrict dst = stream.ReserveVerts((columns - 1) * 6);
+        for (int i = 0; i < columns - 1; ++i)
+        {
+            vu1::CopyDrawVertex(dst[0], row0[i]);
+            vu1::CopyDrawVertex(dst[1], row1[i]);
+            vu1::CopyDrawVertex(dst[2], row1[i + 1]);
+            vu1::CopyDrawVertex(dst[3], row0[i]);
+            vu1::CopyDrawVertex(dst[4], row1[i + 1]);
+            vu1::CopyDrawVertex(dst[5], row0[i + 1]);
+            dst += 6;
+        }
+        stream.CommitVerts(dst);
+    }
+}
+
+// Draws one box face's cells that the sky surfaces' bounds touch, in both layers.
+void DrawFace(rs::TriangleStream & stream, const int axis, const int quality, const float backScroll,
+              const float frontScroll, const u32 frontColor)
+{
+    const int di = quality;
+    const int dj = (axis < 4) ? quality * 2 : quality; // the sides are cut twice as finely up them
+    const float qi = 1.0f / static_cast<float>(di);
+    const float qj = 1.0f / static_cast<float>(dj);
+
+    // The cells the bounds reach, as QuakeSpasm picks them.
+    int iFirst = di, iLast = -1, jFirst = dj, jLast = -1;
+    for (int i = 0; i < di; ++i)
+    {
+        const float at = static_cast<float>(i) * qi;
+        if (at >= ((s_skyMins[0][axis] * 0.5f) + 0.5f) - qi && at <= (s_skyMaxs[0][axis] * 0.5f) + 0.5f)
+        {
+            iFirst = (i < iFirst) ? i : iFirst;
+            iLast  = i;
+        }
+    }
+    for (int j = 0; j < dj; ++j)
+    {
+        const float at = static_cast<float>(j) * qj;
+        if (at >= ((s_skyMins[1][axis] * 0.5f) + 0.5f) - qj && at <= (s_skyMaxs[1][axis] * 0.5f) + 0.5f)
+        {
+            jFirst = (j < jFirst) ? j : jFirst;
+            jLast  = j;
+        }
+    }
+    if (iLast < iFirst || jLast < jFirst)
+    {
+        return;
     }
 
-    const float texelS = 0.5f / static_cast<float>(face.width);
-    const float texelT = 0.5f / static_cast<float>(face.height);
+    // The back layer's grid over those cells.
+    const int columns = iLast - iFirst + 2;
+    const int rows    = jLast - jFirst + 2;
+    for (int j = 0; j < rows; ++j)
+    {
+        for (int i = 0; i < columns; ++i)
+        {
+            MakeGridVertex(s_grid[(j * columns) + i],
+                           -1.0f + (2.0f * static_cast<float>(i + iFirst) * qi),
+                           -1.0f + (2.0f * static_cast<float>(j + jFirst) * qj), axis, backScroll);
+        }
+    }
 
-    s = (s + 1.0f) * 0.5f;
-    t = (t + 1.0f) * 0.5f;
+    stream.SetTexture(*s_solidLayer);
+    stream.SetDrawFlags(rs::DrawFlags::NoDepthWrite);
+    EmitGridCells(stream, columns, rows);
 
-    if (s < texelS) { s = texelS; }
-    else if (s > 1.0f - texelS) { s = 1.0f - texelS; }
+    // The front layer over it: the same grid, scrolled further, in its own colour.
+    const float offset = (frontScroll - backScroll) * (1.0f / 128.0f);
+    for (int k = 0; k < rows * columns; ++k)
+    {
+        s_grid[k].s   += offset;
+        s_grid[k].t   += offset;
+        s_grid[k].rgba = frontColor;
+    }
 
-    if (t < texelT) { t = texelT; }
-    else if (t > 1.0f - texelT) { t = 1.0f - texelT; }
-
-    clip::ClipVertex out;
-    out.pos = { eye[0] + v[0], eye[1] + v[1], eye[2] + v[2], 1.0f };
-    out.st  = { s, 1.0f - t, 0.0f, 0.0f };
-    return out;
+    stream.SetTexture(*s_alphaLayer);
+    stream.SetDrawFlags(rs::DrawFlags::Blended);
+    EmitGridCells(stream, columns, rows);
 }
 
 } // namespace
@@ -392,192 +779,217 @@ clip::ClipVertex MakeSkyVertex(float s, float t, const int axis,
 
 void Init()
 {
-    s_skipSky    = Cvar_Get("ps2_skip_sky",        "0", 0); // Debug: drop the sky pass entirely.
-    s_fullBounds = Cvar_Get("ps2_sky_full_bounds", "0", 0); // Debug: draw all six faces whole, ignoring what is visible.
-    s_skyMip     = Cvar_Get("ps2_skymip",          "0", CVAR_ARCHIVE); // Load sky faces at half resolution (ref_gl's gl_skymip).
+    Cvar_RegisterVariable(&s_fastSky);
+    Cvar_RegisterVariable(&s_skyQuality);
+    Cvar_RegisterVariable(&s_skyAlpha);
 
-    ClearBounds();
-}
-
-void BeginRegistration()
-{
-    // The level's Sky textures are about to be swept up by
-    // tex::EndRegistration() if this map doesn't ask for them again.
-    for (int i = 0; i < kNumSkyFaces; ++i)
+    // QuakeSpasm's Sky_SkyCommand_f, over skyboxes that never load here (see Sky_LoadSkyBox).
+    Cmd_AddCommand("sky", []()
     {
-        s_faces[i] = nullptr;
-    }
-    s_skyName[0] = '\0';
-    s_skyRotate  = 0.0f;
-    VectorClear(s_skyAxis);
-}
-
-void SetSky(const char * name, const float rotate, const vec3_t axis)
-{
-    BeginRegistration(); // Drop whatever the last map had.
-
-    if (name == nullptr || name[0] == '\0')
-    {
-        return; // No sky for this map.
-    }
-
-    std::snprintf(s_skyName, sizeof(s_skyName), "%s", name);
-    s_skyRotate = rotate;
-
-    // RotatePointAroundVector transposes its basis to invert it, which is only
-    // the inverse for a unit axis - unlike glRotatef, it does not normalize
-    // what it is handed. The maps that rotate pass "0 1 1" and "1 1 0", and
-    // every map that doesn't still sends an all-zero axis (g_spawn.c writes
-    // the key unconditionally), which would normalize to garbage.
-    VectorCopy(axis, s_skyAxis);
-    if (VectorNormalize(s_skyAxis) == 0.0f)
-    {
-        s_skyRotate = 0.0f;
-    }
-
-    // A rotating sky can never bound itself to a couple of faces - it forces
-    // all six resident at once - so it takes the smaller ones, as ref_gl's
-    // "chop down rotating skies for less memory" did.
-    tex::SetSkyDownsample(s_skyMip->value != 0.0f || s_skyRotate != 0.0f);
-
-    char path[MAX_QPATH];
-    for (int i = 0; i < kNumSkyFaces; ++i)
-    {
-        std::snprintf(path, sizeof(path), "env/%s%s.pcx", s_skyName, s_suffixes[i]);
-
-        s_faces[i] = tex::Find(path, tex::ImageType::Sky);
-        if (s_faces[i] == nullptr)
+        if (Cmd_Argc() == 1)
         {
-            // A touch-only pass returns nothing for a face not cached yet; the real SetSky follows.
-            if (!tex::IsTouchOnly())
-            {
-                Com_DPrintf("WARNING: Missing sky face '%s'!\n", path);
-            }
-            s_faces[i] = &tex::DebugTexture();
+            Con_Printf("\"sky\" is \"\"\n");
         }
-    }
-
-    tex::SetSkyDownsample(false);
-}
-
-void ClearBounds()
-{
-    for (int i = 0; i < kNumSkyFaces; ++i)
-    {
-        s_skyMins[0][i] = s_skyMins[1][i] =  9999.0f;
-        s_skyMaxs[0][i] = s_skyMaxs[1][i] = -9999.0f;
-    }
-}
-
-void AddSurface(const mod::ModelSurface & surf, const vec3_t viewOrigin)
-{
-    if (s_faces[0] == nullptr)
-    {
-        return; // No sky loaded; the surface stays a hole.
-    }
-
-    // The split works in eye-relative space, but with the world's axes: what
-    // it decides is which way the sky is from the player, and the cube is
-    // never rotated with the view.
-    for (const mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
-    {
-        if (poly->numVerts > kMaxSkyClipVerts - 2)
+        else if (Cmd_Argc() == 2)
         {
-            continue; // Guarded here too so the recursion never has to unwind.
+            Sky_LoadSkyBox(Cmd_Argv(1));
         }
-
-        vec3_t verts[kMaxSkyClipVerts];
-        for (int i = 0; i < poly->numVerts; ++i)
+        else
         {
-            const math::Vec3 & p = poly->vertexes[i].position;
-            verts[i][0] = p.x - viewOrigin[0];
-            verts[i][1] = p.y - viewOrigin[1];
-            verts[i][2] = p.z - viewOrigin[2];
+            Con_Printf("usage: sky <skyname>\n");
         }
-
-        ClipSkyPolygon(poly->numVerts, verts, 0);
-    }
+    });
 }
 
-void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
+// gl_sky.c's Sky_NewMap: worldspawn may name a skybox.
+void NewMap()
 {
-    if (s_faces[0] == nullptr || s_skipSky->value != 0.0f)
+    const char * data = COM_Parse(cl.worldmodel->entities);
+    if (data == nullptr || com_token[0] != '{')
     {
         return;
     }
 
-    const bool fullBounds = (s_fullBounds->value != 0.0f);
-
-    // Is any sky visible at all? Indoor maps answer no here and pay nothing
-    // else. Checked before the rotating-sky override below, or a rotating map
-    // would draw its sky from inside a sealed room.
-    if (!fullBounds)
+    for (;;)
     {
-        int i = 0;
-        for (; i < kNumSkyFaces; ++i)
-        {
-            if (s_skyMins[0][i] < s_skyMaxs[0][i] && s_skyMins[1][i] < s_skyMaxs[1][i])
-            {
-                break;
-            }
-        }
-        if (i == kNumSkyFaces)
+        data = COM_Parse(data);
+        if (data == nullptr || com_token[0] == '}')
         {
             return;
         }
-    }
 
-    // Degrees, not radians: RotatePointAroundVector takes degrees, and
-    // skyrotate is degrees per second (ref_gl passes the same to glRotatef).
-    const float rotateDegrees = viewDef.time * s_skyRotate;
-
-    // Claims its vertices from the command buffer as it goes, and is flushed inside
-    // the loop, so the pass owns it rather than the file.
-    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
-
-    trisStream.SetTransform(viewProj);
-    trisStream.SetDrawFlags(kSkyDrawFlags);
-
-    for (int i = 0; i < kNumSkyFaces; ++i)
-    {
-        if (s_skyRotate != 0.0f || fullBounds)
+        char key[128];
+        q_strlcpy(key, (com_token[0] == '_') ? (com_token + 1) : com_token, sizeof(key));
+        for (size_t len = std::strlen(key); len > 0 && key[len - 1] == ' '; --len)
         {
-            // A rotated cube's bounds were accumulated in the unrotated frame,
-            // so they no longer say where the sky is. Draw the faces whole.
-            s_skyMins[0][i] = s_skyMins[1][i] = -1.0f;
-            s_skyMaxs[0][i] = s_skyMaxs[1][i] =  1.0f;
+            key[len - 1] = '\0';
         }
 
-        if (s_skyMins[0][i] >= s_skyMaxs[0][i] || s_skyMins[1][i] >= s_skyMaxs[1][i])
+        data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+        if (data == nullptr)
         {
-            continue; // Nothing of this face is visible.
+            return;
         }
 
-        const tex::Texture & face = *s_faces[s_skyTexOrder[i]];
-
-        // The face's visible rectangle, wound as a quad: (min,min), (min,max),
-        // (max,max), (max,min).
-        const clip::ClipVertex quad[4] = {
-            MakeSkyVertex(s_skyMins[0][i], s_skyMins[1][i], i, face, viewDef.vieworg, rotateDegrees),
-            MakeSkyVertex(s_skyMins[0][i], s_skyMaxs[1][i], i, face, viewDef.vieworg, rotateDegrees),
-            MakeSkyVertex(s_skyMaxs[0][i], s_skyMaxs[1][i], i, face, viewDef.vieworg, rotateDegrees),
-            MakeSkyVertex(s_skyMaxs[0][i], s_skyMins[1][i], i, face, viewDef.vieworg, rotateDegrees)
-        };
-
-        // Winding is free here: rs::DrawTriangles has no back-face test of its
-        // own, and the sky has nothing to cull against.
-        clip::ClipVertex tri0[3] = { quad[0], quad[1], quad[2] };
-        clip::ClipVertex tri1[3] = { quad[0], quad[2], quad[3] };
-        trisStream.SetTexture(face);
-
-        PushSkyTriangle(trisStream, tri0);
-        PushSkyTriangle(trisStream, tri1);
-
-        // One batch per face: each binds its own texture, so they could never
-        // have shared one anyway.
-        rs::Submit(trisStream);
-        PS2_PROFILE_ONLY(++view::GetStats().skyFaces);
+        // QuakeSpasm's key, and the two other engines' it accepts too.
+        if (std::strcmp(key, "sky") == 0 || std::strcmp(key, "skyname") == 0 || std::strcmp(key, "qlsky") == 0)
+        {
+            Sky_LoadSkyBox(com_token);
+        }
     }
 }
 
+void Draw(rs::TriangleStream & stream)
+{
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::Sky);
+
+    // The flat sky: the surfaces themselves in the flat colour, writing their depth. Also what
+    // r_lightmap draws, as QuakeSpasm leaves the sky to the world's passes there.
+    const bool layers = s_fastSky.value == 0.0f && !view::LightmapMode() &&
+                        s_solidLayer != nullptr && s_alphaLayer != nullptr;
+
+    stream.SetTexture(tex::DebugTexture()); // Unsampled, but a batch binds one.
+
+    auto flush = [&stream]() { rs::Submit(stream); };
+
+    if (!layers)
+    {
+        stream.SetDrawFlags(rs::DrawFlags::Untextured);
+        auto flat = [&stream](const brush::SurfaceDraw & draw, const math::Mat4 & mvp, const math::Mat4 *)
+        {
+            GatherFan(stream, draw, mvp, s_flatColor);
+        };
+        ForEachSkySurface(flat, flush);
+        return;
+    }
+
+    // What of the box the sky surfaces in view cover.
+    ClearBounds();
+    auto bound = [](const brush::SurfaceDraw & draw, const math::Mat4 &, const math::Mat4 * toWorld)
+    {
+        AddSkySurface(draw, toWorld);
+    };
+    auto nothing = []() {};
+    ForEachSkySurface(bound, nothing);
+    if (!AnyBounds())
+    {
+        return; // indoors
+    }
+
+    // The layers over it, before anything else and with no depth: the front one at r_skyalpha,
+    // which its RGBA texels' 0x80 multiplies straight into the GS's 1.0.
+    const int quality = static_cast<int>(s_skyQuality.value);
+    const int cells   = (quality < 1) ? 1 : ((quality > kMaxSkyQuality) ? kMaxSkyQuality : quality);
+
+    const float alpha = (s_skyAlpha.value < 0.0f) ? 0.0f : ((s_skyAlpha.value > 1.0f) ? 1.0f : s_skyAlpha.value);
+    const u32 frontColor = vu1::PackColorRGBA(128, 128, 128, static_cast<u32>(alpha * 128.0f));
+
+    const float backScroll  = LayerScroll(8.0f);
+    const float frontScroll = LayerScroll(16.0f);
+
+    stream.SetTransform(view::ViewProjection());
+    for (int axis = 0; axis < kNumFaces; ++axis)
+    {
+        if (s_skyMins[0][axis] < s_skyMaxs[0][axis] && s_skyMins[1][axis] < s_skyMaxs[1][axis])
+        {
+            DrawFace(stream, axis, cells, backScroll, frontScroll, frontColor);
+        }
+    }
+    rs::Submit(stream);
+
+    // Then the sky surfaces' depth, so what stands behind them stays hidden from the world drawn
+    // next, and the layers show through them alone.
+    stream.SetTexture(tex::DebugTexture());
+    stream.SetDrawFlags(rs::DrawFlags::Untextured | rs::DrawFlags::DepthOnly);
+    auto depth = [&stream](const brush::SurfaceDraw & draw, const math::Mat4 & mvp, const math::Mat4 *)
+    {
+        GatherFan(stream, draw, mvp, kModulateIdentity);
+    };
+    ForEachSkySurface(depth, flush);
+}
+
 } // namespace ps2::sky
+
+extern "C" {
+
+// ------------------------------------------------------------------------------------------------
+// The engine's sky hooks
+// ------------------------------------------------------------------------------------------------
+
+// A sky texture is 256x128: on the right the solid back layer, on the left the front one, whose
+// index 0 is a hole. Called as the map loads (Mod_LoadTextures).
+void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)
+{
+    using namespace ps2::sky;
+
+    ClearLayers();
+
+    if (mt->width != 256 || mt->height != 128)
+    {
+        Con_DPrintf("Sky texture %s is %d x %d, expected 256 x 128\n", mt->name, mt->width, mt->height);
+    }
+
+    const int width  = static_cast<int>(mt->width) / 2;
+    const int height = static_cast<int>(mt->height);
+    if (!IsPowerOfTwo(width) || !IsPowerOfTwo(height) || (width * height) < 16)
+    {
+        Con_DPrintf("Sky texture %s can't tile; the sky draws flat\n", mt->name);
+        return;
+    }
+
+    const byte * const src = static_cast<const byte *>(static_cast<const void *>(mt + 1));
+    const int stride = static_cast<int>(mt->width);
+
+    CreateLayers(*mod, *mt, width, height,
+        [src, stride, width](const int x, const int y) -> byte { return src[(y * stride) + width + x]; },
+        [src, stride](const int x, const int y) -> u32
+        {
+            const byte p = src[(y * stride) + x];
+            return (p == 0) ? 0u : ((d_8to24table[p] & 0x00FFFFFFu) | (0x80u << 24));
+        });
+}
+
+// A Quake 64 sky is 32x64: the front layer on top, the back one below, and the front blended at
+// half its opacity everywhere rather than cut out.
+void Sky_LoadTextureQ64(qmodel_t * mod, texture_t * mt)
+{
+    using namespace ps2::sky;
+
+    ClearLayers();
+
+    const int width  = static_cast<int>(mt->width);
+    const int height = static_cast<int>(mt->height) / 2;
+    if (!IsPowerOfTwo(width) || !IsPowerOfTwo(height) || (width * height) < 16)
+    {
+        Con_DPrintf("Q64 sky texture %s can't tile; the sky draws flat\n", mt->name);
+        return;
+    }
+
+    const byte * const front = static_cast<const byte *>(static_cast<const void *>(mt + 1));
+    const byte * const back  = front + (width * height);
+
+    CreateLayers(*mod, *mt, width, height,
+        [back, width](const int x, const int y) -> byte { return back[(y * width) + x]; },
+        [front, width](const int x, const int y) -> u32
+        {
+            return (d_8to24table[front[(y * width) + x]] & 0x00FFFFFFu) | (0x40u << 24);
+        });
+}
+
+// A skybox is six images loaded from gfx/env/, which the PS2 doesn't load (see Image_LoadImage):
+// the scrolling layers stay, as QuakeSpasm keeps them when a skybox is missing.
+void Sky_LoadSkyBox(const char * name)
+{
+    if (name != nullptr && name[0] != '\0')
+    {
+        Con_Printf("Couldn't load skybox %s: no external images on the PS2\n", name);
+    }
+}
+
+// The map is going: its layers with it.
+void Sky_ClearAll()
+{
+    ps2::sky::ClearLayers();
+}
+
+} // extern "C"

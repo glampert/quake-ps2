@@ -350,9 +350,6 @@ void DrawDrawStatsOverlay()
         { "Tris",     rcStats.trisDrawn    },
         { "Prts",     rcStats.particles    },
         { "Batches",  rcStats.drawBatches  },
-        { "Clipped",  rcStats.trisClipped  },
-        { "ClipMaxV", rcStats.clipMaxVerts },
-        { "Culled",   rcStats.trisCulled   },
         // Most qwords one GIF block in the frame chain has ever held - the 2D in practice, since
         // the clear is a fixed ~30. A slice of the chain rather than a budget of its own, so what
         // it says is how much of a chain half a full console wants on top of the 3D.
