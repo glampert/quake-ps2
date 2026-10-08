@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "ps2/debug/engine_profile.h" // [PS2_QUAKE]: the SndMix probe below
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]: where config.cfg is written
 #include <setjmp.h>
 
 /*
@@ -315,7 +316,8 @@ void Host_WriteConfiguration (void)
 // config.cfg cvars
 	if (host_initialized && !isDedicated && !host_parms->errstate)
 	{
-		f = fopen (va("%s/config.cfg", com_gamedir), "w");
+		// [PS2_QUAKE]: through the backend, which keeps it on the memory card on a console.
+		f = PS2_ConfigOpenWrite ();
 		if (!f)
 		{
 			Con_Printf ("Couldn't write config.cfg.\n");
@@ -332,7 +334,7 @@ void Host_WriteConfiguration (void)
 		if (in_mlook.state & 1) fprintf (f, "+mlook\n");
 		//johnfitz
 
-		fclose (f);
+		PS2_ConfigCloseWrite (f); // [PS2_QUAKE]
 		Host_SyncExternalFS();
 	}
 }

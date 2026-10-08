@@ -6,10 +6,10 @@
  *  background corner colours and the lighting the browser shows the icon with, and the icon
  *  files to use for listing, copying and deleting - all the same one here.
  *
- *  The icon is the quad damage pickup (models/items/quaddama/tris.md2), the Quake II emblem in
- *  3D: its first keyframe with its skin, read with the renderer's own MD2 parsing
- *  (renderer/model_load.h) and turned into icon space. Should the game data not have it, the
- *  icon is a plain square instead, so a save directory always has one.
+ *  The icon is the quad damage pickup (progs/quaddama.mdl), as on the Quake II port: its first
+ *  frame with its first skin, read straight from the MDL in the game data and turned into icon
+ *  space. Should the game data not have it, the icon is a plain square instead, so a save
+ *  directory always has one.
  *
  *  It is built from the game data whenever a save goes to a card, and rewritten if the card's
  *  copy differs - so a change of icon reaches cards that already have a save directory. The
@@ -29,8 +29,9 @@
  * ================================================================================================ */
 
 #include "ps2/save/mc_icon.h"
-#include "ps2/renderer/model_load.h"
+#include "ps2/math/vec_mat.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <libmc.h>
 #include <sjis.h>
@@ -41,9 +42,9 @@ namespace {
 using ps2::heap::MemTag;
 using ps2::math::Vec3;
 
-constexpr const char * kTitleLine1 = "Quake II";
+constexpr const char * kTitleLine1 = "Quake";
 constexpr const char * kTitleLine2 = "Saved Games";
-constexpr const char * kIconModel  = "models/items/quaddama/tris.md2";
+constexpr const char * kIconModel  = "progs/quaddama.mdl";
 
 // Browser-space size of the longest side of the model's bounding box.
 constexpr float kIconSize = 3.2f;
@@ -55,6 +56,12 @@ constexpr float kIconSize = 3.2f;
 constexpr bool kDoubleSidedModel = true;
 
 constexpr int kTextureSize = 128;
+
+// Bounds a well-formed MDL stays within (QuakeSpasm's MAXALIASVERTS and MAXALIASTRIS, and the
+// skin size its loader takes): anything past them is not a model to trust the offsets of.
+constexpr int kMaxModelVerts = 2000;
+constexpr int kMaxModelTris  = 4096;
+constexpr int kMaxSkinSide   = 1024;
 
 struct IconHeader
 {
@@ -108,20 +115,6 @@ constexpr u32 kFloatOne     = 0x3F800000u;
 constexpr u32 kTextureBytes = kTextureSize * kTextureSize * 2u;
 
 constexpr u32 kAnimationBytes = sizeof(IconAnimHeader) + sizeof(IconFrame) + sizeof(IconKey);
-
-// The palette index Quake's images use for "no pixel". A skin has a stray few at most; they
-// take their neighbours' colour.
-constexpr int kTransparent = 255;
-
-// A decoded 8-bit Quake PCX.
-struct Picture
-{
-    int        width;
-    int        height;
-    int        stride;  // Bytes per row of indexes (the PCX's bytes per line, even).
-    u8 *       indexes; // stride * height palette indexes, on the heap.
-    const u8 * palette; // 256 RGB triplets, inside the file's data.
-};
 
 // An icon file being built: the whole file on the heap, and where its vertices and texture go.
 struct IconFile
@@ -231,81 +224,145 @@ void FillPlainTexture(u16 * outTexels)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Skin texture
+// The model: the parts of an MDL the icon needs, found with every offset checked
 // ------------------------------------------------------------------------------------------------
 
-inline bool HasColour(const Picture & picture, const int x, const int y)
+// Reads a little-endian int at a byte offset, which an MDL doesn't promise is aligned.
+inline int ReadInt(const u8 * const bytes, const size_t offset)
 {
-    return picture.indexes[y * picture.stride + x] != kTransparent;
+    int value;
+    std::memcpy(&value, bytes + offset, sizeof(value));
+    return value;
 }
 
-// Decodes an 8-bit Quake PCX. False if the data isn't one, or out of memory.
-bool DecodePcx(const u8 * data, const int sizeBytes, Picture & outPicture)
+struct ModelView
 {
-    constexpr int kHeaderBytes  = 128;
-    constexpr int kPaletteBytes = 768;
+    mdl_t               header;
+    const u8 *          skin;      // header.skinwidth * header.skinheight palette indexes
+    const stvert_t *    stverts;   // header.numverts
+    const dtriangle_t * triangles; // header.numtris
+    const trivertx_t *  verts;     // The first frame's, header.numverts
+};
 
-    if (sizeBytes < kHeaderBytes + kPaletteBytes || data[0] != 0x0A || data[2] != 1 || data[3] != 8)
+// Walks the MDL's blocks as Mod_LoadAliasModel does, taking the first skin and the first frame
+// (the first of a group's, for a group). False if anything runs past the end of the file.
+bool ParseModel(const u8 * const bytes, const size_t fileBytes, ModelView & out)
+{
+    if (fileBytes < sizeof(mdl_t))
+    {
+        return false;
+    }
+    std::memcpy(&out.header, bytes, sizeof(mdl_t));
+    const mdl_t & header = out.header;
+
+    if (header.ident != IDPOLYHEADER || header.version != ALIAS_VERSION || header.numskins < 1 ||
+        header.skinwidth < 1 || header.skinwidth > kMaxSkinSide || header.skinheight < 1 ||
+        header.skinheight > kMaxSkinSide || header.numverts < 1 || header.numverts > kMaxModelVerts ||
+        header.numtris < 1 || header.numtris > kMaxModelTris || header.numframes < 1)
     {
         return false;
     }
 
-    const int width        = (data[8]  | (data[9]  << 8)) - (data[4] | (data[5] << 8)) + 1;
-    const int height       = (data[10] | (data[11] << 8)) - (data[6] | (data[7] << 8)) + 1;
-    const int bytesPerLine = data[66] | (data[67] << 8);
-    if (width <= 0 || height <= 0 || bytesPerLine < width || width > 320 || height > 240)
-    {
-        return false;
-    }
+    const size_t skinBytes = static_cast<size_t>(header.skinwidth) * static_cast<size_t>(header.skinheight);
+    size_t offset = sizeof(mdl_t);
+    const auto fits = [&](const size_t bytesNeeded) { return offset + bytesNeeded <= fileBytes; };
 
-    const size_t numIndexes = static_cast<size_t>(bytesPerLine) * static_cast<size_t>(height);
-    u8 * const indexes = static_cast<u8 *>(ps2::heap::TryAlloc(numIndexes, MemTag::SaveData));
-    if (indexes == nullptr)
+    out.skin = nullptr;
+    for (int i = 0; i < header.numskins; ++i)
     {
-        return false;
-    }
-
-    // Run-length decode: a byte with the top two bits set repeats the next one (count & 0x3F).
-    const u8 * src = data + kHeaderBytes;
-    const u8 * const srcEnd = data + sizeBytes - kPaletteBytes;
-    size_t decoded = 0;
-    while (decoded < numIndexes && src < srcEnd)
-    {
-        u8 value = *src++;
-        size_t run = 1;
-        if ((value & 0xC0) == 0xC0)
+        if (!fits(sizeof(int)))
         {
-            run = value & 0x3Fu;
-            value = (src < srcEnd) ? *src++ : 0;
+            return false;
         }
-        while (run-- != 0 && decoded < numIndexes)
+        const int type = ReadInt(bytes, offset);
+        offset += sizeof(int);
+
+        int numInGroup = 1;
+        if (type == ALIAS_SKIN_GROUP)
         {
-            indexes[decoded++] = value;
+            if (!fits(sizeof(int)))
+            {
+                return false;
+            }
+            numInGroup = ReadInt(bytes, offset);
+            offset += sizeof(int);
+            if (numInGroup < 1 || !fits(static_cast<size_t>(numInGroup) * sizeof(float)))
+            {
+                return false;
+            }
+            offset += static_cast<size_t>(numInGroup) * sizeof(float); // the intervals
         }
+
+        if (!fits(static_cast<size_t>(numInGroup) * skinBytes))
+        {
+            return false;
+        }
+        if (out.skin == nullptr)
+        {
+            out.skin = bytes + offset;
+        }
+        offset += static_cast<size_t>(numInGroup) * skinBytes;
     }
-    std::memset(indexes + decoded, kTransparent, numIndexes - decoded); // A short file: the rest is empty.
 
-    outPicture.width   = width;
-    outPicture.height  = height;
-    outPicture.stride  = bytesPerLine;
-    outPicture.indexes = indexes;
-    outPicture.palette = data + sizeBytes - kPaletteBytes;
-    return true;
+    const size_t stvertBytes   = static_cast<size_t>(header.numverts) * sizeof(stvert_t);
+    const size_t triangleBytes = static_cast<size_t>(header.numtris) * sizeof(dtriangle_t);
+    if (!fits(stvertBytes + triangleBytes + sizeof(int)))
+    {
+        return false;
+    }
+    out.stverts   = static_cast<const stvert_t *>(static_cast<const void *>(bytes + offset));
+    out.triangles = static_cast<const dtriangle_t *>(static_cast<const void *>(bytes + offset + stvertBytes));
+    offset += stvertBytes + triangleBytes;
+
+    const int frameType = ReadInt(bytes, offset);
+    offset += sizeof(int);
+    if (frameType == ALIAS_GROUP)
+    {
+        if (!fits(sizeof(daliasgroup_t)))
+        {
+            return false;
+        }
+        const int numInGroup = ReadInt(bytes, offset);
+        offset += sizeof(daliasgroup_t);
+        if (numInGroup < 1 || !fits(static_cast<size_t>(numInGroup) * sizeof(float)))
+        {
+            return false;
+        }
+        offset += static_cast<size_t>(numInGroup) * sizeof(float); // the intervals
+    }
+
+    const size_t vertBytes = static_cast<size_t>(header.numverts) * sizeof(trivertx_t);
+    if (!fits(sizeof(daliasframe_t) + vertBytes))
+    {
+        return false;
+    }
+    out.verts = static_cast<const trivertx_t *>(static_cast<const void *>(bytes + offset + sizeof(daliasframe_t)));
+
+    // The blocks are read in place as structs of ints: they must sit on word boundaries, as they
+    // do in every MDL of the game (a skin is a whole number of words, its width a multiple of 4).
+    const uiptr mask = alignof(int) - 1u;
+    return ((reinterpret_cast<uiptr>(out.stverts) | reinterpret_cast<uiptr>(out.triangles)) & mask) == 0;
 }
 
-void FreePicture(Picture & picture)
+// A frame vertex, decoded to model space - Quake's: X forward, Y left, Z up.
+Vec3 FramePosition(const ModelView & model, const int index)
 {
-    const size_t numIndexes = static_cast<size_t>(picture.stride) * static_cast<size_t>(picture.height);
-    ps2::heap::Free(picture.indexes, numIndexes, MemTag::SaveData);
-    picture.indexes = nullptr;
+    const trivertx_t & vertex = model.verts[index];
+    return Vec3{ static_cast<float>(vertex.v[0]) * model.header.scale[0] + model.header.scale_origin[0],
+                 static_cast<float>(vertex.v[1]) * model.header.scale[1] + model.header.scale_origin[1],
+                 static_cast<float>(vertex.v[2]) * model.header.scale[2] + model.header.scale_origin[2] };
 }
 
-// Stretches the picture over the texture, bilinear. "No pixel" pixels lend no colour - they
-// would otherwise pull their surroundings towards black.
-void ResampleTexture(const Picture & picture, u16 * outTexels)
+// The skin's palette indexes, stretched over the texture through the game palette, bilinear.
+void TextureFromSkin(const ModelView & model, u16 * outTexels)
 {
-    const int width  = picture.width;
-    const int height = picture.height;
+    const int width  = model.header.skinwidth;
+    const int height = model.header.skinheight;
+
+    const auto channel = [&](const int x, const int y, const int shift) {
+        const u32 rgba = d_8to24table[model.skin[y * width + x]];
+        return static_cast<float>((rgba >> shift) & 0xFFu);
+    };
 
     for (int ty = 0; ty < kTextureSize; ++ty)
     {
@@ -321,86 +378,31 @@ void ResampleTexture(const Picture & picture, u16 * outTexels)
             const int   x1 = (x0 + 1 < width) ? x0 + 1 : x0;
             const float fx = (sx < 0.0f) ? 0.0f : sx - static_cast<float>(x0);
 
-            const int   xs[4]      = { x0, x1, x0, x1 };
-            const int   ys[4]      = { y0, y0, y1, y1 };
-            const float weights[4] = { (1.0f - fx) * (1.0f - fy), fx * (1.0f - fy), (1.0f - fx) * fy, fx * fy };
-
-            float rgb[3]      = {};
-            float totalWeight = 0.0f;
-            for (int c = 0; c < 4; ++c)
+            int rgb[3];
+            for (int c = 0; c < 3; ++c)
             {
-                if (!HasColour(picture, xs[c], ys[c]))
-                {
-                    continue;
-                }
-                const int index = picture.indexes[ys[c] * picture.stride + xs[c]];
-                for (int channel = 0; channel < 3; ++channel)
-                {
-                    rgb[channel] += weights[c] * static_cast<float>(picture.palette[index * 3 + channel]);
-                }
-                totalWeight += weights[c];
+                const int shift = c * 8; // d_8to24table holds R in the low byte
+                const float top    = channel(x0, y0, shift) + (channel(x1, y0, shift) - channel(x0, y0, shift)) * fx;
+                const float bottom = channel(x0, y1, shift) + (channel(x1, y1, shift) - channel(x0, y1, shift)) * fx;
+                rgb[c] = static_cast<int>(top + (bottom - top) * fy);
             }
-
-            if (totalWeight > 0.0f)
-            {
-                for (float & channel : rgb)
-                {
-                    channel /= totalWeight;
-                }
-            }
-
-            outTexels[ty * kTextureSize + tx] = PackTexel(static_cast<int>(rgb[0]), static_cast<int>(rgb[1]),
-                                                          static_cast<int>(rgb[2]));
+            outTexels[ty * kTextureSize + tx] = PackTexel(rgb[0], rgb[1], rgb[2]);
         }
     }
-}
-
-// Loads a PCX from the game data and stretches it over the texture. False if it couldn't be
-// loaded or decoded, leaving the texture untouched.
-bool TextureFromPcxFile(const char * name, u16 * outTexels)
-{
-    void * pcx = nullptr;
-    const int pcxBytes = FS_LoadFile(name, &pcx);
-
-    Picture picture = {};
-    const bool decoded = (pcxBytes > 0) && DecodePcx(static_cast<const u8 *>(pcx), pcxBytes, picture);
-    if (decoded)
-    {
-        ResampleTexture(picture, outTexels);
-        FreePicture(picture);
-    }
-
-    if (pcx != nullptr)
-    {
-        FS_FreeFile(pcx);
-    }
-    return decoded;
-}
-
-// ------------------------------------------------------------------------------------------------
-// The model
-// ------------------------------------------------------------------------------------------------
-
-// One keyframe vertex, decoded to model space - Quake's: X forward, Y left, Z up.
-Vec3 KeyframePosition(const daliasframe_t & frame, const int index)
-{
-    const dtrivertx_t & vertex = frame.verts[index];
-    return Vec3{ static_cast<float>(vertex.v[0]) * frame.scale[0] + frame.translate[0],
-                 static_cast<float>(vertex.v[1]) * frame.scale[1] + frame.translate[1],
-                 static_cast<float>(vertex.v[2]) * frame.scale[2] + frame.translate[2] };
 }
 
 // Turns the model's triangles into the icon's vertices: the bounding box's longest side
 // kIconSize, centred, standing on the floor. Model space maps to icon space as X <- Y,
 // Y <- -Z, Z <- -X: up is the icon's -Y, and the model's front faces -Z.
-void AddModelTriangles(IconFile & file, const dmdl_t & header, const daliasframe_t & frame,
-                       const mod::AliasVertex * corners, const int numTris)
+void AddModelTriangles(IconFile & file, const ModelView & model)
 {
-    Vec3 mins = KeyframePosition(frame, 0);
+    const mdl_t & header = model.header;
+
+    Vec3 mins = FramePosition(model, 0);
     Vec3 maxs = mins;
-    for (int i = 1; i < header.num_xyz; ++i)
+    for (int i = 1; i < header.numverts; ++i)
     {
-        const Vec3 p = KeyframePosition(frame, i);
+        const Vec3 p = FramePosition(model, i);
         mins.x = (p.x < mins.x) ? p.x : mins.x;
         mins.y = (p.y < mins.y) ? p.y : mins.y;
         mins.z = (p.z < mins.z) ? p.z : mins.z;
@@ -417,38 +419,52 @@ void AddModelTriangles(IconFile & file, const dmdl_t & header, const daliasframe
     const float centreX = (mins.x + maxs.x) * 0.5f;
     const float centreY = (mins.y + maxs.y) * 0.5f;
 
-    const auto makeVertex = [&](const mod::AliasVertex & corner) -> IconVertex {
-        const int index = static_cast<int>(corner.index);
-        const Vec3 p = KeyframePosition(frame, index);
+    const float invSkinWidth  = 1.0f / static_cast<float>(header.skinwidth);
+    const float invSkinHeight = 1.0f / static_cast<float>(header.skinheight);
 
-        int normalIndex = frame.verts[index].lightnormalindex;
+    const auto makeVertex = [&](const int index, const bool facesFront) -> IconVertex {
+        const Vec3 p = FramePosition(model, index);
+
+        int normalIndex = model.verts[index].lightnormalindex;
         normalIndex = (normalIndex < NUMVERTEXNORMALS) ? normalIndex : 0;
-        const float * const n = bytedirs[normalIndex];
+        const float * const n = r_avertexnormals[normalIndex];
+
+        // A vertex on the skin's seam is shared by the front and back halves of the skin: the
+        // back-facing triangles take it from the back half, half the skin's width across (as
+        // GL_MakeAliasModelDisplayLists does).
+        const stvert_t & st = model.stverts[index];
+        const int s = (!facesFront && st.onseam != 0) ? st.s + header.skinwidth / 2 : st.s;
 
         IconVertex vertex;
         SetVertex(vertex,
                   (p.y - centreY) * unit, -(p.z - mins.z) * unit, -(p.x - centreX) * unit,
                   n[1], -n[2], -n[0],
-                  corner.s, corner.t);
+                  (static_cast<float>(s) + 0.5f) * invSkinWidth, (static_cast<float>(st.t) + 0.5f) * invSkinHeight);
         return vertex;
     };
 
     u32 vertexIndex = 0;
-    for (int tri = 0; tri < numTris; ++tri)
+    for (int tri = 0; tri < header.numtris; ++tri)
     {
-        const IconVertex a = makeVertex(corners[tri * 3 + 0]);
-        const IconVertex b = makeVertex(corners[tri * 3 + 1]);
-        const IconVertex c = makeVertex(corners[tri * 3 + 2]);
+        const dtriangle_t & triangle = model.triangles[tri];
+        const bool facesFront = (triangle.facesfront != 0);
 
-        PutVertex(file, vertexIndex, a);
-        PutVertex(file, vertexIndex, b);
-        PutVertex(file, vertexIndex, c);
+        IconVertex corners[3];
+        for (int c = 0; c < 3; ++c)
+        {
+            const int index = triangle.vertindex[c];
+            corners[c] = makeVertex((index >= 0 && index < header.numverts) ? index : 0, facesFront);
+        }
+
+        PutVertex(file, vertexIndex, corners[0]);
+        PutVertex(file, vertexIndex, corners[1]);
+        PutVertex(file, vertexIndex, corners[2]);
 
         if (kDoubleSidedModel)
         {
-            PutVertex(file, vertexIndex, a);
-            PutVertex(file, vertexIndex, c);
-            PutVertex(file, vertexIndex, b);
+            PutVertex(file, vertexIndex, corners[0]);
+            PutVertex(file, vertexIndex, corners[2]);
+            PutVertex(file, vertexIndex, corners[1]);
         }
     }
 }
@@ -456,60 +472,32 @@ void AddModelTriangles(IconFile & file, const dmdl_t & header, const daliasframe
 // The model icon. False if the model or memory isn't there, with nothing allocated.
 bool BuildModelIcon(IconFile & outFile)
 {
-    void * file = nullptr;
-    const int fileBytes = FS_LoadFile(kIconModel, &file);
-    if (fileBytes <= 0)
+    u8 * const file = COM_LoadMallocFile(kIconModel, nullptr);
+    if (file == nullptr)
     {
-        Com_Printf("Save icon: no %s in the game data, the icon will be plain.\n", kIconModel);
+        Con_Printf("Save icon: no %s in the game data, the icon will be plain.\n", kIconModel);
         return false;
     }
+    const size_t fileBytes = static_cast<size_t>(com_filesize);
 
-    // FS_LoadFile's buffer comes from the heap, aligned for the header. The blocks inside it
-    // are read in place too, so their offsets must keep that alignment - true of every MD2
-    // in pak0, whose records are all whole words.
-    const u8 * const bytes = static_cast<const u8 *>(file);
-    const dmdl_t & header = *static_cast<const dmdl_t *>(file);
-    const bool aligned = (fileBytes >= static_cast<int>(sizeof(dmdl_t))) &&
-                         ((header.ofs_glcmds | header.ofs_frames | header.ofs_skins) & 3) == 0;
-
+    ModelView model = {};
     bool built = false;
-    if (aligned && mod::ValidateMD2Header(header, fileBytes, kIconModel))
+    if (!ParseModel(file, fileBytes, model))
     {
-        const size_t cornersBytes = static_cast<size_t>(header.num_tris) * 3u * sizeof(mod::AliasVertex);
-        auto * const corners = static_cast<mod::AliasVertex *>(
-            ps2::heap::TryAllocAligned(ps2::heap::MemAlign(alignof(mod::AliasVertex)), cornersBytes, MemTag::SaveData));
-
-        const s32 * const glcmds = static_cast<const s32 *>(static_cast<const void *>(bytes + header.ofs_glcmds));
-        const int numTris = (corners != nullptr)
-                          ? mod::ExpandGLCmdsToTriangles(glcmds, header.num_glcmds, header.num_xyz,
-                                                         header.num_tris, corners, kIconModel)
-                          : -1;
-
+        Con_Printf("Save icon: %s doesn't read as a model, the icon will be plain.\n", kIconModel);
+    }
+    else
+    {
         const u32 verticesPerTri = kDoubleSidedModel ? 6u : 3u;
-        if (numTris > 0 && NewIconFile(static_cast<u32>(numTris) * verticesPerTri, outFile))
+        if (NewIconFile(static_cast<u32>(model.header.numtris) * verticesPerTri, outFile))
         {
-            const auto & frame = *static_cast<const daliasframe_t *>(static_cast<const void *>(bytes + header.ofs_frames));
-            AddModelTriangles(outFile, header, frame, corners, numTris);
-
-            // The model's first skin, stretched over the texture as it is - its coordinates are
-            // already normalised, so the stretch is undone where they're looked up.
-            char skinName[MAX_SKINNAME] = {};
-            if (header.num_skins > 0)
-            {
-                std::memcpy(skinName, bytes + header.ofs_skins, sizeof(skinName) - 1);
-            }
-            if (skinName[0] == '\0' || !TextureFromPcxFile(skinName, outFile.texels))
-            {
-                Com_Printf("Save icon: couldn't load the skin of %s, the model will be plain.\n", kIconModel);
-                FillPlainTexture(outFile.texels);
-            }
+            AddModelTriangles(outFile, model);
+            TextureFromSkin(model, outFile.texels);
             built = true;
         }
-
-        ps2::heap::Free(corners, cornersBytes, MemTag::SaveData);
     }
 
-    FS_FreeFile(file);
+    std::free(file);
     return built;
 }
 
@@ -626,7 +614,7 @@ bool EnsureSaveIcons(Device & device)
     }
     else if (!upToDate)
     {
-        Com_Printf("Save icon: written to %s.\n", device.Describe(kIconModelFile));
+        Con_Printf("Save icon: written to %s.\n", device.Describe(kIconModelFile));
     }
     return ok;
 }

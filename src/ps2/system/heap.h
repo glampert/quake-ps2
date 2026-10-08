@@ -26,7 +26,7 @@ enum class MemTag : size_t
     Lightmap,  // Lightmap atlas buffers (see renderer/lightmap.cpp).
     Audio,     // Decoded sound cache. Its own tag because it is one of the largest pools in the game.
     Music,     // Streamed CD music read buffers (audio/music_stream.cpp), held only while a track plays.
-    SaveData,  // The save game working set (compressed level states) and the save/load I/O buffers.
+    SaveData,  // A save game being written or read: the deflate state, the deflated save, the card icon.
 
     TagCount,  // Number of entries in this enum. Internal use only.
 };

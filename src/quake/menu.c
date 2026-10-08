@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]: the save game hooks
 #include "bgmusic.h"
 
 void (*vid_menucmdfn)(void); //johnfitz
@@ -427,24 +428,18 @@ void M_ScanSaves (void)
 {
 	int	i, j;
 	char	name[MAX_OSPATH];
-	FILE	*f;
-	int	version;
+	char	comment[MAX_OSPATH]; // [PS2_QUAKE]: in place of the FILE and version the reading took
 
 	for (i = 0; i < MAX_SAVEGAMES; i++)
 	{
 		strcpy (m_filenames[i], "--- UNUSED SLOT ---");
 		loadable[i] = false;
 		q_snprintf (name, sizeof(name), "%s/s%i.sav", com_gamedir, i);
-		f = fopen (name, "r");
-		if (!f) {
+		// [PS2_QUAKE]: the save's comment line through the backend, which reads it off the memory
+		// card on a console.
+		if (!PS2_SaveReadComment (name, comment, sizeof(comment)))
 			continue;
-		}
-		if (fscanf(f, "%i\n", &version) != 1 ||
-		    fscanf(f, "%79s\n", name)   != 1) {
-			fclose(f);
-			continue;
-		}
-		q_strlcpy (m_filenames[i], name, SAVEGAME_COMMENT_LENGTH+1);
+		q_strlcpy (m_filenames[i], comment, SAVEGAME_COMMENT_LENGTH+1);
 
 	// change _ back to space
 		for (j = 0; j < SAVEGAME_COMMENT_LENGTH; j++)
@@ -453,7 +448,6 @@ void M_ScanSaves (void)
 				m_filenames[i][j] = ' ';
 		}
 		loadable[i] = true;
-		fclose (f);
 	}
 }
 
@@ -1271,6 +1265,10 @@ void M_Options_Key (int k)
 	{
 	case K_ESCAPE:
 	case K_BBUTTON:
+		// [PS2_QUAKE]: keep the settings now. QuakeSpasm only writes config.cfg on quit, and a
+		// console is usually just switched off; on the memory card an unchanged config costs
+		// only the read that finds it so.
+		Host_WriteConfiguration ();
 		M_Menu_Main_f ();
 		break;
 

@@ -35,8 +35,9 @@ constexpr int kSlot = 0; // No multitap.
 // A cluster is the card's allocation unit: two 512-byte pages.
 constexpr u32 kClusterBytes = 1024u;
 
-// The save directory holds the two icon files and at most two files per slot.
-constexpr int kMaxDirEntries = 48;
+// The save directory holds the two icon files, config.cfg and two files per slot: the menus'
+// twenty slots take 40, which leaves room for a few saved by name from the console.
+constexpr int kMaxDirEntries = 64;
 
 constexpr u32 kBounceBytes = 16u * 1024u;
 
@@ -184,7 +185,7 @@ public:
         const int fd = Sync();
         if (fd < 0)
         {
-            Com_Printf("Memory card: can't open %s (%d).\n", Describe(name), fd);
+            Con_Printf("Memory card: can't open %s (%d).\n", Describe(name), fd);
             return FileHandle::Invalid;
         }
 
@@ -238,7 +239,7 @@ public:
             const int written = Sync();
             if (written != static_cast<int>(n))
             {
-                Com_Printf("Memory card: write failed (%d of %u bytes).\n", written, n);
+                Con_Printf("Memory card: write failed (%d of %u bytes).\n", written, n);
                 return false;
             }
 
@@ -301,7 +302,7 @@ private:
                 const int result = mcInit(MC_TYPE_MC);
                 if (result < 0)
                 {
-                    Com_Printf("Memory card: mcInit failed (%d).\n", result);
+                    Con_Printf("Memory card: mcInit failed (%d).\n", result);
                     m_driverStarted = false;
                 }
             }

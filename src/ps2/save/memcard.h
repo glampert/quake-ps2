@@ -13,7 +13,7 @@ namespace ps2::save {
 
 // The game's directory on the card, holding icon.sys, the icon and every save file.
 // The PS2 browser shows it as one entry, titled from icon.sys.
-constexpr const char * kCardSaveDir = "Q2PS2";
+constexpr const char * kCardSaveDir = "Q1PS2";
 
 Device & GetMemoryCardDevice();
 

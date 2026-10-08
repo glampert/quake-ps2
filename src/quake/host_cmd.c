@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "ps2/engine_hooks.h" // [PS2_QUAKE]: the save game hooks
 #include "filenames.h"
 #ifndef _WIN32
 #include <dirent.h>
@@ -1129,8 +1130,9 @@ static void Host_Savegame_f (void)
 	q_snprintf (name, sizeof(name), "%s/%s", com_gamedir, Cmd_Argv(1));
 	COM_AddExtension (name, ".sav", sizeof(name));
 
-	Con_Printf ("Saving game to %s...\n", name);
-	f = fopen (name, "w");
+	// [PS2_QUAKE]: through the backend, which keeps saves on the memory card on a console, and
+	// says where it is saving to.
+	f = PS2_SaveOpenWrite (name);
 	if (!f)
 	{
 		Con_Printf ("ERROR: couldn't open.\n");
@@ -1161,7 +1163,12 @@ static void Host_Savegame_f (void)
 		ED_Write (f, EDICT_NUM(i));
 		fflush (f);
 	}
-	fclose (f);
+	// [PS2_QUAKE]: a save on the memory card is only stored as its stream closes, which can fail.
+	if (!PS2_SaveCloseWrite (f, comment))
+	{
+		Con_Printf ("ERROR: couldn't save.\n");
+		return;
+	}
 	Host_SyncExternalFS();
 	Con_Printf ("done.\n");
 }
@@ -1215,13 +1222,13 @@ static void Host_Loadgame_f (void)
 // been used.  The menu calls it before stuffing loadgame command
 //	SCR_BeginLoadingPlaque ();
 
-	Con_Printf ("Loading game from %s...\n", name);
-	
 // avoid leaking if the previous Host_Loadgame_f failed with a Host_Error
 	if (start != NULL)
 		free (start);
 	
-	start = (char *) COM_LoadMallocFile_TextMode_OSPath(name, NULL);
+	// [PS2_QUAKE]: through the backend, which reads saves off the memory card on a console, and
+	// says where it is loading from.
+	start = PS2_SaveLoadText (name);
 	if (start == NULL)
 	{
 		Con_Printf ("ERROR: couldn't open.\n");

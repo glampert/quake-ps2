@@ -21,6 +21,7 @@
 #include "ps2/input/keyboard.h"
 #include "ps2/input/pad.h"
 #include "ps2/system/sys.h"
+#include "ps2/save/save_system.h"
 
 #include <algorithm>
 #include <cmath>
@@ -130,11 +131,7 @@ void ReadInitCvars()
 {
     const char * vars[] = { s_inKeyboard.name };
 
-    if (CFG_OpenConfig("config.cfg") == 0)
-    {
-        CFG_ReadCvars(vars, ps2::ArrayLength(vars));
-        CFG_CloseConfig();
-    }
+    ps2::save::ReadConfigCvars(vars, ps2::ArrayLength(vars));
     CFG_ReadCvarOverrides(vars, ps2::ArrayLength(vars));
 }
 

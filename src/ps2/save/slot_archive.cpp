@@ -1,30 +1,29 @@
 /* ================================================================================================
  * File: slot_archive.cpp
- * Brief: Save slots - the working set written to a device as one archive file. See slot_archive.h.
+ * Brief: Save slots - a deflated .sav written to a device as one archive file. See slot_archive.h.
  *
- *  An archive is the header, then the entry table, then each entry's deflated bytes exactly as
- *  the working set holds them (no recompression, so writing one out is only I/O):
+ *  An archive is a header, then the save's deflated bytes, exactly as the packed blob holds them
+ *  (no recompression, so writing one out is only I/O):
  *
- *      ArchiveHeader                 magic, versions, sequence, the menu comment, CRCs
- *      ArchiveEntry[numEntries]      name, raw and packed size, CRC of the inflated contents
- *      packed bytes, entry by entry
+ *      ArchiveHeader       magic, version, sequence, the menu comment, sizes, CRCs
+ *      packed bytes        the .sav text, raw deflate
  *
- *  The header's CRC covers the header, the payload CRC everything after it, and the file must
- *  be exactly as long as the header says: a copy that was cut short, whose sectors went bad or
- *  that some other build wrote is recognised as such before any of it reaches the game.
+ *  The header's CRC covers the header, packedCrc the deflated bytes and rawCrc the text they
+ *  inflate to, and the file must be exactly as long as the header says: a copy that was cut
+ *  short or whose sectors went bad is recognised as such before any of it reaches the game.
  *
- *  Neither a memory card (on its ROM driver) nor the host: file device can rename a file, so a
- *  slot can't be replaced by writing a temporary and renaming it. Instead it has two files,
- *  <slot>_a.q2s and <slot>_b.q2s: a save goes to the one not holding the newest good copy,
+ *  The memory card's ROM driver can't rename a file, so a slot can't be replaced by writing a
+ *  temporary and renaming it. Instead it has two files,
+ *  <slot>_a.q1s and <slot>_b.q1s: a save goes to the one not holding the newest good copy,
  *  numbered one higher, and only once it is complete is the other deleted. A reader takes the
  *  good copy with the highest number. If the device is interrupted mid-write, the previous save
- *  is still there.
+ *  is still there. The Quake II port's slots, which held a whole directory of files, worked the
+ *  same way.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/save/slot_archive.h"
-#include "ps2/save/working_set.h"
 
 #include <cstddef>
 #include <cstring>
@@ -32,44 +31,29 @@
 namespace ps2::save {
 namespace {
 
-using ps2::heap::MemTag;
-
-constexpr u32 kArchiveMagic   = 0x53503251u; // "Q2PS"
+constexpr u32 kArchiveMagic   = 0x53503151u; // "Q1PS"
 constexpr u32 kArchiveVersion = 1;
 
 struct ArchiveHeader
 {
     u32  magic;
     u32  version;
-    u32  headerBytes;       // sizeof(ArchiveHeader)
-    u32  sequence;          // Which of the slot's two copies is newer: the higher.
-    u32  gameFingerprint;   // ArchiveStamp of the build that wrote it.
-    u32  engineFingerprint;
-    u32  numEntries;
-    u32  payloadBytes;      // Entry table + packed bytes.
-    u32  payloadCrc;
-    char comment[32];
-    u32  reserved[6];
-    u32  headerCrc;         // Crc32 of everything above.
+    u32  headerBytes; // sizeof(ArchiveHeader)
+    u32  sequence;    // Which of the slot's two copies is newer: the higher.
+    u32  rawBytes;    // The .sav text.
+    u32  rawCrc;
+    u32  packedBytes; // Its deflated bytes, which follow the header.
+    u32  packedCrc;
+    char comment[kCommentLen];
+    u32  reserved[5];
+    u32  headerCrc;   // Crc32 of everything above.
 };
 static_assert(sizeof(ArchiveHeader) == 96);
 
-struct ArchiveEntry
-{
-    char name[kMaxNameLen];
-    u32  rawBytes;
-    u32  packedBytes;
-    u32  rawCrc;
-    u32  reserved;
-};
-static_assert(sizeof(ArchiveEntry) == 48);
-
-// Moves packed bytes between the device and the blobs. Cache line aligned, since a memory
-// card read is a DMA; the card device bounces through its own buffer regardless.
+// Moves packed bytes from the device into the blob. Cache line aligned, since a memory card read
+// is a DMA; the card device bounces through its own buffer regardless.
 constexpr u32 kIoBufferBytes = 8u * 1024u;
 alignas(64) static u8 s_ioBuffer[kIoBufferBytes];
-
-static ArchiveEntry s_entryTable[kMaxEntries];
 
 // One of a slot's two files, as found on the device.
 struct Copy
@@ -102,9 +86,9 @@ bool ReadHeader(Device & device, const char * file, ArchiveHeader & outHeader)
     const bool ok = device.Read(handle, &outHeader, sizeof(outHeader));
     device.Close(handle);
 
-    return ok && outHeader.magic == kArchiveMagic &&
-           outHeader.headerBytes == sizeof(ArchiveHeader) &&
-           outHeader.headerCrc == HeaderCrc(outHeader);
+    return ok && outHeader.magic == kArchiveMagic && outHeader.version == kArchiveVersion &&
+           outHeader.headerBytes == sizeof(ArchiveHeader) && outHeader.headerCrc == HeaderCrc(outHeader) &&
+           std::memchr(outHeader.comment, '\0', sizeof(outHeader.comment)) != nullptr;
 }
 
 void LoadCopies(Device & device, const char * slot, Copy (&copies)[2])
@@ -112,12 +96,12 @@ void LoadCopies(Device & device, const char * slot, Copy (&copies)[2])
     for (int i = 0; i < 2; ++i)
     {
         Copy & copy = copies[i];
-        std::snprintf(copy.file, sizeof(copy.file), "%s_%c.q2s", slot, (i == 0) ? 'a' : 'b');
+        std::snprintf(copy.file, sizeof(copy.file), "%s_%c.q1s", slot, (i == 0) ? 'a' : 'b');
 
         copy.fileBytes = 0;
         copy.present   = device.FileSize(copy.file, copy.fileBytes);
         copy.valid     = copy.present && ReadHeader(device, copy.file, copy.header) &&
-                         copy.fileBytes == sizeof(ArchiveHeader) + copy.header.payloadBytes;
+                         copy.fileBytes == sizeof(ArchiveHeader) + copy.header.packedBytes;
     }
 }
 
@@ -142,14 +126,7 @@ int NewestFirst(Copy (&copies)[2], Copy * (&outOrder)[2])
     return count;
 }
 
-bool Compatible(const ArchiveHeader & header, const ArchiveStamp & stamp)
-{
-    return header.version == kArchiveVersion &&
-           header.gameFingerprint == stamp.gameFingerprint &&
-           header.engineFingerprint == stamp.engineFingerprint;
-}
-
-bool WriteArchive(Device & device, const char * file, const ArchiveHeader & header, const EntrySet & set)
+bool WriteArchive(Device & device, const char * file, const ArchiveHeader & header, const Blob & save)
 {
     const FileHandle handle = device.Open(file, OpenMode::Write);
     if (handle == FileHandle::Invalid)
@@ -158,15 +135,10 @@ bool WriteArchive(Device & device, const char * file, const ArchiveHeader & head
         return false;
     }
 
-    bool ok = device.Write(handle, &header, sizeof(header)) &&
-              device.Write(handle, s_entryTable, static_cast<u32>(set.count) * sizeof(ArchiveEntry));
-
-    for (int i = 0; ok && i < set.count; ++i)
+    bool ok = device.Write(handle, &header, sizeof(header));
+    for (const Chunk * chunk = save.head; ok && chunk != nullptr; chunk = chunk->next)
     {
-        for (const Chunk * chunk = set.entries[i].blob.head; ok && chunk != nullptr; chunk = chunk->next)
-        {
-            ok = device.Write(handle, chunk->Data(), chunk->used);
-        }
+        ok = device.Write(handle, chunk->Data(), chunk->used);
     }
 
     ok = device.Close(handle) && ok;
@@ -184,22 +156,11 @@ enum class ReadResult
     OutOfMemory,
 };
 
-// Reads a copy's entries into `staged`, checking everything on the way.
-ReadResult ReadArchive(Device & device, const Copy & copy, EntrySet & staged)
+// Reads a copy's packed bytes into `outSave`, checking them on the way.
+ReadResult ReadArchive(Device & device, const Copy & copy, Blob & outSave)
 {
     const ArchiveHeader & header = copy.header;
-    staged.count = 0;
-
-    if (header.numEntries == 0 || header.numEntries > static_cast<u32>(kMaxEntries))
-    {
-        return ReadResult::Damaged;
-    }
-
-    const u32 tableBytes = header.numEntries * sizeof(ArchiveEntry);
-    if (tableBytes > header.payloadBytes)
-    {
-        return ReadResult::Damaged;
-    }
+    outSave = Blob{};
 
     const FileHandle handle = device.Open(copy.file, OpenMode::Read);
     if (handle == FileHandle::Invalid)
@@ -208,53 +169,33 @@ ReadResult ReadArchive(Device & device, const Copy & copy, EntrySet & staged)
     }
 
     ArchiveHeader again;
-    bool ok = device.Read(handle, &again, sizeof(again)) && std::memcmp(&again, &header, sizeof(header)) == 0 &&
-              device.Read(handle, s_entryTable, tableBytes);
+    bool ok = device.Read(handle, &again, sizeof(again)) && std::memcmp(&again, &header, sizeof(header)) == 0;
     bool outOfMemory = false;
+    u32 crc = 0;
 
-    u32 crc = ok ? Crc32(0, s_entryTable, tableBytes) : 0u;
-    u32 bytesLeft = header.payloadBytes - tableBytes;
-
-    for (u32 i = 0; ok && i < header.numEntries; ++i)
+    for (u32 left = header.packedBytes; ok && left != 0;)
     {
-        const ArchiveEntry & archived = s_entryTable[i];
-        if (archived.name[0] == '\0' || std::memchr(archived.name, '\0', sizeof(archived.name)) == nullptr ||
-            archived.packedBytes > bytesLeft)
+        const u32 n = (left < kIoBufferBytes) ? left : kIoBufferBytes;
+        ok = device.Read(handle, s_ioBuffer, n);
+        if (ok)
         {
-            ok = false;
-            break;
+            crc = Crc32(crc, s_ioBuffer, n);
+            ok = BlobAppend(outSave, s_ioBuffer, n);
+            outOfMemory = !ok;
         }
-        bytesLeft -= archived.packedBytes;
-
-        Entry & entry = staged.entries[staged.count++];
-        CopyName(entry.name, archived.name);
-        entry.blob = Blob{};
-
-        for (u32 left = archived.packedBytes; ok && left != 0;)
-        {
-            const u32 n = (left < kIoBufferBytes) ? left : kIoBufferBytes;
-            ok = device.Read(handle, s_ioBuffer, n);
-            if (ok)
-            {
-                crc = Crc32(crc, s_ioBuffer, n);
-                ok = BlobAppend(entry.blob, s_ioBuffer, n);
-                outOfMemory = !ok;
-            }
-            left -= n;
-        }
-
-        entry.blob.rawBytes = archived.rawBytes;
-        entry.blob.rawCrc   = archived.rawCrc;
+        left -= n;
     }
 
     device.Close(handle);
 
-    ok = ok && bytesLeft == 0 && crc == header.payloadCrc;
-    if (!ok)
+    if (!ok || crc != header.packedCrc)
     {
-        FreeEntries(staged);
+        BlobFree(outSave);
         return outOfMemory ? ReadResult::OutOfMemory : ReadResult::Damaged;
     }
+
+    outSave.rawBytes = header.rawBytes;
+    outSave.rawCrc   = header.rawCrc;
     return ReadResult::Ok;
 }
 
@@ -264,15 +205,8 @@ ReadResult ReadArchive(Device & device, const Copy & copy, EntrySet & staged)
 // Public API
 // ------------------------------------------------------------------------------------------------
 
-bool StoreSlot(Device & device, const char * slot, const char * comment, const ArchiveStamp & stamp)
+bool StoreSlot(Device & device, const char * slot, const char * comment, const Blob & save)
 {
-    const EntrySet & set = CurrentEntries();
-    if (set.count == 0)
-    {
-        SetError("There is nothing to save.");
-        return false;
-    }
-
     // The save directory may cost room of its own (and a card its icon), so look at the free
     // space once it exists.
     if (!device.Probe() || !device.EnsureSaveDir() || !device.Probe())
@@ -290,45 +224,21 @@ bool StoreSlot(Device & device, const char * slot, const char * comment, const A
     Copy & target = (newest  == &copies[0]) ? copies[1] : copies[0];
     Copy & other  = (&target == &copies[0]) ? copies[1] : copies[0];
 
-    // Header and entry table, and the CRC of everything after the header.
     ArchiveHeader header = {};
-    header.magic             = kArchiveMagic;
-    header.version           = kArchiveVersion;
-    header.headerBytes       = sizeof(ArchiveHeader);
-    header.sequence          = (newest != nullptr) ? newest->header.sequence + 1u : 1u;
-    header.gameFingerprint   = stamp.gameFingerprint;
-    header.engineFingerprint = stamp.engineFingerprint;
-    header.numEntries        = static_cast<u32>(set.count);
-    std::snprintf(header.comment, sizeof(header.comment), "%.*s", static_cast<int>(sizeof(header.comment) - 1), comment);
-
-    u32 payloadBytes = static_cast<u32>(set.count) * sizeof(ArchiveEntry);
-    for (int i = 0; i < set.count; ++i)
-    {
-        const Entry & entry = set.entries[i];
-        ArchiveEntry & archived = s_entryTable[i];
-
-        archived = ArchiveEntry{};
-        CopyName(archived.name, entry.name);
-        archived.rawBytes    = entry.blob.rawBytes;
-        archived.packedBytes = entry.blob.packedBytes;
-        archived.rawCrc      = entry.blob.rawCrc;
-
-        payloadBytes += entry.blob.packedBytes;
-    }
-
-    u32 payloadCrc = Crc32(0, s_entryTable, static_cast<u32>(set.count) * sizeof(ArchiveEntry));
-    for (int i = 0; i < set.count; ++i)
-    {
-        payloadCrc = BlobPackedCrc(set.entries[i].blob, payloadCrc);
-    }
-
-    header.payloadBytes = payloadBytes;
-    header.payloadCrc   = payloadCrc;
-    header.headerCrc    = HeaderCrc(header);
+    header.magic       = kArchiveMagic;
+    header.version     = kArchiveVersion;
+    header.headerBytes = sizeof(ArchiveHeader);
+    header.sequence    = (newest != nullptr) ? newest->header.sequence + 1u : 1u;
+    header.rawBytes    = save.rawBytes;
+    header.rawCrc      = save.rawCrc;
+    header.packedBytes = save.packedBytes;
+    header.packedCrc   = BlobPackedCrc(save, 0);
+    CopyName(header.comment, comment);
+    header.headerCrc   = HeaderCrc(header);
 
     // Room for the new copy, counting the one it replaces (the older or a bad one). When there
     // is only room once the newest copy is gone too, it is overwritten in place instead.
-    const u32 neededBytes = device.FileCostBytes(sizeof(ArchiveHeader) + payloadBytes);
+    const u32 neededBytes = device.FileCostBytes(sizeof(ArchiveHeader) + save.packedBytes);
     const u32 availableBytes = device.FreeBytes() + (target.present ? device.FileCostBytes(target.fileBytes) : 0u);
     bool inPlace = false;
 
@@ -337,7 +247,7 @@ bool StoreSlot(Device & device, const char * slot, const char * comment, const A
         if (other.present && availableBytes + device.FileCostBytes(other.fileBytes) >= neededBytes)
         {
             inPlace = true;
-            Com_Printf("Save: no room for a second copy of '%s' - replacing the old one first.\n", slot);
+            Con_Printf("Save: no room for a second copy of '%s' - replacing the old one first.\n", slot);
         }
         else
         {
@@ -355,7 +265,7 @@ bool StoreSlot(Device & device, const char * slot, const char * comment, const A
         return false;
     }
 
-    if (!WriteArchive(device, target.file, header, set))
+    if (!WriteArchive(device, target.file, header, save))
     {
         device.Delete(target.file); // Don't leave half a copy behind, even though it would be ignored.
         return false;
@@ -363,13 +273,13 @@ bool StoreSlot(Device & device, const char * slot, const char * comment, const A
 
     if (!inPlace && other.present && !device.Delete(other.file))
     {
-        Com_Printf("Save: couldn't delete the previous copy, %s; the new one is used regardless.\n",
+        Con_Printf("Save: couldn't delete the previous copy, %s; the new one is used regardless.\n",
                    device.Describe(other.file));
     }
     return true;
 }
 
-bool RestoreSlot(Device & device, const char * slot, const ArchiveStamp & stamp)
+bool RestoreSlot(Device & device, const char * slot, Blob & outSave)
 {
     if (!device.Probe())
     {
@@ -387,82 +297,46 @@ bool RestoreSlot(Device & device, const char * slot, const ArchiveStamp & stamp)
         return false;
     }
 
-    EntrySet * const staged = static_cast<EntrySet *>(ps2::heap::TryAlloc(sizeof(EntrySet), MemTag::SaveData));
-    if (staged == nullptr)
-    {
-        SetError("Not enough memory to load the game.");
-        return false;
-    }
-    staged->count = 0;
-
-    bool restored = false;
-    for (int i = 0; i < numValid && !restored; ++i)
+    for (int i = 0; i < numValid; ++i)
     {
         const Copy & copy = *order[i];
-        if (!Compatible(copy.header, stamp))
-        {
-            SetError("This save was made by a different version of the game, and can't be loaded.");
-            break;
-        }
-
-        const ReadResult result = ReadArchive(device, copy, *staged);
+        const ReadResult result = ReadArchive(device, copy, outSave);
         if (result == ReadResult::Ok)
         {
-            ReplaceEntries(*staged);
-            restored = true;
+            return true;
         }
-        else if (result == ReadResult::OutOfMemory)
+        if (result == ReadResult::OutOfMemory)
         {
             SetError("Not enough memory to load the game.");
-            break;
+            return false;
         }
-        else
-        {
-            Com_Printf("Save: %s is damaged%s.\n", device.Describe(copy.file),
-                       (i + 1 < numValid) ? " - trying the older copy" : "");
-            SetError("The save game is damaged.");
-        }
-    }
 
-    ps2::heap::Free(staged, sizeof(EntrySet), MemTag::SaveData);
-    return restored;
+        Con_Printf("Save: %s is damaged%s.\n", device.Describe(copy.file),
+                   (i + 1 < numValid) ? " - trying the older copy" : "");
+        SetError("The save game is damaged.");
+    }
+    return false;
 }
 
-bool ListSlots(Device & device, const char * prefix, const int count, SlotInfo * outInfo, const ArchiveStamp & stamp)
+SlotInfo ReadSlotInfo(Device & device, const char * slot)
 {
-    for (int i = 0; i < count; ++i)
+    SlotInfo info = {};
+    info.state = SlotState::Empty;
+
+    Copy copies[2];
+    LoadCopies(device, slot, copies);
+
+    Copy * order[2] = {};
+    if (NewestFirst(copies, order) != 0)
     {
-        outInfo[i].state      = SlotState::Empty;
-        outInfo[i].comment[0] = '\0';
+        info.state = SlotState::Valid;
+        CopyName(info.comment, order[0]->header.comment);
     }
-
-    if (!device.Probe())
+    else if (copies[0].present || copies[1].present)
     {
-        return false;
+        info.state = SlotState::Corrupt;
     }
-
-    for (int i = 0; i < count; ++i)
-    {
-        char slot[kMaxNameLen];
-        std::snprintf(slot, sizeof(slot), "%s%d", prefix, i);
-
-        Copy copies[2];
-        LoadCopies(device, slot, copies);
-
-        Copy * order[2] = {};
-        if (NewestFirst(copies, order) != 0)
-        {
-            const ArchiveHeader & header = order[0]->header;
-            outInfo[i].state = Compatible(header, stamp) ? SlotState::Valid : SlotState::Incompatible;
-            std::snprintf(outInfo[i].comment, sizeof(outInfo[i].comment), "%.*s",
-                          static_cast<int>(sizeof(header.comment) - 1), header.comment);
-        }
-        else if (copies[0].present || copies[1].present)
-        {
-            outInfo[i].state = SlotState::Corrupt;
-        }
-    }
-    return true;
+    return info;
 }
 
 } // namespace ps2::save

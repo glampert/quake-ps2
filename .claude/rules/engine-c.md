@@ -54,6 +54,11 @@ For sound: `snd_dma.c` defaults `snd_mixspeed` to 22050 instead of 44100 (the RE
 section says why), and `host.c` wraps the `S_Update` calls in the `SndMix` profile probe
 (`ps2/debug/engine_profile.h`), the first of the engine probes to be placed.
 
+For saves and settings (`save-games.md`): `host_cmd.c`'s `Host_Savegame_f` and
+`Host_Loadgame_f`, and `menu.c`'s `M_ScanSaves`, read and write through the `PS2_Save*` hooks;
+`host.c`'s `Host_WriteConfiguration` and `cmd.c`'s `Cmd_Exec_f` (for `config.cfg` only) through
+`PS2_Config*`; and `M_Options_Key` writes the config on leaving the options menu.
+
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the
 loading plaque, and `screenshot`, TGA only, over `PS2_ReadPixels`; it also defaults

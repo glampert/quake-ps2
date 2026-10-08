@@ -26,7 +26,7 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 keyboard, through the attract-mode demos and every shareware map. The 3D view draws all of it:
 the world - textured, lightmapped, with its fullbright texels, warping water and scrolling sky -
 and the brush models, monsters, items, view weapon, sprites and particles, and the sound effects
-and the soundtrack play through the SPU2. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is
+and the soundtrack play through the SPU2. Games save to the memory card. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is
 brought up in phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
@@ -36,7 +36,7 @@ brought up in phases, each checked in PCSX2:
 5. Input: DualShock and USB keyboard. *Done.*
 6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which no
    shareware map uses.
-7. Sound, CD music, save games. *Sound and CD music are in.*
+7. Sound, CD music, save games. *Done.*
 
 This section says what works as each phase lands.
 
@@ -319,6 +319,43 @@ starts over when it ends, and `music <name>`, `music_stop`, `music_pause` and `m
 drive it from the console. Turning `bgm_extmusic` off stops the music and turning it on starts
 the map's track again, right away rather than at the next map. In PCSX2 the ADPCM decode costs
 about 0.16 ms of EE time per frame, and mixing the music in another 0.08 ms.
+
+---
+
+## Save games
+
+QuakeSpasm saves a game as one text file, `<gamedir>/<name>.sav`, written through stdio, and its
+load and save menus read each slot's comment line back the same way. On the PS2 those three
+spots go through the backend ([save/](src/ps2/save/)) instead, and the saves live on the memory
+card in MEMORY CARD slot 1:
+
+- **A slot** (`s0` to `s19` from the menus, any name from the console's `save`) is one archive
+  file on the card: a header carrying the menu's comment line, then the `.sav` text deflated
+  ([slot_archive.cpp](src/ps2/save/slot_archive.cpp)), CRC-checked throughout. A save is written
+  to the slot's *other* file (`<slot>_a.q1s` / `<slot>_b.q1s`) before the previous copy is
+  deleted, so a failed or interrupted save never loses the one before it. The text is deflated
+  as `Host_Savegame_f` writes it ([packed_blob.cpp](src/ps2/save/packed_blob.cpp)): an 83 KB
+  e1m1 save takes 11 KB of the card, and about 0.7 s to write.
+- **The card** is reached through libmc and the ROM's MCMAN/MCSERV
+  ([memcard.cpp](src/ps2/save/memcard.cpp)), in a `Q1PS2` directory with the `icon.sys` and 3D
+  icon the PS2 browser shows: the quad damage, built from the game's own `progs/quaddama.mdl`
+  ([mc_icon.cpp](src/ps2/save/mc_icon.cpp)).
+- **Running from `host:`**, the archived `ps2_savedevice` cvar keeps saves as QuakeSpasm does,
+  plain `.sav` files in `id1/` (`host`, the default there), or sends them to the card (`mc`).
+  `ps2_saveinfo` says where they go and lists the card's files.
+
+`config.cfg` - the binds and archived cvars - is kept where each platform keeps settings
+([save_api.cpp](src/ps2/save/save_api.cpp)):
+
+| | Game data on `host:` | Game data on HDD (`pfs0:`) or USB (`massN:`) |
+|---|---|---|
+| **Saving** | `id1/config.cfg` on the host, as always; plus the card's `Q1PS2/config.cfg` when saves go to the card (`ps2_savedevice mc`) | the card's `Q1PS2/config.cfg` only. Never the game-data drive |
+| **Loading** | the host's `id1/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the card's first - the player's own settings; the drive's `id1/config.cfg` only if the card has none |
+
+The cvars read ahead of `config.cfg` running (`ps2_fb_16bit`, `in_keyboard`) are read from the same
+file. QuakeSpasm writes the config on quit, which a console rarely sees, so leaving the options
+menu writes it too; the card copy is only rewritten when it changed. A card that is missing or
+full just skips it, with a line on the console.
 
 ---
 

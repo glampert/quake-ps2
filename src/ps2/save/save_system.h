@@ -3,27 +3,30 @@
  * File: save_system.h
  * Brief: Internals shared by the save game backend (src/ps2/save/).
  *
- *  The engine and game code still read and write their save files through stdio, as id
- *  wrote them. What changed is where those files live:
+ *  QuakeSpasm writes a save game as one text file, <gamedir>/<name>.sav, through stdio, and its
+ *  load and save menus read each slot's comment line back the same way. Running from the
+ *  emulator's host: filesystem, that is where saves stay by default (ps2_savedevice "host"),
+ *  exactly as QuakeSpasm keeps them. On a console - and under the emulator with
+ *  ps2_savedevice "mc" - they go to the memory card instead:
  *
- *    engine (sv_ccmds.c, sv_init.c) + game (g_save.c)
- *        |  FILE * from Sys_SaveOpen("base1.sav", "wb")
+ *    engine (host_cmd.c, menu.c)
+ *        |  PS2_SaveOpenWrite / PS2_SaveCloseWrite, PS2_SaveLoadText, PS2_SaveReadComment
  *        v
- *    working set (RAM)   id's save/current/ directory: one deflated blob per file -
- *        |               <map>.sav + <map>.sv2 for each level of the unit, server.ssv, game.ssv
- *        |  Sys_SaveStoreSlot / Sys_SaveRestoreSlot  (the blobs are copied as they are)
+ *    packed blob (RAM)   the .sav text, deflated as the engine writes it
+ *        |
  *        v
- *    slot archive        one file per save slot: header + entry table + blobs, CRC-checked,
- *        |               written A/B so a failed write never loses the previous save
- *        v
- *    device              memory card slot 1 (libmc), or host files under <gamedir>/save/
+ *    slot archive        a header (with the menu comment) and the deflated .sav, CRC-checked,
+ *        |               in one of the slot's two files: written A/B, so a failed write never
+ *        v               loses the save before it
+ *    device              the memory card in MEMORY CARD slot 1 (libmc)
  *
- *  working_set.cpp  - the RAM store and the FILE streams over it
+ *  packed_blob.cpp  - the deflating stdio stream, the blob it fills, and inflating it back
  *  slot_archive.cpp - the archive format, over any Device
- *  save_device.cpp  - the Device interface's host-file implementation and error reporting
+ *  save_device.cpp  - error reporting and whole-file helpers the devices share
  *  memcard.cpp      - the memory card Device (libmc)
- *  mc_icon.cpp      - the icon.sys / icon.ico a PS2 browser shows for the save directory
- *  save_api.cpp     - the Sys_Save* hooks the engine calls, the ps2_savedevice cvar
+ *  mc_icon.cpp      - the icon.sys and 3D icon the PS2 browser shows for the save directory
+ *  save_api.cpp     - the PS2_Save* and PS2_Config* hooks (engine_hooks.h), the ps2_savedevice
+ *                     cvar, and where config.cfg is kept
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -35,19 +38,25 @@
 
 namespace ps2::save {
 
-// Registers the ps2_savedevice cvar and the save console commands. Called from Sys_Init.
+// Registers the ps2_savedevice cvar and the ps2_saveinfo command. VID_Init calls it, with the
+// backend's other commands (see ps2::sys::RegisterCommands).
 void Init();
 
-// Longest working set entry or device file name, terminator included. It is also the
-// limit a memory card directory entry puts on a name (32 bytes with the terminator).
+// What QuakeSpasm's CFG_ReadCvars does for the cvars read ahead of config.cfg running (the
+// framebuffer format, the USB keyboard), but from the config.cfg PS2_ConfigLoadHunk would pick:
+// the host file first under the emulator, the memory card's first on a console.
+void ReadConfigCvars(const char ** vars, int numVars);
+
+// Longest device file name, terminator included: the limit a memory card directory entry puts
+// on a name (32 bytes with the terminator).
 constexpr int kMaxNameLen = 32;
 
 // ------------------------------------------------------------------------------------------------
 // Error reporting
 // ------------------------------------------------------------------------------------------------
 
-// Records the one-line message the player is shown for the last failure (Sys_SaveLastError)
-// and prints it to the console too. The console gets any detail through Com_Printf directly.
+// Records the one-line message the player is shown for the last failure and prints it to the
+// console too. Any detail goes to the console through Con_Printf directly.
 void SetError(const char * fmt, ...) Q_PRINTF_FUNC(1, 2);
 void ClearError();
 const char * LastError();
@@ -84,8 +93,9 @@ enum class OpenMode
     Write,
 };
 
-// Somewhere save slots (and config.cfg) can be kept: the memory card, or host files.
-// Names are bare file names inside the device's save directory. One file is open at a time.
+// Somewhere save slots (and config.cfg) can be kept. Names are bare file names inside the
+// device's save directory. One file is open at a time. The memory card is the one there is;
+// the slot archive is written against this interface rather than against it.
 class Device
 {
 public:
@@ -93,7 +103,7 @@ public:
     // refreshes FreeBytes. On false, SetError has said why in words the player understands.
     virtual bool Probe() = 0;
 
-    // A line for the menus: where saves go and how much room is left, or why they can't.
+    // A line for the console: where saves go and how much room is left, or why they can't.
     virtual const char * StatusText() = 0;
 
     // Room left, and the room a file of the given size takes up on it (allocation units,

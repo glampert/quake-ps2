@@ -20,6 +20,7 @@
 #include "ps2/renderer/overlays.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/tests/draw_cube.h"
+#include "ps2/save/save_system.h"
 
 #include <algorithm>
 #include <utility>
@@ -60,11 +61,7 @@ void ReadInitCvars()
 {
     const char * vars[] = { s_fb16Bit.name };
 
-    if (CFG_OpenConfig("config.cfg") == 0)
-    {
-        CFG_ReadCvars(vars, ps2::ArrayLength(vars));
-        CFG_CloseConfig();
-    }
+    ps2::save::ReadConfigCvars(vars, ps2::ArrayLength(vars));
     CFG_ReadCvarOverrides(vars, ps2::ArrayLength(vars));
 }
 
@@ -94,6 +91,7 @@ void VID_Init()
 {
     // The backend's own console commands; see RegisterCommands for why here.
     ps2::sys::RegisterCommands();
+    ps2::save::Init();
 
     // Host_Init queues "vid_unlock" to run after the configs: QuakeSpasm locks its video mode
     // while they do. And the config.cfg it writes ends in "vid_restart", to apply the mode it saved.

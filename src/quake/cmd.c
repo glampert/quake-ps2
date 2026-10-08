@@ -273,7 +273,12 @@ void Cmd_Exec_f (void)
 	}
 
 	mark = Hunk_LowMark ();
-	f = (const char *)COM_LoadHunkFile (Cmd_Argv(1), NULL);
+	// [PS2_QUAKE]: config.cfg comes from where the backend keeps the player's settings: the
+	// memory card on a console.
+	if (!strcmp(Cmd_Argv(1), "config.cfg"))
+		f = PS2_ConfigLoadHunk ();
+	else
+		f = (const char *)COM_LoadHunkFile (Cmd_Argv(1), NULL);
 	if (!f && !strcmp(Cmd_Argv(1), "default.cfg")) {
 		f = default_cfg;	/* see above.. */
 	}

@@ -82,6 +82,12 @@ PS2_CXX_SRC =                         \
 	ps2/audio/mix_ring.cpp            \
 	ps2/audio/music_stream.cpp        \
 	ps2/audio/cd_audio.cpp            \
+	ps2/save/save_api.cpp             \
+	ps2/save/save_device.cpp          \
+	ps2/save/packed_blob.cpp          \
+	ps2/save/slot_archive.cpp         \
+	ps2/save/memcard.cpp              \
+	ps2/save/mc_icon.cpp              \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
@@ -143,6 +149,12 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/renderer/scrap_atlas.cpp      \
 	ps2/system/iop_boot.cpp           \
 	ps2/audio/audsrv_device.cpp       \
+	ps2/save/save_api.cpp             \
+	ps2/save/save_device.cpp          \
+	ps2/save/packed_blob.cpp          \
+	ps2/save/slot_archive.cpp         \
+	ps2/save/memcard.cpp              \
+	ps2/save/mc_icon.cpp              \
 	ps2/renderer/brush.cpp            \
 	ps2/input/keyboard.cpp            \
 	ps2/input/pad.cpp                 \

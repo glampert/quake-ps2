@@ -3,8 +3,8 @@
  * Brief: What QuakeSpasm's C needs from the backend that no QuakeSpasm header declares: the PS2
  *        stand-ins for the few OpenGL calls made outside the renderer (the status bar's alpha
  *        and scissor, the view blend, the screenshot readback), the PS2's additions to the
- *        default config, and the engine state the backend reads that QuakeSpasm keeps to one
- *        file. Every engine line that uses this is tagged [PS2_QUAKE].
+ *        default config, where save games and config.cfg are kept, and the engine state the
+ *        backend reads that QuakeSpasm keeps to one file. Every engine line that uses this is tagged [PS2_QUAKE].
  *        NOTE: Shared header between C and C++.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -58,6 +58,48 @@ void PS2_ReadPixels(byte * rgb);
 // default.cfg does, so the options menu's "Reset to defaults" restores it too, and config.cfg,
 // which quake.rc runs next, keeps the player's own settings.
 const char * PS2_DefaultConfig(void);
+
+// ------------------------------------------------------------------------------------------------
+// Save games (host_cmd.c, menu.c)
+// ------------------------------------------------------------------------------------------------
+//
+// QuakeSpasm keeps a save as <gamedir>/<name>.sav and reads and writes it through stdio. These
+// take its place at the three spots that do: on a console the saves live on the memory card
+// (src/ps2/save/), and running from host: they stay host files unless ps2_savedevice says "mc".
+// `path` is always the <gamedir>/<name>.sav QuakeSpasm built.
+
+// The stream Host_Savegame_f writes a save to, having said where it goes. Null if it can't be
+// written, with the reason on the console.
+FILE * PS2_SaveOpenWrite(const char * path);
+
+// Closes that stream, which stores the save where it goes; `comment` is the line the menus list
+// it by. False if it didn't make it, with the reason on the console.
+qboolean PS2_SaveCloseWrite(FILE * f, const char * comment);
+
+// The save as text in a malloc block, as COM_LoadMallocFile_TextMode_OSPath returns it, having
+// said where it is loading from. Null if there is none or it can't be read.
+char * PS2_SaveLoadText(const char * path);
+
+// The comment line of a save, for the load and save menus. False if the slot is empty or can't
+// be read.
+qboolean PS2_SaveReadComment(const char * path, char * comment, int size);
+
+// ------------------------------------------------------------------------------------------------
+// config.cfg (host.c, cmd.c)
+// ------------------------------------------------------------------------------------------------
+//
+// QuakeSpasm writes config.cfg into <gamedir> and reads it back from the search path. On a
+// console the player's settings belong on the memory card instead, not the USB stick or hard
+// disk the game is on; under the emulator the host file stays first (src/ps2/save/save_api.cpp).
+
+// The stream Host_WriteConfiguration writes the binds and cvars to, and its close, which stores
+// the text where it goes. Null if it can't be written, with the reason on the console.
+FILE * PS2_ConfigOpenWrite(void);
+void PS2_ConfigCloseWrite(FILE * f);
+
+// config.cfg's text for "exec config.cfg", on the hunk as COM_LoadHunkFile would load it; null if
+// there is none anywhere.
+const char * PS2_ConfigLoadHunk(void);
 
 // ------------------------------------------------------------------------------------------------
 // Engine state the backend reads
