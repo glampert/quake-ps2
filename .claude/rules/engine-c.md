@@ -71,6 +71,15 @@ the double-time work. `PS2Quake_Cosf`'s error grows with the argument (5e-6 at 5
 which these tolerate. `PS2Quake_Floorf`/`Ceilf` match libm for every normal float; a denormal
 input reads as zero, as the EE's FPU treats it anyway.
 
+For the effects' random numbers: `common.h` adds `COM_FxRand`, MSVC's `rand()` inline (a
+32-bit LCG returning 15 bits, the range the effects were written for), with its state in
+`common.c`. `r_part.c`, the dynamic lights' flicker in `cl_main.c`, and the ricochet sounds and
+lightning beams in `cl_tent.c` draw from it; everything else, the game's own randomness above
+all, keeps newlib's `rand()`, a 64-bit LCG the R5900 runs as 40 instructions behind a call.
+`CL_UpdateTEnts` reseeds both every frame: QuakeSpasm's `srand` (johnfitz's, to hold the beams
+still while paused) and, beside it, `COM_FxRand`'s state from the same `cl.time`, run through a
+multiplicative hash so that seeds a frame apart don't give the same first draw.
+
 For sound: `snd_dma.c` defaults `snd_mixspeed` to 22050 instead of 44100 (the README's Sound
 section says why), and `host.c` wraps the `S_Update` calls in the `SndMix` profile probe
 (`ps2/debug/engine_profile.h`), the first of the engine probes to be placed.

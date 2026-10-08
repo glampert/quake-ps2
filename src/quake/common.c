@@ -53,6 +53,8 @@ char	com_token[1024];
 int		com_argc;
 char	**com_argv;
 
+unsigned int	com_fxrandseed = 1; // [PS2_QUAKE]: see COM_FxRand in common.h
+
 #define CMDLINE_LENGTH	256		/* johnfitz -- mirrored in cmd.c */
 char	com_cmdline[CMDLINE_LENGTH];
 

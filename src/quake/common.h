@@ -288,6 +288,19 @@ char *va (const char *format, ...) FUNC_PRINTF(1,2);
 
 unsigned COM_HashString (const char *str);
 
+// [PS2_QUAKE]: random numbers for the client's effects - particles, dynamic light flicker,
+// lightning beams, ricochet sounds - which draw up to seven per particle. newlib's rand() is a
+// 64-bit LCG that the R5900, with no 64-bit multiply, runs as 40 instructions of shifts and adds
+// behind a call; this is MSVC's rand(), the one the Windows Quakes shipped with: a 32-bit LCG
+// returning 15 bits, inline. Cosmetic use only: the game keeps rand().
+extern unsigned int com_fxrandseed;
+
+static inline int COM_FxRand (void)
+{
+	com_fxrandseed = com_fxrandseed * 214013u + 2531011u;
+	return (int)((com_fxrandseed >> 16) & 0x7fff);
+}
+
 // localization support for 2021 rerelease version:
 void LOC_Init (void);
 void LOC_Shutdown (void);

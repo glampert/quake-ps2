@@ -21,6 +21,11 @@ paths:
   rest is in the engine's unprobed frame, where the view's bob, idle sway and gun angles called
   double `sin` every frame. Demos don't run the server, so no capture measures its QuakeC and
   physics math yet.
+- **Effects' random numbers on `COM_FxRand` (2026-10-09, `q1-fxrand.*`):** the mean stayed put,
+  and each of the 45 frames that spawn an explosion or a teleport splash lost 1.04 ms of EE work
+  (10.64 → 9.60 ms): 1024 particles at seven draws each, at 12 cycles a draw against
+  `rand()`'s 56. The capture's worst frame went from 13.37 to 12.37 ms. To find such frames in a
+  log, look for a jump of 800 or more in the `particles` column.
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.
