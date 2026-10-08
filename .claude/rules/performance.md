@@ -11,9 +11,10 @@ paths:
 - Goal: a smooth 60 fps through the whole `ps2_perftest` capture.
 - **Quake 1 baseline (2026-10-08, debug build, sound and music on):** `ps2_perftest` over
   demo1-3 logged 13,170 frames. EE work (Frame - VSync) mean 4.58 ms, p50 3.93, p95 8.02,
-  p99 9.97 ms. 151 frames ran past 17.5 ms, three of them the demo loads (0.9-1.3 s); the rest
-  missed one vsync (~21 ms). The engine's own phases aren't probed yet (only `SndMix`), so
-  those frames aren't attributed: placing the `engine_profile.h` probes comes first.
+  p99 9.97 ms, and at most 14 ms outside the three demo loads (0.9-1.3 s each). **No vsync was
+  missed outside the loads:** no frame ran between 25 and 100 ms. About 150 frames read 17.5-21
+  ms, and none of them is a miss (see "A Frame over a field" below). The engine's own phases
+  aren't probed yet (only `SndMix`).
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.
@@ -75,6 +76,15 @@ paths:
   re-run, and if needed against a variant with HEAD's section sizes (`objdump -h`).
 - Quote per-item ratios (e.g. EntGeom per triangle), not the EE mean. Run-to-run spread on
   the EE mean is about ±2%.
+- **A Frame over a field is not a missed vsync.** The present is deferred: its vsync wait sits
+  in `GL_BeginRendering` (`rs::BeginFrame`), in the middle of `Host_Frame`. So a row's Frame
+  comes to one field plus however much the work after the wait (the view, the 2D, `S_Update`)
+  grew since the last frame. A view turning onto a busier scene reads as an 18-20 ms frame,
+  and turning away as a 14 ms one, with every present still on its vsync. A real miss reads
+  about 33 ms. The Q1 baseline's ~150 frames over 17.5 ms (2026-10-08) were all of this kind:
+  in 147 of the 148 outside the loads, View had stepped up from the frame before, and the
+  other sits beside the e1m6 load. The frame log doesn't record the present clock's fields yet
+  (`gs::PresentClock`, which the fps overlay reads), so count misses from Frame >= 25 ms.
 - PCSX2 timing ≠ hardware for I/O and FPU latency either.
 
 ## Capture recipe (`ps2_perftest`, ~4 min, debug build)
