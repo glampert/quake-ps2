@@ -694,7 +694,8 @@ void EmitClear(GifWriter & w, const DrawContext ctx, const u8 color[3], const bo
             static_cast<float>(Width()), static_cast<float>(Height()),
             static_cast<int>(color[0]), static_cast<int>(color[1]), static_cast<int>(color[2]));
 
-    w.EnableTests(Index(ctx), detail::g_state.zbuffer); // restore the real z-test for the 3D world
+    // The pixel tests the 3D world draws under (see MakePixelTests).
+    w.SetRegister(ContextReg(GS_REG_TEST, ctx), MakePixelTests());
 }
 
 void EmitBegin2D(GifWriter & w, const DrawContext ctx)

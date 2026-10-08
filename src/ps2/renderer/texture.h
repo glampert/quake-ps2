@@ -88,8 +88,9 @@ struct Texture final
     const void *  pixels;          // Pixel data in EE RAM. Not owned: whoever created the texture keeps it alive.
     s16           width;           // Of 'pixels', in pixels, > 0.
     s16           height;          // Of 'pixels', in pixels, > 0.
-    s16           srcWidth;        // Size the image had on disk. Tiling world textures are resampled to the next power of two on load, width/height
-    s16           srcHeight;       // hold the scaled size, what actually sits in memory and VRAM. Same as width/height for images that didn't need resampling.
+    s16           srcWidth;        // The image's own size, which width/height can differ from in two ways: a wall that tiles is resampled to the
+    s16           srcHeight;       // next power of two (width/height the stretched size), and an image copied with its rows padded to 16 texels -
+                                   // pics, skins, sprite frames - keeps them at the top left (width the padded stride, height its own).
     mutable bool  dirtyPixels;     // CPU rewrote 'pixels'; the next bind re-uploads them.
     ImageType     type;
     TexFlags      flags;
@@ -280,22 +281,24 @@ constexpr int kNumDebugTextures = PS2_QUAKE_DEBUG ? 6 : 1;
 // missing; the others give test scenes several distinct textures to exercise VRAM streaming.
 const Texture & DebugTexture(int variant = 0);
 
-// The particle image, generated at Init. Carries its shape in alpha with every texel's
-// colour at the modulate identity, so the particle's colour comes entirely from its vertices.
+// The particle images, generated at Init: QuakeSpasm's disc, and the solid square r_particles 2
+// draws. Each carries its shape in alpha with every texel's colour at the modulate identity, so the
+// particle's colour comes entirely from its vertices.
 const Texture & ParticleTexture();
+const Texture & SquareParticleTexture();
 
-// Converts image-normalized texture coordinates - 0..1 spanning the image,
-// which is what Quake's MD2 glcmds store - into the GS's normalized ST space.
-// The two are not the same thing: normalized ST spans the TEX0 TW/TH extent,
-// the image size rounded UP to a power of two, so for the non-power-of-two
-// images Quake is full of (a 276x194 model skin samples as 512x256) ST = 1.0
-// lands well past the last real texel. Multiply by these to hit the image's
-// true right/bottom edge; both come back 1.0 for power-of-two images.
+// Converts image-normalized texture coordinates - 0..1 spanning the image, which is what Quake's
+// model skins and sprite frames are mapped with - into the GS's normalized ST space. The two are
+// not the same thing: normalized ST spans the TEX0 TW/TH extent, the stored size rounded UP to a
+// power of two, so for the non-power-of-two images Quake is full of (a 296x194 skin samples as
+// 512x256) ST = 1.0 lands well past the last real texel. Multiply by these to hit the image's true
+// right/bottom edge, srcWidth x srcHeight texels in from the top left whatever the rows were
+// padded to; both come back 1.0 for an unpadded power-of-two image.
 //
-// Only valid for coordinates that stay within [0, 1]. A tiling texture still
-// wraps at the power-of-two extent, so a coordinate scale cannot fix one; the
-// world textures are resampled on load instead (see Texture::srcWidth), which
-// is why they come back 1.0 here.
+// Only for images copied whole, and for coordinates that stay within [0, 1]. A tiling texture
+// still wraps at the power-of-two extent, so a coordinate scale cannot fix one; the walls are
+// resampled on load instead and their coordinates divided by their size on disk (see
+// Texture::srcWidth), and they never come through here.
 inline void StScaleFor(const Texture & texture, float * outScaleS, float * outScaleT)
 {
     // tex::Log2 rounds up, and it is the same call gs.cpp fills TEX0's TW/TH
@@ -303,8 +306,8 @@ inline void StScaleFor(const Texture & texture, float * outScaleS, float * outSc
     const int potWidth  = 1 << Log2(static_cast<u32>(texture.width));
     const int potHeight = 1 << Log2(static_cast<u32>(texture.height));
 
-    *outScaleS = static_cast<float>(texture.width)  / static_cast<float>(potWidth);
-    *outScaleT = static_cast<float>(texture.height) / static_cast<float>(potHeight);
+    *outScaleS = static_cast<float>(texture.srcWidth)  / static_cast<float>(potWidth);
+    *outScaleT = static_cast<float>(texture.srcHeight) / static_cast<float>(potHeight);
 }
 
 } // namespace ps2::tex

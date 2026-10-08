@@ -273,16 +273,18 @@ void CrossProduct (vec3_t v1, vec3_t v2, vec3_t cross)
 	cross[2] = v1[0]*v2[1] - v1[1]*v2[0];
 }
 
+// [PS2_QUAKE]: sqrtf here and in VectorNormalize: libm's sqrt is double, and so soft-float on the
+// EE, which has a single-precision square root instruction. Both run per entity per frame.
 vec_t VectorLength(vec3_t v)
 {
-	return sqrt(DotProduct(v,v));
+	return sqrtf(DotProduct(v,v));
 }
 
 float VectorNormalize (vec3_t v)
 {
 	float	length, ilength;
 
-	length = sqrt(DotProduct(v,v));
+	length = sqrtf(DotProduct(v,v));
 
 	if (length)
 	{

@@ -96,8 +96,10 @@ void VID_Init()
     ps2::sys::RegisterCommands();
 
     // Host_Init queues "vid_unlock" to run after the configs: QuakeSpasm locks its video mode
-    // while they do. With one fixed mode there is nothing to lock or unlock.
+    // while they do. And the config.cfg it writes ends in "vid_restart", to apply the mode it saved.
+    // With one fixed mode there is nothing to lock, unlock or restart.
     Cmd_AddCommand("vid_unlock", []() {});
+    Cmd_AddCommand("vid_restart", []() {});
 
     Cvar_RegisterVariable(&vid_gamma);
     Cvar_RegisterVariable(&vid_contrast);
@@ -184,6 +186,10 @@ void GL_BeginRendering(int * x, int * y, int * width, int * height)
     // 2D and 3D now draw freely until GL_EndRendering: 2D primitives open the pending 2D batch
     // lazily, and it flushes at each 2D->3D boundary and in rs::EndFrame.
     ps2::rs::BeginFrame(/*dither=*/s_enableDither.value != 0.0f);
+
+    // The textures the engine let go of while the last frame was being recorded: that frame has
+    // been drawn by now, and nothing recorded since can reach them.
+    ps2::tex::ReleaseRetiredTextures();
 
     *x      = glx;
     *y      = gly;

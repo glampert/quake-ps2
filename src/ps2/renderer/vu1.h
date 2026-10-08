@@ -45,7 +45,7 @@ enum struct ProgramAddr : u32 {};
 enum class Program
 {
     // Every triangle but sky: transform, clip, gouraud triangles. Its batch header picks the
-    // per-vertex work: the vertex format (a DrawVertex, or two MD2 keyframes lerped on the VU),
+    // per-vertex work: the vertex format (a DrawVertex, or an alias model's two poses lerped on the VU),
     // how the colour arrives, and whether the texture coordinates animate (for wrap/turbulent
     // surfaces). Clips and splits triangles fully in the VU.
     TexturedTriangles,
@@ -148,12 +148,12 @@ enum class BatchColorMode : u32
     PackedU32 = 0, // A+D write to RGBAQ, straight out of the vertex - world diffuse, sprites, beams
     Computed,      // computed on the VU and emitted as PACKED RGBAQ. What computes it follows the
                    // vertex format: the four point lights for a DrawVertex (the lightmap pass), the
-                   // entity's light times the shade term for a keyframe (MD2 models)
+                   // entity's light times the shade term for a keyframe (alias models)
 };
 
 // Batch header .y: whether the texture coordinates animate.
 //
-// Warped surfaces arrive in raw texel units and ref_gl's ripple is evaluated on the VU, at the
+// Warped surfaces arrive in raw texel units and QuakeSpasm's ripple is evaluated on the VU, at the
 // emit rather than the transform - so a vertex the clipper cut is interpolated raw and warped
 // afterwards, which is the vertex that actually exists. See the note in DrawAnimatedWaterPolys.
 enum class BatchWarp : u32
@@ -174,7 +174,8 @@ enum class BatchVertexFormat : u32
 constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
 
 // rs::DrawFlags::DepthHack: the fraction of the z-buffer a hacked batch keeps at the near end.
-// ref_gl's glDepthRange(0, 0.3) over the inverted range this projection produces.
+// QuakeSpasm's glDepthRange(0, 0.3) for the view weapon, over the inverted range this projection
+// produces.
 constexpr float kDepthHackScale = 0.15f;
 
 // The NDC guard band the microprogram clips to: a triangle with a corner beyond it in |x/w| or
@@ -310,8 +311,8 @@ constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
 // patterns to zero).
 //
 // Two of the eight lanes are free, and the world renderer's second UV set is what they carry -
-// which is why this is also mod::PolyVertex (see model.h), and why a world polygon goes to the
-// DMA as the loader baked it rather than being rebuilt a vertex at a time.
+// which is why brush.cpp bakes a map's surfaces in this shape, and why a world polygon goes to the
+// DMA as it was baked rather than being rebuilt a vertex at a time.
 //
 // They are free because no microprogram reads either one: the position's translation row is
 // scaled by vf00's hardwired 1.0 rather than by the vertex, and Q reaches the GS from the
@@ -368,25 +369,26 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // qword carries this batch's texture size and scroll (AddBatchChunk fills it),
 // FrameConstants::clipScale.w the frame's phase, and the block below the shape of the sine itself.
 
-// ref_gl's r_turbsin amplitude (gl_warp.c, values in warpsin.h): 8*sin(i*2pi/256), halved once at
-// startup by R_Init, so the effective amplitude is 4 texels. Folded into the polynomial terms
-// below rather than multiplied on separately.
-constexpr float kTurbSinAmplitude = 4.0f;
+// QuakeSpasm's warp (gl_warp.c's WARPCALC, its "correct warp", which is the software renderer's
+// Turbulent8): s + 8 * sin(2pi * t / 128 + time), and t likewise from s - an 8-texel ripple whose
+// period is 128 texels, moving at a radian a second. The amplitude is folded into the polynomial
+// terms below rather than multiplied on separately.
+constexpr float kTurbSinAmplitude = 8.0f;
 
-// ref_gl divides a vertex's texel coordinate by 8 before taking its sine. The microprogram carries
-// phase in turns rather than radians - the range reduction wants a fraction anyway - so the 2pi
-// goes in here, where it costs nothing, instead of in the VU.
-constexpr float kTurbTurnsPerTexel = 0.125f / (2.0f * math::kPI);
+// A turn per 128 texels. The microprogram carries phase in turns rather than radians - the range
+// reduction wants a fraction anyway - and the frame's share of it arrives already in turns (see
+// rs::SetWarpAnimation).
+constexpr float kTurbTurnsPerTexel = 1.0f / 128.0f;
 
 // The bias that makes the microprogram's ftoi0 a floor *and* a round-to-nearest in one step: it
 // truncates toward zero, so the phase is lifted clear of zero first and the half lands the
 // rounding. Correct while |phase| stays under 1024 turns, which texel coordinates would have to
-// pass ~51k to break (the frame's own phase is pre-wrapped into [0, 1) by rs::SetWarpAnimation).
+// pass 131k to break (the frame's own phase is pre-wrapped into [0, 1) by rs::SetWarpAnimation).
 constexpr float kTurbPhaseBias = 1024.5f;
 
 // Odd Taylor terms of sin(2pi*t) with the amplitude folded in, for |t| <= 0.25 turns - the range
-// the microprogram's triangle fold leaves. Degree 7 is good to ~0.002 texels against a true sine,
-// where the 256-entry table this replaces was only good to 0.098.
+// the microprogram's triangle fold leaves. Degree 7 is good to ~0.004 texels against a true sine,
+// where the 256-entry table QuakeSpasm looks it up in is only good to 0.2.
 //
 // t is in turns, so every power of the radian argument carries its own power of 2pi.
 constexpr float kTurbTau = 2.0f * math::kPI;
@@ -415,7 +417,7 @@ constexpr WarpConstants kWarpConstants = {
 };
 
 // ------------------------------------------------------------------------------------------------
-// Keyframe-lerped triangles (MD2 alias models): the keyframe format of textured_triangles.vcl
+// Keyframe-lerped triangles (alias models): the keyframe format of textured_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
 // Vertices one lerped VU run carries: three qwords each against the world path's two, so fewer
@@ -428,12 +430,12 @@ constexpr int kMaxLerpVertsPerBatch = 60;
 // parameter qword, GIF tags - and its vertices start at the same kVertexDataAddr. What differs is
 // the vertex, three qwords:
 //
-//   +0  the current keyframe's dtrivertx_t, widened by the VIF to four unsigned integers
+//   +0  the current keyframe's trivertx_t, widened by the VIF to four unsigned integers
 //   +1  the old keyframe's, its 4th byte the quantized shade term (see LerpVertexBytes)
 //   +2  the model's own attribute qword (LerpDrawAttrib), referenced where it lies
 //
 // The two streams arrive separately - positions gathered into the chain, attributes straight out
-// of the model hunk - and the VIF interleaves them as it unpacks: a STCYCL write cycle shorter than
+// of the model's draw data - and the VIF interleaves them as it unpacks: a STCYCL write cycle shorter than
 // its cycle length writes that many qwords and then skips the rest. Every unpack carries a STCYCL
 // anyway, so the interleave is free, and the microprogram walks one pointer rather than two.
 constexpr int kLerpVertexQwords = 3;
@@ -459,24 +461,24 @@ constexpr int kLerpBlockAddr = 1010;
 
 struct alignas(16) LerpConstants
 {
-    math::Vec4 frontv;      // current frame scale * (1 - backlerp); .w 0, which rides through the lerp
-    math::Vec4 backv;       // old frame scale * backlerp; .w 0
+    math::Vec4 frontv;      // the current keyframe's scale times its weight; .w 0, which rides through the lerp
+    math::Vec4 backv;       // the old keyframe's scale times its weight; .w 0
     math::Vec4 shadeLight;  // the entity's light over 128 (it meets a quantized shade), alpha in .w
     math::Vec4 cullStScale; // .x the backface cull sign (rs::CullSignFor), .yz the skin's ST scale
 };
 static_assert(sizeof(LerpConstants) == 4 * 16, "Must match the VU memory layout");
 
-// The two keyframes' quantized positions of one vertex, interleaved: the current frame's
-// dtrivertx_t bytes then the old frame's, copied verbatim from the MD2 frame data (the VIF widens
-// each byte into an integer lane; the microprogram converts and lerps them).
+// The two keyframes' quantized positions of one vertex, interleaved: the current pose's trivertx_t
+// bytes then the old pose's, copied verbatim from the model's pose data (the VIF widens each byte
+// into an integer lane; the microprogram converts and lerps them).
 //
 // The 4th byte of each word is that frame's lightnormalindex. 'cur' keeps its copy, which the EE
 // indexes the shade table with; 'old' does not - that byte carries the vertex's **quantized shade
 // term** instead, shade * 128 in 0..255, which the microprogram reads out of the lerped .w lane.
 // Putting it there is what lets the attribute stream be the model's own baked vertices untouched.
 //
-// shade runs [0.70, 1.99] (see kMaxShadeDot), so *128 lands inside a byte exactly, at a step of
-// 1/128 of a shade unit - eight times finer than a 5-bit framebuffer channel can show.
+// shade runs [0.70, 1.99] (anorm_dots.h), so *128 lands inside a byte exactly, at a step of 1/128
+// of a shade unit - eight times finer than a 5-bit framebuffer channel can show.
 struct LerpVertexBytes
 {
     u32 cur;
@@ -484,7 +486,7 @@ struct LerpVertexBytes
 };
 
 // One VU run's worth of keyframe bytes - the only stream a lerp chunk gathers, since the
-// attributes are referenced where they lie in the model hunk.
+// attributes are referenced where they lie in the model's draw data.
 struct alignas(16) LerpPosChunk
 {
     LerpVertexBytes pos[kMaxLerpVertsPerBatch];
@@ -494,9 +496,9 @@ static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole nu
 // Per-vertex attributes for a lerped draw - everything but the position and the shade. One qword,
 // matching the microprogram's input layout.
 //
-// This is mod::AliasVertex (see model.h): the loader bakes a model's attributes in exactly this
-// shape, so they go to the DMA where they lie rather than being gathered first. Lane 0 is
-// whatever the source left there and the microprogram never reads it.
+// alias.cpp bakes a model's corners in exactly this shape when the model loads, so they go to the
+// DMA where they lie rather than being gathered first. Lane 0 is the pose vertex the corner is,
+// which the EE's gather reads and the microprogram never does.
 struct alignas(16) LerpDrawAttrib
 {
     u32 index;     // the source's own business; the microprogram does not read it
@@ -524,7 +526,7 @@ constexpr int kPrtDataAddr        = kPrtGifTagsAddr + kNumGifTagQwords; // 1 qwo
 static_assert(kPrtQuadOffsetAddr == 1 && kPrtUV0Addr == 2 && kPrtUV1Addr == 3 && kPrtGifTagsAddr == 4 && kPrtDataAddr == 11, "Batch layout must match the #defines in particles.vcl");
 static_assert(kPrtDataAddr + (6 * kMaxParticlesPerBatch) <= kDoubleBufferOffset, "Particle batch input + GS packet must fit one double-buffer half");
 
-// ref_gl's "hack a scale up to keep particles from disappearing": past 20 units
+// QuakeSpasm's "hack a scale up to keep particles from disappearing": past 20 units
 // the billboard grows with distance so it stays wide enough to cover a pixel.
 // The microprogram applies 1 + rate * distance unconditionally rather than
 // branching at 20 - below that the factor only reaches 1.08, and erring large is

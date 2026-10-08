@@ -19,8 +19,16 @@ struct Texture;
 void LoadPalette();
 
 // The PS2 texture behind one of the engine's, to bind for its draws. Null for a null gltexture_t
-// and for one there is nothing to draw for (a warp image, a dummy without pixels, or an image the
-// manager doesn't make textures for yet) - the caller draws a stand-in, or nothing.
+// and for one there is nothing to draw for (a warp image, a dummy without pixels) - the caller
+// draws a stand-in, or nothing.
 const Texture * TextureFor(const gltexture_s * gl);
+
+// The palette translation that puts a player's shirt and pants colours (0 to 13) into a skin:
+// QuakeSpasm's TexMgr_ReloadImage, where a colour row in the palette's upper half runs backwards.
+void BuildPlayerTranslation(int shirt, int pants, unsigned char (&translation)[256]);
+
+// Releases the textures the engine freed while the last frame was being recorded, which that frame
+// may have been uploading. GL_BeginRendering calls it once rs::BeginFrame has waited that frame out.
+void ReleaseRetiredTextures();
 
 } // namespace ps2::tex

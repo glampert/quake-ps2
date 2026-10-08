@@ -103,11 +103,14 @@ Q_ALWAYS_INLINE u64 MakeZBuf(const bool maskDepthWrites)
                        maskDepthWrites ? 1 : 0);
 }
 
-// TEST: the alpha test that cuts out transparent texels, plus the real z-test. Same thing
-// libdraw's draw_enable_tests programs, for the paths that write TEST themselves.
+// TEST: the alpha test that cuts out transparent texels, plus the real z-test - what 3D draws
+// under. A texel that fails keeps both buffers as they were (ATEST_KEEP_ALL). libdraw's
+// draw_enable_tests writes it with ATEST_KEEP_FRAMEBUFFER instead, the GS's ZB_ONLY, under which a
+// cut-out texel still writes its depth: a fence texture, a sprite's or a holey skin's transparent
+// texels would then hide whatever is drawn behind them later.
 Q_ALWAYS_INLINE u64 MakePixelTests()
 {
-    return GS_SET_TEST(DRAW_ENABLE, ATEST_METHOD_NOTEQUAL, 0x00, ATEST_KEEP_FRAMEBUFFER,
+    return GS_SET_TEST(DRAW_ENABLE, ATEST_METHOD_NOTEQUAL, 0x00, ATEST_KEEP_ALL,
                        DRAW_DISABLE, DRAW_DISABLE,
                        DRAW_ENABLE, static_cast<int>(detail::g_state.zbuffer.method));
 }

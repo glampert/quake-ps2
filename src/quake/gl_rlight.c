@@ -261,8 +261,10 @@ loc0:
 		// ericw -- added double casts to force 64-bit precision.
 		// Without them the zombie at the start of jam3_ericw.bsp was
 		// incorrectly being lit up in SSE builds.
-			ds = (int) ((double) DoublePrecisionDotProduct (mid, surf->texinfo->vecs[0]) + surf->texinfo->vecs[0][3]);
-			dt = (int) ((double) DoublePrecisionDotProduct (mid, surf->texinfo->vecs[1]) + surf->texinfo->vecs[1][3]);
+		// [PS2_QUAKE]: in float again, as id's was: the EE has no double FPU, and the soft-float
+		// casts cost the alias models' lighting about a millisecond a frame.
+			ds = (int) (DotProduct (mid, surf->texinfo->vecs[0]) + surf->texinfo->vecs[0][3]);
+			dt = (int) (DotProduct (mid, surf->texinfo->vecs[1]) + surf->texinfo->vecs[1][3]);
 
 			if (ds < surf->texturemins[0] || dt < surf->texturemins[1])
 				continue;

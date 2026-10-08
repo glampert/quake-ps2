@@ -19,6 +19,7 @@
 #include "ps2/renderer/draw.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/scrap_atlas.h"
+#include "ps2/renderer/texmgr.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/system/heap.h"
@@ -312,23 +313,12 @@ void LoadPics()
     s_backtile = PicFromWad("backtile");
 }
 
-// The setup menu's player in shirt and pants colours 'top' and 'bottom' (0 to 13): QuakeSpasm's
-// TexMgr_ReloadImage translation, where a colour row in the palette's upper half runs backwards.
+// The setup menu's player in shirt and pants colours 'top' and 'bottom' (0 to 13), translated as
+// the player skins are.
 void TranslateMenuPlayer(const Pic & pic, const int top, const int bottom)
 {
     byte translation[256];
-    for (int i = 0; i < 256; ++i)
-    {
-        translation[i] = static_cast<byte>(i);
-    }
-
-    const int shirt = top * 16;
-    const int pants = bottom * 16;
-    for (int i = 0; i < 16; ++i)
-    {
-        translation[TOP_RANGE + i]    = static_cast<byte>((shirt < 128) ? (shirt + i) : (shirt + 15 - i));
-        translation[BOTTOM_RANGE + i] = static_cast<byte>((pants < 128) ? (pants + i) : (pants + 15 - i));
-    }
+    ps2::tex::BuildPlayerTranslation(top, bottom, translation);
 
     const Texture & texture = *pic.texture;
     byte * const pixels = static_cast<byte *>(pic.pixels);

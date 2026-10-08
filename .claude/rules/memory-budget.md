@@ -67,4 +67,10 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
 - With the world drawing (2026-10-07): the brush surfaces' baked vertices
   (`MemTag::WorldMdl`, 32 bytes each) are 297 KB (e1m7) to 1.10 MB (e1m4), and the lightmap
   atlases (`MemTag::Lightmap`, 64 KB each) 128 to 256 KB. demo1 ran with 9.15 MB of RAM left.
+- With the alias models, sprites and particles (2026-10-08), demo1 (e1m3) holds 209 KB of model
+  corners (`MemTag::AliasMdl`, 16 bytes a corner, three a triangle: kept for every model ever
+  loaded, all 61 shareware ones would be 388 KB) and 1.72 MB of `TexImage`, most of it skin
+  copies (a skin is about 60 KB; its glow texture shares the copy, which saved 0.57 MB). 7.3 MB
+  of RAM was left. The models' poses are in the hunk's cache, as QuakeSpasm keeps them.
+  Cutting the water on a 32-unit grid adds to `WorldMdl`: 1.20 MB on e1m3.
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

@@ -79,12 +79,6 @@ public:
         Advance(draw_disable_tests(m_ptr, context, &zbuffer));
     }
 
-    // Restores the z-buffer's own test method.
-    void EnableTests(int context, zbuffer_t & zbuffer)
-    {
-        Advance(draw_enable_tests(m_ptr, context, &zbuffer));
-    }
-
     void Clear(int context, float x, float y, float width, float height, int r, int g, int b)
     {
         Advance(draw_clear(m_ptr, context, x, y, width, height, r, g, b));

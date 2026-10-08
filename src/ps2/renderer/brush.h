@@ -26,9 +26,9 @@ enum class Geometry : u8
 {
     None,      // Nothing to draw (a surface with too few edges).
     Fan,       // One convex polygon, numVerts corners, drawn as a fan from the first. Every
-               // surface but the turbulent ones.
-    Triangles, // A triangle list: a turbulent surface, which gl_warp.c's GL_SubdivideSurface cut
-               // into polygons a warp can bend without the seams showing.
+               // surface but the unlit liquids.
+    Triangles, // A triangle list: an unlit liquid's surface, cut on a 32-unit grid so the VU1
+               // warp has vertices close enough together to bend it by.
 };
 
 // One surface's vertices.

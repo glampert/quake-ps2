@@ -496,7 +496,7 @@ typedef struct qmodel_s
 	int			vboxyzofs;      // offset in vbo of hdr->numposes*hdr->numverts_vbo meshxyz_t
 	int			vbostofs;       // offset in vbo of hdr->numverts_vbo meshst_t
 
-	void		*ps2_render;	// [PS2_QUAKE]: the PS2 renderer's draw data for a brush model, built by R_NewMap. Not after 'cache', which zone.c's Cache_Free needs last
+	void		*ps2_render;	// [PS2_QUAKE]: the PS2 renderer's draw data: a brush model's, built by R_NewMap, or an alias model's, built as it first loads. Not after 'cache', which zone.c's Cache_Free needs last
 
 //
 // additional model data

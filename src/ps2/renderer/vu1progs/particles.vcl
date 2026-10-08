@@ -107,7 +107,7 @@
 ;
 ;           float q = 1.0f / c.w;
 ;
-;           // ref_gl's "hack a scale up to keep particles from
+;           // QuakeSpasm's "hack a scale up to keep particles from
 ;           // disappearing": the billboard grows with distance so it
 ;           // stays wide enough to cover a pixel. c.w *is* that
 ;           // distance - it is the view depth along 'forward' - so the
@@ -191,8 +191,8 @@
 
         div q, vf00[w], fC[w]
 
-        ; ref_gl's distance blow-up. fC.w is the view depth along the
-        ; camera's forward axis - the very distance ref_gl dots out - so
+        ; QuakeSpasm's distance blow-up. fC.w is the view depth along the
+        ; camera's forward axis - the very distance QuakeSpasm dots out - so
         ; scale = 1 + rate * distance needs no dot product here.
         mul.w  fScale, fC,     fQuadOff[w]
         add.w  fScale, fScale, vf00[w]

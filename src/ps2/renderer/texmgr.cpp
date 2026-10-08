@@ -1,15 +1,22 @@
 /* ================================================================================================
  * File: texmgr.cpp
  * Brief: QuakeSpasm's texture manager seam (gl_texmgr.h). The engine loads every 3D texture through
- *        TexMgr_LoadImage - the world's and the brush models' from gl_model.c, model skins and
- *        sprite frames later - and keeps the gltexture_t it gets back. Behind each one is the PS2
- *        texture (ps2::tex) the renderer binds, which streams into GS VRAM on its first use.
+ *        TexMgr_LoadImage - the world's and the brush models' from gl_model.c, the model skins and
+ *        the sprite frames, the player skins in their colours - and keeps the gltexture_t it gets
+ *        back. Behind each one is the PS2 texture (ps2::tex) the renderer binds, which streams
+ *        into GS VRAM on its first use.
  *
  *        BSP textures stay where gl_model.c put them, on the hunk: all four of id's mip levels,
  *        16-byte aligned (see texture_t's padding), which the GS upload DMAs in place. Only a
- *        texture that has to be resampled to a power of two is copied. The palette variant
- *        QuakeSpasm picks by the texture's flags becomes the CLUT the texture samples through
- *        (see tex::PixelFormat). The 2D pics don't come through here: draw.cpp makes those.
+ *        texture that has to be resampled to a power of two is copied. Skins and sprite frames
+ *        arrive in the model file's buffer, which is gone once the model has loaded, so they are
+ *        copied. The palette variant QuakeSpasm picks by the texture's flags becomes the CLUT the
+ *        texture samples through (see tex::PixelFormat). The 2D pics don't come through here:
+ *        draw.cpp makes those.
+ *
+ *        A texture the engine frees while a frame is being recorded - a model the cache evicts
+ *        to make room for another mid-frame - may already be uploading in that frame, so it is
+ *        only retired then, and released once the frame has been drawn.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -27,6 +34,10 @@ extern "C" {
 // QuakeSpasm's switch for the fullbright passes, which decides the palette a texture with
 // fullbright texels loads with. The refresh registers it; no header declares it.
 extern cvar_t gl_fullbrights;
+
+// The player skins in their colours (alias.cpp). One the cache evicts the player model under goes
+// with the model, and its slot is cleared here, or the next draw would use it freed.
+extern gltexture_t * playertextures[MAX_SCOREBOARD];
 } // extern "C"
 
 namespace {
@@ -47,10 +58,15 @@ struct TextureRecord
     // RGBA textures QuakeSpasm makes with no pixels at all.
     Texture * texture;
 
-    // Pixels this record allocated - a resampled copy - and frees with the texture. Null when the
-    // texture uses the caller's in place.
+    // Pixels this record allocated - a resampled wall, a skin's or a sprite frame's copy - and
+    // frees with the texture. Null when the texture uses the caller's in place.
     void * ownedPixels;
     u32    ownedBytes;
+
+    // A player skin's indices as the model has them, before TexMgr_ReloadImage puts its colours
+    // in: kept only for the textures QuakeSpasm recolours (TEXPREF_OVERWRITE).
+    byte * sourcePixels;
+    u32    sourceBytes;
 };
 static_assert(offsetof(TextureRecord, gl) == 0, "The engine's gltexture_t pointer is the record's");
 
@@ -66,6 +82,10 @@ Q_ALWAYS_INLINE const TextureRecord & RecordOf(const gltexture_t * gl)
 
 // Every live texture, newest first, through gltexture_t's own 'next' link.
 static gltexture_t * s_textures = nullptr;
+
+// Textures the engine freed while a frame was open, which that frame may be uploading: off the
+// live list already, but their PS2 textures and pixels held until the frame has been drawn.
+static gltexture_t * s_retired = nullptr;
 
 gltexture_t * NewTexture()
 {
@@ -94,37 +114,78 @@ void ReleaseTexture(TextureRecord & record)
         record.ownedPixels = nullptr;
         record.ownedBytes  = 0;
     }
+    if (record.sourcePixels != nullptr)
+    {
+        ps2::heap::Free(record.sourcePixels, record.sourceBytes, ps2::heap::MemTag::TexImage);
+        record.sourcePixels = nullptr;
+        record.sourceBytes  = 0;
+    }
+}
+
+// Releases a record taken off the live list, and the record with it.
+void FreeRecord(gltexture_t * texture)
+{
+    ReleaseTexture(RecordOf(texture));
+    ps2::heap::Free(texture, sizeof(TextureRecord), ps2::heap::MemTag::TexImage);
+}
+
+// Releases the retired textures. Only once nothing recorded can still reach them: no frame open,
+// and the last one drawn (see ps2::tex::ReleaseRetiredTextures).
+void ReleaseRetired()
+{
+    while (s_retired != nullptr)
+    {
+        gltexture_t * const texture = s_retired;
+        s_retired = texture->next;
+        FreeRecord(texture);
+    }
 }
 
 // Unlinks and frees every texture 'shouldFree' accepts.
 //
-// Waits out the frame the GS may still be drawing first: its chain can be uploading one of these
-// textures, out of pixels that are about to go - the hunk a map change frees right after this.
+// Outside a frame, waits out the one the GS may still be drawing first: its chain can be uploading
+// one of these textures, out of pixels that are about to go - the hunk a map change frees right
+// after this. Inside one, nothing can be waited for: the textures retire instead.
 template<typename Predicate>
 void FreeTexturesWhere(Predicate shouldFree)
 {
+    const bool inFrame = ps2::rs::IsFrameOpen();
     bool waited = false;
 
     gltexture_t ** link = &s_textures;
     while (*link != nullptr)
     {
         gltexture_t * const texture = *link;
-        if (shouldFree(*texture))
-        {
-            if (!waited)
-            {
-                ps2::rs::FinishFrameInFlight();
-                waited = true;
-            }
-
-            *link = texture->next;
-            ReleaseTexture(RecordOf(texture));
-            ps2::heap::Free(texture, sizeof(TextureRecord), ps2::heap::MemTag::TexImage);
-        }
-        else
+        if (!shouldFree(*texture))
         {
             link = &texture->next;
+            continue;
         }
+
+        *link = texture->next;
+
+        for (gltexture_t *& player : playertextures)
+        {
+            if (player == texture)
+            {
+                player = nullptr;
+            }
+        }
+
+        if (inFrame)
+        {
+            texture->next = s_retired;
+            s_retired = texture;
+            continue;
+        }
+
+        if (!waited)
+        {
+            ps2::rs::FinishFrameInFlight();
+            ReleaseRetired();
+            waited = true;
+        }
+        FreeRecord(texture);
     }
 }
 
@@ -259,22 +320,47 @@ byte * ResampleToPowerOfTwo(const byte * pixels, const int srcW, const int srcH,
     return scaled;
 }
 
-// Makes the PS2 texture for an 8-bit image QuakeSpasm asked for.
-void CreateIndexedTexture(TextureRecord & record, const qmodel_t * owner, byte * data,
-                          const int width, const int height, const unsigned flags)
+// The row stride an image is copied at: a multiple of 16 texels, so every image is a whole number
+// of quadwords for the upload DMA, which reads w x h texels in quadwords (see gs-renderer.md).
+constexpr int PaddedStride(const int width)
+{
+    return (width + 15) & ~15;
+}
+
+// Copies 'src' (width x height indices) into 'dst' at the padded stride, through 'translation' if
+// there is one. A row's padding repeats its last texel, so a filter reaching past the image's edge
+// finds the edge again rather than whatever the padding held.
+void CopyPadded(byte * dst, const byte * src, const int width, const int height, const byte * translation)
+{
+    const int stride = PaddedStride(width);
+    for (int y = 0; y < height; ++y)
+    {
+        const byte * const srcRow = src + (y * width);
+        byte * const       dstRow = dst + (y * stride);
+
+        if (translation != nullptr)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                dstRow[x] = translation[srcRow[x]];
+            }
+        }
+        else
+        {
+            std::memcpy(dstRow, srcRow, static_cast<size_t>(width));
+        }
+        std::memset(dstRow + width, dstRow[width - 1], static_cast<size_t>(stride - width));
+    }
+}
+
+// The PS2 texture of a BSP texture: gl_model.c keeps all four of its mip levels on the hunk,
+// 16-byte aligned, for as long as the map is loaded, which is what lets the texture use them in
+// place.
+void CreateWallTexture(TextureRecord & record, byte * data, const int width, const int height,
+                       const ps2::tex::PixelFormat format, const unsigned flags)
 {
     using namespace ps2::tex;
 
-    const ImageType   type   = ImageTypeFor(owner);
-    const PixelFormat format = PaletteFormatFor(flags);
-
-    // Only BSP textures for now: gl_model.c keeps all four of their mip levels on the hunk, 16-byte
-    // aligned, for as long as the map is loaded, which is what lets the texture use them in place.
-    // Model skins and sprite frames arrive in file buffers that are gone once the model loads.
-    if (type != ImageType::Wall)
-    {
-        return;
-    }
     PS2_AssertMsg((reinterpret_cast<uintptr_t>(data) & 15u) == 0, "BSP texture pixels not 16-byte aligned!");
 
     FixShot1Sid(record.gl.name, data, width, height);
@@ -298,11 +384,109 @@ void CreateIndexedTexture(TextureRecord & record, const qmodel_t * owner, byte *
     }
 
     Texture & texture = Create(record.gl.name, pixels, potWidth, potHeight, format,
-                               cutout ? TexComponents::RGBA : TexComponents::RGB, type,
+                               cutout ? TexComponents::RGBA : TexComponents::RGB, ImageType::Wall,
                                (mipLevels > 0) ? TexFlags::Mipmapped : TexFlags::None);
     texture.srcWidth  = static_cast<s16>(width);
     texture.srcHeight = static_cast<s16>(height);
     record.texture    = &texture;
+}
+
+// A copy another texture of the same model already made of the same image, which 'record' can draw
+// from too: a skin with fullbright texels loads twice from the same place in the model file, once
+// through each palette (see Mod_LoadAllSkins). Null when there is none. A recolourable texture
+// neither lends nor borrows: its pixels are its own colours.
+const void * FindSharedImage(const TextureRecord & record)
+{
+    const gltexture_t & gl = record.gl;
+    if (gl.source_offset == 0 || (gl.flags & TEXPREF_OVERWRITE) != 0)
+    {
+        return nullptr;
+    }
+
+    for (const gltexture_t * t = s_textures; t != nullptr; t = t->next)
+    {
+        const TextureRecord & other = RecordOf(t);
+        if (&other != &record && t->owner == gl.owner && t->source_offset == gl.source_offset &&
+            t->source_width == gl.source_width && t->source_height == gl.source_height &&
+            other.ownedPixels != nullptr && other.sourcePixels == nullptr)
+        {
+            return other.ownedPixels;
+        }
+    }
+    return nullptr;
+}
+
+// The PS2 texture of a model skin or a sprite frame, over a copy of 'data' with its rows padded
+// (see CopyPadded): the model's file buffer goes once the model has loaded. No mip levels, as in
+// QuakeSpasm, which doesn't mipmap either.
+//
+// A skin's glow texture draws from the skin's copy instead of making one. That is safe because both
+// belong to the same model and go together when it does: neither is ever freed alone (only
+// TexMgr_FreeTexture frees one texture, and only QuakeSpasm's skyboxes use it).
+void CreateImageTexture(TextureRecord & record, const byte * data, const int width, const int height,
+                        const ps2::tex::ImageType type, const ps2::tex::PixelFormat format,
+                        const unsigned flags)
+{
+    using namespace ps2::tex;
+
+    const int stride = PaddedStride(width);
+
+    const void * pixels = FindSharedImage(record);
+    if (pixels == nullptr)
+    {
+        record.ownedBytes  = static_cast<u32>(stride * height);
+        record.ownedPixels = ps2::heap::AllocAligned(ps2::heap::MemAlign(16), record.ownedBytes,
+                                                     ps2::heap::MemTag::TexImage);
+        CopyPadded(static_cast<byte *>(record.ownedPixels), data, width, height, nullptr);
+        pixels = record.ownedPixels;
+    }
+
+    // A recolourable skin keeps its own indices, to translate the colours from (TexMgr_ReloadImage).
+    if ((flags & TEXPREF_OVERWRITE) != 0)
+    {
+        record.sourceBytes  = static_cast<u32>(width * height);
+        record.sourcePixels = static_cast<byte *>(ps2::heap::Alloc(record.sourceBytes, ps2::heap::MemTag::TexImage));
+        std::memcpy(record.sourcePixels, data, record.sourceBytes);
+    }
+
+    // A skin's fullbright texels add over the lit skin as they are, whatever the shading: DECAL
+    // takes the texel's colour and ignores the vertex's, which on the alias model path carries the
+    // shade. As RGB, the alpha comes from the vertex - the entity's - and the texels outside the
+    // fullbright range, black in its palette, add nothing.
+    const bool glow = (format == PixelFormat::Palette8Fullbright);
+
+    // A sprite's index 255 and a holey skin's (TEXPREF_ALPHA) are cut out by the alpha test, which
+    // needs the palette's alpha: RGBA. Every other skin is opaque.
+    const bool cutout = !glow && (flags & TEXPREF_ALPHA) != 0 && HasTransparentTexels(data, width * height);
+
+    Texture & texture = Create(record.gl.name, pixels, stride, height, format,
+                               cutout ? TexComponents::RGBA : TexComponents::RGB, type);
+    texture.srcWidth  = static_cast<s16>(width);
+    texture.srcHeight = static_cast<s16>(height);
+    if (glow)
+    {
+        texture.function = TexFunction::Decal;
+    }
+    record.texture = &texture;
+}
+
+// Makes the PS2 texture for an 8-bit image QuakeSpasm asked for.
+void CreateIndexedTexture(TextureRecord & record, const qmodel_t * owner, byte * data,
+                          const int width, const int height, const unsigned flags)
+{
+    using namespace ps2::tex;
+
+    const ImageType   type   = ImageTypeFor(owner);
+    const PixelFormat format = PaletteFormatFor(flags);
+
+    if (type == ImageType::Wall)
+    {
+        CreateWallTexture(record, data, width, height, format, flags);
+    }
+    else if (type == ImageType::Skin || type == ImageType::Sprite)
+    {
+        CreateImageTexture(record, data, width, height, type, format, flags);
+    }
 }
 
 } // namespace
@@ -333,6 +517,27 @@ void LoadPalette()
 const Texture * TextureFor(const gltexture_t * gl)
 {
     return (gl != nullptr) ? RecordOf(gl).texture : nullptr;
+}
+
+void BuildPlayerTranslation(const int shirt, const int pants, byte (&translation)[256])
+{
+    for (int i = 0; i < 256; ++i)
+    {
+        translation[i] = static_cast<byte>(i);
+    }
+
+    const int top    = shirt * 16;
+    const int bottom = pants * 16;
+    for (int i = 0; i < 16; ++i)
+    {
+        translation[TOP_RANGE + i]    = static_cast<byte>((top < 128)    ? (top + i)    : (top + 15 - i));
+        translation[BOTTOM_RANGE + i] = static_cast<byte>((bottom < 128) ? (bottom + i) : (bottom + 15 - i));
+    }
+}
+
+void ReleaseRetiredTextures()
+{
+    ReleaseRetired();
 }
 
 } // namespace ps2::tex
@@ -367,8 +572,8 @@ gltexture_t * TexMgr_LoadImage(qmodel_t * owner, const char * name, int width, i
                                enum srcformat format, byte * data, const char * source_file,
                                src_offset_t source_offset, unsigned flags)
 {
-    // TEXPREF_OVERWRITE reloads a texture in place (a player skin taking new colours), so the
-    // engine's pointer to it stays good. Anything else is a new texture.
+    // TEXPREF_OVERWRITE reloads a texture in place (a player skin, when the model or the skin
+    // changes), so the engine's pointer to it stays good. Anything else is a new texture.
     gltexture_t * texture = nullptr;
     if ((flags & TEXPREF_OVERWRITE) != 0)
     {
@@ -409,6 +614,44 @@ gltexture_t * TexMgr_LoadImage(qmodel_t * owner, const char * name, int width, i
         CreateIndexedTexture(RecordOf(texture), owner, data, width, height, flags);
     }
     return texture;
+}
+
+// Puts a player skin's shirt and pants colours in, from the indices the record kept: QuakeSpasm's
+// TexMgr_ReloadImage, whose other use - reloading every texture after a video restart - the PS2
+// never has. -1, -1 keeps the colours the texture has.
+void TexMgr_ReloadImage(gltexture_t * glt, int shirt, int pants)
+{
+    TextureRecord & record = RecordOf(glt);
+    if (record.sourcePixels == nullptr || record.texture == nullptr)
+    {
+        Con_DPrintf("TexMgr_ReloadImage: can't recolour %s\n", glt->name);
+        return;
+    }
+
+    if (shirt > -1 && pants > -1)
+    {
+        glt->shirt = static_cast<signed char>(shirt);
+        glt->pants = static_cast<signed char>(pants);
+    }
+    if (glt->shirt < 0 || glt->pants < 0)
+    {
+        return;
+    }
+
+    byte translation[256];
+    ps2::tex::BuildPlayerTranslation(glt->shirt, glt->pants, translation);
+
+    // The frame the GS may still be drawing can be uploading the pixels about to change.
+    ps2::rs::FinishFrameInFlight();
+
+    CopyPadded(static_cast<byte *>(record.ownedPixels), record.sourcePixels,
+               static_cast<int>(glt->source_width), static_cast<int>(glt->source_height), translation);
+    record.texture->MarkPixelsDirty();
+}
+
+void TexMgr_FreeTexture(gltexture_t * kill)
+{
+    FreeTexturesWhere([kill](const gltexture_t & t) { return &t == kill; });
 }
 
 void TexMgr_FreeTexturesForOwner(qmodel_t * owner)

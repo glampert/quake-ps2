@@ -698,6 +698,11 @@ void KickAndWait()
     cmdbuf::Drain();
 }
 
+bool IsFrameOpen()
+{
+    return s_frameStarted;
+}
+
 gs::DrawContext FinishFrameInFlight()
 {
     PS2_AssertMsg(!s_frameStarted, "FinishFrameInFlight inside a frame!");
@@ -872,8 +877,8 @@ void BuildBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx, Dr
 }
 
 // The chunk head of a DrawTriangles draw: colour mode and warp from the flags, the warp's texel
-// scale and drift in the parameters - taken from the texture's size on disk, for the same reason
-// ref_gl's hardcoded 64 works (see DrawAnimatedWaterPolys) - and the tags.
+// scale and drift in the parameters - taken from the texture's size on disk, where QuakeSpasm
+// divides by 64, the size of every liquid texture id shipped - and the tags.
 ChunkHead MakeTriangleChunkHead(const tex::Texture & texture, gs::DrawContext drawCtx, DrawFlags flags)
 {
     const bool lit    = HasDrawFlag(flags, DrawFlags::DynamicLights);

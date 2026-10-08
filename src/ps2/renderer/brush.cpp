@@ -9,6 +9,7 @@
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/render_system.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -43,53 +44,208 @@ Q_ALWAYS_INLINE const float * SurfaceVertex(const qmodel_t & model, const msurfa
                         : model.vertexes[model.edges[-lindex].v[1]].position;
 }
 
-// Vertices a surface bakes into, and how they are laid out.
-SurfaceDraw MeasureSurface(const msurface_t & surf)
-{
-    SurfaceDraw draw = {};
+// ------------------------------------------------------------------------------------------------
+// Turbulent surfaces
+// ------------------------------------------------------------------------------------------------
 
-    if ((surf.flags & SURF_DRAWTURB) != 0 && surf.polys != nullptr)
+// The water's ripple repeats every 128 texels (vu1::kTurbTurnsPerTexel), and VU1 bends it at the
+// vertices, so a turbulent surface is cut into cells a quarter of that across - four vertices a
+// period, whose straight segments follow the ripple closely enough. QuakeSpasm cuts its water too
+// (gl_warp.c's GL_SubdivideSurface, at gl_subdivide_size, 128 by default), for a warp that sampled
+// every texel; this cut replaces that one.
+constexpr float kWarpCellSize = 32.0f;
+
+// A grid line closer than this to a piece's edge doesn't cut it, so no sliver comes off: the 8
+// units gl_warp.c's SubdividePolygon keeps.
+constexpr float kWarpCutMargin = 8.0f;
+
+// Corners a turbulent surface may have (GL_SubdivideSurface's 64), and a piece of one mid-cut: a
+// cut adds at most one corner to a convex piece.
+constexpr int kMaxWarpSurfaceCorners = 64;
+constexpr int kMaxWarpCorners        = kMaxWarpSurfaceCorners + 8;
+
+// A convex piece of a turbulent surface.
+struct WarpPiece
+{
+    int   numCorners;
+    float corners[kMaxWarpCorners][3];
+};
+
+void AppendCorner(WarpPiece & piece, const float * const corner)
+{
+    if (piece.numCorners >= kMaxWarpCorners)
     {
-        // gl_warp.c's subdivided polygons follow the whole one in the chain, each a convex fan.
-        int verts = 0;
-        for (const glpoly_t * poly = surf.polys->next; poly != nullptr; poly = poly->next)
-        {
-            verts += 3 * (poly->numverts - 2);
-        }
-        draw.numVerts = static_cast<u16>(verts);
-        draw.geometry = (verts > 0) ? Geometry::Triangles : Geometry::None;
+        Sys_Error("Turbulent surface cut into more than %d corners", kMaxWarpCorners);
     }
-    else if (surf.numedges >= 3)
-    {
-        draw.numVerts = static_cast<u16>(surf.numedges);
-        draw.geometry = Geometry::Fan;
-    }
-    return draw;
+    float * const out = piece.corners[piece.numCorners++];
+    out[0] = corner[0];
+    out[1] = corner[1];
+    out[2] = corner[2];
 }
 
-// The vertices of a turbulent surface's subdivided polygons, fanned into a triangle list, with
-// the raw texel coordinates gl_warp.c's SubdividePolygon gave them: the VU1 warp bends those and
-// divides by the texture's size itself. Unlit water has no lightmap UVs to carry.
-void BakeTurbulentSurface(const msurface_t & surf, vu1::DrawVertex * out)
+// Splits a piece at the plane where a corner's 'axis' coordinate is 'at'.
+void SplitWarpPiece(const WarpPiece & in, const int axis, const float at, WarpPiece & below, WarpPiece & above)
 {
-    for (const glpoly_t * poly = surf.polys->next; poly != nullptr; poly = poly->next)
+    below.numCorners = 0;
+    above.numCorners = 0;
+
+    for (int i = 0; i < in.numCorners; ++i)
     {
-        for (int t = 1; t < poly->numverts - 1; ++t)
+        const float * const v    = in.corners[i];
+        const float * const next = in.corners[(i + 1) % in.numCorners];
+        const float d     = v[axis] - at;
+        const float dNext = next[axis] - at;
+
+        if (d <= 0.0f)
+        {
+            AppendCorner(below, v);
+        }
+        if (d >= 0.0f)
+        {
+            AppendCorner(above, v);
+        }
+
+        if ((d < 0.0f && dNext > 0.0f) || (d > 0.0f && dNext < 0.0f))
+        {
+            const float frac = d / (d - dNext);
+            float point[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                point[k] = v[k] + (frac * (next[k] - v[k]));
+            }
+            point[axis] = at;
+
+            AppendCorner(below, point);
+            AppendCorner(above, point);
+        }
+    }
+}
+
+// Cuts a piece at every grid line across 'axis', then each strip that leaves across the axes after
+// it, and hands each cell to 'emit'. Iterative along an axis, so how deep this goes is the three
+// axes, whatever the size of the surface.
+template<typename Emit>
+void CutWarpPiece(const WarpPiece & piece, const int axis, Emit & emit)
+{
+    if (axis == 3)
+    {
+        emit(piece);
+        return;
+    }
+
+    float lo = piece.corners[0][axis];
+    float hi = lo;
+    for (int i = 1; i < piece.numCorners; ++i)
+    {
+        lo = (piece.corners[i][axis] < lo) ? piece.corners[i][axis] : lo;
+        hi = (piece.corners[i][axis] > hi) ? piece.corners[i][axis] : hi;
+    }
+
+    WarpPiece remainder = piece;
+    for (float at = (std::floor(lo / kWarpCellSize) + 1.0f) * kWarpCellSize; at < hi - kWarpCutMargin; at += kWarpCellSize)
+    {
+        if (at - lo < kWarpCutMargin)
+        {
+            continue;
+        }
+
+        WarpPiece below, above;
+        SplitWarpPiece(remainder, axis, at, below, above);
+        if (below.numCorners >= 3)
+        {
+            CutWarpPiece(below, axis + 1, emit);
+        }
+        remainder = above;
+        lo = at;
+    }
+
+    if (remainder.numCorners >= 3)
+    {
+        CutWarpPiece(remainder, axis + 1, emit);
+    }
+}
+
+// Cuts a turbulent surface's polygon into its cells and hands each to 'emit'.
+template<typename Emit>
+void CutTurbulentSurface(const qmodel_t & model, const msurface_t & surf, Emit & emit)
+{
+    if (surf.numedges > kMaxWarpSurfaceCorners)
+    {
+        Sys_Error("Turbulent surface with %d corners (%d at most)", surf.numedges, kMaxWarpSurfaceCorners);
+    }
+
+    WarpPiece whole;
+    whole.numCorners = 0;
+    for (int i = 0; i < surf.numedges; ++i)
+    {
+        AppendCorner(whole, SurfaceVertex(model, surf, i));
+    }
+    CutWarpPiece(whole, 0, emit);
+}
+
+// The vertices of a turbulent surface's cells, each fanned into triangles, with raw texel
+// coordinates as gl_warp.c's SubdividePolygon gave them - the texture's axes without its offset, as
+// QuakeSpasm maps its water: the VU1 warp bends them and divides by the texture's size itself.
+// Unlit water has no lightmap UVs to carry.
+void BakeTurbulentSurface(const qmodel_t & model, const msurface_t & surf, vu1::DrawVertex * out)
+{
+    const mtexinfo_t & texinfo = *surf.texinfo;
+
+    auto emit = [&out, &texinfo](const WarpPiece & cell)
+    {
+        for (int t = 1; t < cell.numCorners - 1; ++t)
         {
             const int corners[3] = { 0, t, t + 1 };
             for (const int c : corners)
             {
-                const float * const v = poly->verts[c];
+                const float * const v = cell.corners[c];
                 out->position   = { v[0], v[1], v[2] };
                 out->rgba       = kModulateIdentity;
-                out->s          = v[3];
-                out->t          = v[4];
+                out->s          = DotProduct(v, texinfo.vecs[0]);
+                out->t          = DotProduct(v, texinfo.vecs[1]);
                 out->lightmap_s = 0.0f;
                 out->lightmap_t = 0.0f;
                 ++out;
             }
         }
+    };
+    CutTurbulentSurface(model, surf, emit);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Surfaces
+// ------------------------------------------------------------------------------------------------
+
+// Vertices a surface bakes into, and how they are laid out.
+SurfaceDraw MeasureSurface(const qmodel_t & model, const msurface_t & surf)
+{
+    SurfaceDraw draw = {};
+
+    if (surf.numedges < 3)
+    {
+        return draw;
     }
+
+    // The unlit liquids (lit water, from a map with its own light for it, draws as a wall).
+    if ((surf.flags & SURF_DRAWTURB) != 0 && (surf.flags & SURF_DRAWTILED) != 0)
+    {
+        int verts = 0;
+        auto count = [&verts](const WarpPiece & cell) { verts += 3 * (cell.numCorners - 2); };
+        CutTurbulentSurface(model, surf, count);
+
+        if (verts > 0xFFFF)
+        {
+            Sys_Error("Turbulent surface cut into %d vertices", verts);
+        }
+        draw.numVerts = static_cast<u16>(verts);
+        draw.geometry = (verts > 0) ? Geometry::Triangles : Geometry::None;
+    }
+    else
+    {
+        draw.numVerts = static_cast<u16>(surf.numedges);
+        draw.geometry = Geometry::Fan;
+    }
+    return draw;
 }
 
 // A surface's convex polygon, with QuakeSpasm's BuildSurfaceDisplayList texture coordinates: the
@@ -139,7 +295,7 @@ ModelDraw * BuildModelDraw(qmodel_t & model)
     int numVerts = 0;
     for (int i = 0; i < model.numsurfaces; ++i)
     {
-        numVerts += MeasureSurface(model.surfaces[i]).numVerts;
+        numVerts += MeasureSurface(model, model.surfaces[i]).numVerts;
     }
 
     const u32 headerBytes  = (sizeof(ModelDraw) + 15u) & ~15u;
@@ -165,12 +321,12 @@ ModelDraw * BuildModelDraw(qmodel_t & model)
         const msurface_t & surf = model.surfaces[i];
         SurfaceDraw & surfDraw = draw.surfaces[i];
 
-        surfDraw = MeasureSurface(surf);
+        surfDraw = MeasureSurface(model, surf);
         surfDraw.verts = cursor;
 
         if (surfDraw.geometry == Geometry::Triangles)
         {
-            BakeTurbulentSurface(surf, cursor);
+            BakeTurbulentSurface(model, surf, cursor);
         }
         else if (surfDraw.geometry == Geometry::Fan)
         {

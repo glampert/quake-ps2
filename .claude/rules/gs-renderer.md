@@ -11,10 +11,10 @@ bracket, the screenshot readback), `draw.cpp` (`Draw_*`), `texmgr.cpp` (`TexMgr_
 `refresh.cpp` (`R_*`). Under them, from the Quake II port: `render_system.*` (`ps2::rs`: VIF1
 chains, batches, `DrawTriangles`, `Submit`), `cmd_buffer.*`, `gs.*` (GS front-end, register
 values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap_atlas.*`,
-`clip.*` (EE sky clipper), `vu1.*` (VU memory layout, microprogram declarations). The 3D world:
-`view.cpp` (`R_RenderView`), `brush.cpp` (per-surface draw data, built by `R_NewMap`) and
-`lightmap.cpp`. `md2.cpp` and `sky.cpp` are still Quake II's, unbuilt until their part of the
-3D phase.
+`clip.*` (EE sky clipper), `vu1.*` (VU memory layout, microprogram declarations). The 3D view:
+`view.cpp` (`R_RenderView`: the world, the entity passes, the glows), `brush.cpp` (per-surface
+draw data, built by `R_NewMap`), `lightmap.cpp`, `alias.cpp` (MDL models), `sprite.cpp` and
+`particles.cpp`. `sky.cpp` is still Quake II's, unbuilt until its part of the 3D phase.
 
 - **Set the mip constant every frame** (`rs::SetTextureSampling`, from the view's focal
   length; see `view.cpp`'s `SetUpTextureSampling`). Its default of 0 has the GS pick levels by
@@ -23,6 +23,14 @@ values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap
   no-bright (224-255 black), fullbright-only (0-223 alpha 0, the rest at 0x80 for additive), the
   0..1 alpha ramp (particles) and the 0..255 light ramp (lightmaps, overbright). Walls sample
   with RGB components, so the palette's transparent 255 doesn't cut them.
+- **A model skin's glow texture is DECAL with RGB components**: it adds its texels as they
+  are, whatever colour the vertices carry - on the alias path the vertex colour is the shade -
+  at the vertex alpha. So the fullbright pass is the model's own vertices drawn again
+  (`rs::Resubmit`), Additive, with the entity's alpha in the light's .w. The walls' glow
+  textures stay MODULATE, at the modulate identity.
+- **Only one stream may claim the command buffer at a time.** An alias model draws through a
+  `LerpStream` of its own, so the view submits its `TriangleStream` before each alias model
+  (`rs::Submit` is free when the stream is empty).
 
 ## Frame model: 2D and 3D interleave
 
@@ -72,8 +80,11 @@ values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap
 - `draw_setup_environment()` defaults to CLAMP wrap (program REPEAT afterwards where tiling
   is needed) and an alpha test of NOTEQUAL 0 that discards A==0 texels. That is how conchars
   transparency works (palette index 255 has alpha 0). `ATEST_KEEP_*` names what is
-  *preserved*: `ATEST_KEEP_FRAMEBUFFER` == GS `ZB_ONLY`. Any value where 0 is meaningful,
-  such as a black lightmap luxel, must clamp to 1, or it draws nothing.
+  *preserved*: `ATEST_KEEP_FRAMEBUFFER` == GS `ZB_ONLY`, which libdraw's `draw_enable_tests`
+  uses, and under which a cut-out texel still writes depth: a fence texture's or a sprite's
+  holes then hide what draws behind them later. 3D runs with `gs::MakePixelTests`
+  (`ATEST_KEEP_ALL`) instead. Any value where 0 is meaningful, such as a black lightmap luxel,
+  must clamp to 1, or it draws nothing.
 - **SCISSOR doesn't clip HOST→LOCAL uploads.** Writes past the destination width wrap in VRAM
   (for a 640-wide PSMCT32 buffer, to `(x-640, y+32)`).
 - **One XGKICK with many GIF tags: only the last tag may set EOP.** The GIF stops at the
@@ -85,11 +96,16 @@ values, 2D, readback), `vram.*` (texture heap), `texture.*` (`ps2::tex`), `scrap
 ## Texture coordinates and sizes
 
 - **Normalized ST spans the TEX0 TW/TH extent, the image rounded *up* to a power of two**, not
-  the image. Every MD2 skin is non-power-of-two (276x194 samples as 512x256). On screen this
-  looks like a UV-flip bug, but it isn't one: GS and GL both have T=0 at the first row. Scale
-  coordinates in [0,1] with `tex::StScaleFor()`. A *tiling* non-POT texture needs resampling
-  on load (33 of 2118 `.wal` files), not a coordinate scale. The 2D path uses `PRIM_MAP_UV`
-  texel coordinates and is unaffected.
+  the image. Nearly every MDL skin is non-power-of-two (296x194 samples as 512x256). On screen
+  this looks like a UV-flip bug, but it isn't one: GS and GL both have T=0 at the first row.
+  Scale coordinates in [0,1] with `tex::StScaleFor()`, which takes the image's own size
+  (`srcWidth`/`srcHeight`) over the extent. A *tiling* non-POT texture needs resampling on
+  load (the walls are), not a coordinate scale. The 2D path uses `PRIM_MAP_UV` texel
+  coordinates and is unaffected.
+- **Skins and sprite frames are copied with their rows padded to 16 texels**, as draw.cpp's
+  pics are: the upload sends `w*h` texels in whole quadwords, and 16 of the 61 shareware models
+  have a `w*h` that isn't a multiple of 16 (308x149, 300x194, ...). The padding repeats each
+  row's last texel. `width` is the padded stride, `srcWidth` the image's own.
 
 ## CLUTs and palettized textures
 

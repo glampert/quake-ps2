@@ -5,13 +5,13 @@
 ; triangles (triangle list), clipped against the near plane and the
 ; guard band. Every triangle the renderer draws comes through here but
 ; particles and sky - world surfaces, their lightmap pass, turbulent
-; water and MD2 models - and the batch header says which work applies.
+; water and alias models - and the batch header says which work applies.
 ; Preprocessed with vclpp; the -j flag injects the VCL boilerplate
 ; (.init_*, --enter/--exit blocks).
 ;
 ; VU data memory layout (qwords; must match vu1.h):
 ;   0-3  MVP matrix rows (row-vector convention; for keyframes, row 3
-;        carries the MD2 lerp's 'move')
+;        carries the alias model's scale_origin)
 ;   4    GS scale  (2048, 2048, zScale)
 ;   5    GS offset (2048 + width/2, 2048 + height/2, zScale)
 ;   6    clip-judgement scale (guard band for x/y, 1.0 for z)
@@ -38,8 +38,8 @@
 ; wrote, sends it with XGKICK and carries on in the other one.
 ;
 ; A vertex is transformed to clip space first, in one of two forms picked
-; by the vertex format - a DrawVertex read as it lies, or two MD2
-; keyframes lerped - and from there on the two are the same vertex:
+; by the vertex format - a DrawVertex read as it lies, or two alias
+; model keyframes lerped - and from there on the two are the same vertex:
 ; judged, clipped, fanned and emitted by the same code. A keyframe
 ; triangle is also backface culled, and dropped outright rather than
 ; sent with its ADC bit set.
@@ -191,7 +191,7 @@
     ; The MVP's translation row is scaled by a hardwired 1.0, not by the vertex's
     ; own .w: PolyVertex parks its lightmap S there, and every other DrawVertex
     ; producer writes a 1.0 that this no longer needs. LerpTransform does the
-    ; same, for its own reason - see the note on mod::PolyVertex.
+    ; same, for its own reason - see the note on vu1::DrawVertex.
     madd vPos, fMVP3, vf00[w]
 
     ; Guard-band clip judgement against |w|: scaled x/y, exact z.
@@ -200,7 +200,7 @@
 
 #endmacro
 
-; ClipTransform's counterpart for keyframe batches (MD2 models): reads one
+; ClipTransform's counterpart for keyframe batches (alias models): reads one
 ; vertex as two keyframes' bytes plus the model's attribute qword, and
 ; leaves the same three registers as ClipTransform does, in the same form -
 ; so from here on a model's vertex is a world vertex, clipped, fanned and
@@ -316,7 +316,7 @@
 ;       proj = ftoi4(gsOffset.xyz + proj * gsScale.xyz);
 ;
 ;       vec4 st = stqScaled.yzwx;         // ST (.w junk)
-;       if (warped) // ref_gl's ripple, on the vertex that really exists
+;       if (warped) // QuakeSpasm's ripple, on the vertex that really exists
 ;           st.xy = Warp(stq.yz) * q;
 ;       st.z = q;                         // what PACKED RGBAQ latches Q from
 ;
@@ -349,7 +349,7 @@
     ilw.w iWarp, kWindowSpill(vi00)
     ibeq  iWarp, vi00, lbl##NoWarp
 
-    ; --- turbulent: ref_gl's EmitWaterPolys, on the vertex that really exists ---
+    ; --- turbulent: QuakeSpasm's water warp, on the vertex that really exists ---
     ;
     ; Here rather than in the transform, deliberately. A vertex the clipper cut has
     ; no ripple of its own - it is interpolated with the raw texel coordinates its
@@ -392,7 +392,7 @@
     sub.xy  fFoldB, fNegHalf, fFrac
     max.xy  fT,     fT,       fFoldB
 
-    ; Odd polynomial of degree 7, Horner, 4-texel amplitude folded into the terms.
+    ; Odd polynomial of degree 7, Horner, 8-texel amplitude folded into the terms.
     mul.xy fTSqr, fT,    fT
     mul.xy fPoly, fTSqr, fWarpPoly[w]
     add.xy fPoly, fPoly, fWarpPoly[z]

@@ -2,7 +2,7 @@
  * File: refresh.cpp
  * Brief: The refresh: QuakeSpasm's render.h seam (R_Init, R_NewMap, R_RenderView, ...), the
  *        renderer state and cvars the client and the kept renderer files read, and the load-time
- *        renderer hooks gl_model.c calls (sky textures, warp subdivision, alias mesh building).
+ *        renderer hooks gl_model.c calls for the sky.
  *        The Quake 1 counterpart of the Quake II port's ref.cpp.
  *
  *        R_Init and R_NewMap are gl_rmisc.c's - cvars, particles, light styles, efrags, fog - with
@@ -13,6 +13,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/renderer/alias.h"
 #include "ps2/renderer/brush.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/view.h"
@@ -89,6 +90,7 @@ void R_Init()
     Cvar_SetCallback(&r_clearcolor, ClearColorChanged);
 
     ps2::view::Init();
+    ps2::alias::Init();
 
     R_InitParticles();
     ClearColorChanged(&r_clearcolor);
@@ -123,9 +125,11 @@ void R_NewMap()
     ps2::view::NewMap();   // the liquids' opacity, from worldspawn
 }
 
-// QuakeSpasm's R_NewGame forgets the player skin textures, which TexMgr_NewGame has just freed;
-// with no skins built yet there is nothing to forget.
-void R_NewGame() {}
+// A game switch: the player skin textures go, which TexMgr_NewGame has just freed.
+void R_NewGame()
+{
+    ps2::alias::NewGame();
+}
 
 void D_FlushCaches() {}
 
@@ -138,12 +142,21 @@ void R_RenderView()
     ps2::view::RenderView();
 }
 
-void R_TranslatePlayerSkin(int playernum)    { (void)playernum; }
-void R_TranslateNewPlayerSkin(int playernum) { (void)playernum; }
-
 // ------------------------------------------------------------------------------------------------
 // Load-time hooks the model loader calls
 // ------------------------------------------------------------------------------------------------
+
+// gl_warp.c's, which the PS2 doesn't build: QuakeSpasm cuts its water into 128-unit polygons as
+// the map loads, for a warp it computes per texel, and renders each warping texture into a warp
+// image this size. The PS2 warps per vertex, on its own 32-unit cut (see brush.cpp), and has no
+// warp images: gl_model.c still registers the cut's cvar and reads the image size, 0.
+cvar_t gl_subdivide_size = ps2::MakeCvar("gl_subdivide_size", "128", CVAR_ARCHIVE);
+int    gl_warpimagesize  = 0;
+
+void GL_SubdivideSurface(msurface_t * fa)
+{
+    (void)fa;
+}
 
 // For now only the sky's flat colour, which the view draws sky surfaces in: gl_sky.c's average
 // of the opaque texels of the front layer, the left half of the 256x128 image (index 0 is the
@@ -182,9 +195,6 @@ void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)
 void Sky_LoadTextureQ64(qmodel_t * mod, texture_t * mt) { (void)mod; (void)mt; }
 void Sky_LoadSkyBox(const char * name)                  { (void)name; }
 void Sky_ClearAll() {}
-
-void GL_MakeAliasModelDisplayLists(qmodel_t * m, aliashdr_t * hdr) { (void)m; (void)hdr; }
-void GLMesh_DeleteVertexBuffers() {}
 
 // No external replacement textures (textures/*.tga and the like) on the PS2: the textures come
 // from the BSP, the WAD and the models.

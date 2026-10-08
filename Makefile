@@ -93,6 +93,9 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/texmgr.cpp           \
 	ps2/renderer/brush.cpp            \
 	ps2/renderer/lightmap.cpp         \
+	ps2/renderer/alias.cpp            \
+	ps2/renderer/sprite.cpp           \
+	ps2/renderer/particles.cpp        \
 	ps2/renderer/view.cpp             \
 	ps2/renderer/refresh.cpp          \
 	ps2/renderer/overlays.cpp         \
@@ -123,7 +126,7 @@ ENGINE_C_SRC = \
 	quake/sv_phys.c    quake/sv_user.c    quake/view.c       quake/wad.c       \
 	quake/world.c      quake/zone.c       quake/strlcat.c    quake/strlcpy.c   \
 	quake/gl_model.c   quake/gl_refrag.c  quake/gl_rlight.c  quake/gl_screen.c \
-	quake/gl_fog.c     quake/r_part.c     quake/gl_warp.c
+	quake/gl_fog.c     quake/r_part.c
 
 C_SRC   = $(PS2_C_SRC) $(ENGINE_C_SRC)
 CXX_SRC = $(PS2_CXX_SRC)

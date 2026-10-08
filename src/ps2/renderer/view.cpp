@@ -28,10 +28,13 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/view.h"
+#include "ps2/renderer/alias.h"
 #include "ps2/renderer/brush.h"
 #include "ps2/renderer/lightmap.h"
+#include "ps2/renderer/particles.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/renderer/sprite.h"
 #include "ps2/renderer/texmgr.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
@@ -46,6 +49,9 @@ extern "C" {
 
 // sv_main.c's; QuakeSpasm's r_world.c declared it for itself too.
 byte * SV_FatPVS(vec3_t org, qmodel_t * worldmodel);
+
+// gl_rlight.c's: tints the view, for a dynamic light glow the camera is inside.
+void AddLightBlend(float r, float g, float b, float a2);
 
 // ------------------------------------------------------------------------------------------------
 // Renderer state the engine headers declare (glquake.h) for gl_rmain.c to define
@@ -80,6 +86,7 @@ cvar_t r_novis        = ps2::MakeCvar("r_novis",        "0", CVAR_ARCHIVE);
 cvar_t r_oldskyleaf   = ps2::MakeCvar("r_oldskyleaf",   "0", CVAR_NONE);
 cvar_t gl_fullbrights = ps2::MakeCvar("gl_fullbrights", "1", CVAR_ARCHIVE);
 cvar_t gl_farclip     = ps2::MakeCvar("gl_farclip",     "65536", CVAR_ARCHIVE);
+cvar_t r_waterwarp    = ps2::MakeCvar("r_waterwarp",    "1", CVAR_NONE);
 
 } // extern "C"
 
@@ -120,10 +127,12 @@ static math::Mat4 s_viewProj = {};
 // The sky's flat colour (see SetSkyFlatColor), packed as a GS vertex colour.
 static u32 s_skyColor = vu1::PackColorRGBA(64, 64, 96, 0x80);
 
-// The passes QuakeSpasm's cheat-safe draw modes leave on (R_SetupView): r_fullbright and
-// r_lightmap only take in single player, and a map without light data draws fullbright.
-static bool s_drawLightmaps = true;
-static bool s_lightmapOnly  = false;
+// QuakeSpasm's cheat-safe draw modes (R_SetupView): r_fullbright and r_lightmap only take in single
+// player, and there a map without light data draws fullbright. The lightmap pass runs unless the
+// mode is fullbright - or there are no lightmaps to draw.
+static bool s_fullbrightMode = false;
+static bool s_lightmapMode   = false;
+static bool s_drawLightmaps  = true;
 
 // ps2_mip_filter picks how the walls and model skins filter, by name, as QuakeSpasm's
 // gl_texturemode does: nearest, bilinear (between texels, the nearest mip level) or trilinear
@@ -200,7 +209,7 @@ bool CullBox(const float * const mins, const float * const maxs)
 
 // The entity's model bounds placed where it stands, taking the rotated bounds gl_model.c
 // precomputed when it yaws, pitches or rolls.
-bool CullModelForEntity(const entity_t & e)
+bool CullModelBounds(const entity_t & e)
 {
     const float * minBounds;
     const float * maxBounds;
@@ -281,32 +290,6 @@ void SetupTransforms(const float fovx, const float fovy)
     }};
 
     s_viewProj = view * proj;
-}
-
-// An entity's model to world transform: gl_rmain.c's R_RotateForEntity, which turns yaw about Z,
-// then -pitch about Y, then roll about X, scaled. 'pitch' is the angle the caller wants applied
-// there: brush models flip the pitch going in (R_DrawBrushModel's "stupid quake bug"), so theirs
-// comes out positive.
-math::Mat4 EntityMatrix(const entity_t & e, const float pitch)
-{
-    const float scale = ENTSCALE_DECODE(e.scale);
-
-    math::Mat4 m = math::RotationX(math::DegToRad(e.angles[ROLL])) *
-                   math::RotationY(math::DegToRad(pitch)) *
-                   math::RotationZ(math::DegToRad(e.angles[YAW]));
-
-    for (int row = 0; row < 3; ++row)
-    {
-        for (int col = 0; col < 3; ++col)
-        {
-            m.m[row][col] *= scale;
-        }
-    }
-    m.m[3][0] = e.origin[0];
-    m.m[3][1] = e.origin[1];
-    m.m[3][2] = e.origin[2];
-    m.m[3][3] = 1.0f;
-    return m;
 }
 
 // The frame's texture filtering, and the constant that picks the walls' mip levels.
@@ -657,7 +640,7 @@ void DrawTextureChains(rs::TriangleStream & stream, qmodel_t & model, const enti
                                      : kModulateIdentity;
 
         stream.SetTransform(mvp);
-        if (s_lightmapOnly)
+        if (s_lightmapMode)
         {
             // r_lightmap: the walls flat white, so the lightmap pass over them shows the light alone.
             stream.SetDrawFlags(rs::DrawFlags::Untextured);
@@ -683,7 +666,7 @@ void DrawTextureChains(rs::TriangleStream & stream, qmodel_t & model, const enti
             {
                 brush::SurfaceDraw & draw = brush::DrawFor(model, *s);
 
-                if (s_lightmapOnly)
+                if (s_lightmapMode)
                 {
                     GatherSurfaceColored(stream, draw, vu1::PackColorRGBA(255, 255, 255, 0x80));
                 }
@@ -737,7 +720,7 @@ void DrawTextureChains(rs::TriangleStream & stream, qmodel_t & model, const enti
 
     // The fullbright pass: the texels in the fullbright range, added over the lit walls at their
     // own colour, which QuakeSpasm's no-bright palette left black in the first pass.
-    if (gl_fullbrights.value != 0.0f && !s_lightmapOnly)
+    if (gl_fullbrights.value != 0.0f && !s_lightmapMode)
     {
         stream.SetTransform(mvp);
         stream.SetDrawFlags(rs::DrawFlags::Additive);
@@ -846,7 +829,7 @@ void DrawBrushModel(rs::TriangleStream & stream, entity_t & e)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::EntBrush);
 
-    if (CullModelForEntity(e))
+    if (CullModelBounds(e))
     {
         return;
     }
@@ -882,7 +865,8 @@ void DrawBrushModel(rs::TriangleStream & stream, entity_t & e)
 
     // gl_rmain.c's R_RotateForEntity with the pitch flipped going in: R_DrawBrushModel's "stupid
     // quake bug", which brush models carry and alias models do not.
-    const math::Mat4 mvp = EntityMatrix(e, e.angles[PITCH]) * s_viewProj;
+    const vec3_t angles = { -e.angles[PITCH], e.angles[YAW], e.angles[ROLL] };
+    const math::Mat4 mvp = EntityMatrix(e.origin, angles, e.scale) * s_viewProj;
 
     ClearTextureChains(model, chain_model);
 
@@ -908,7 +892,10 @@ void DrawBrushModel(rs::TriangleStream & stream, entity_t & e)
 }
 
 // The frame's entities: gl_rmain.c's R_DrawEntitiesOnList, one pass for the opaque ones and one,
-// after the water, for the translucent ones. Brush models only so far.
+// after the water, for the translucent ones.
+//
+// Sprites gather into the view's stream; an alias model draws through a stream of its own, which
+// can only claim the command buffer once the view's has let go of it, hence the submit ahead of one.
 void DrawEntitiesOnList(rs::TriangleStream & stream, const bool alphaPass)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::Entities);
@@ -928,11 +915,146 @@ void DrawEntitiesOnList(rs::TriangleStream & stream, const bool alphaPass)
             continue;
         }
 
-        if (e.model->type == mod_brush)
+        // The chase camera's view of the player leans back less (QuakeSpasm's chasecam).
+        if (&e == &cl_entities[cl.viewentity])
         {
+            e.angles[PITCH] *= 0.3f;
+        }
+
+        switch (e.model->type)
+        {
+        case mod_alias:
+            rs::Submit(stream);
+            alias::DrawAliasModel(e, /*viewModel=*/false);
+            break;
+        case mod_brush:
             DrawBrushModel(stream, e);
+            break;
+        case mod_sprite:
+            sprite::DrawSpriteModel(stream, e);
+            break;
         }
     }
+    rs::Submit(stream);
+}
+
+// The view weapon: gl_rmain.c's R_DrawViewModel. Not while the chase camera is on, nor while the
+// player is invisible or dead.
+void DrawViewModel()
+{
+    if (r_drawviewmodel.value == 0.0f || r_drawentities.value == 0.0f || chase_active.value != 0.0f)
+    {
+        return;
+    }
+    if ((cl.items & IT_INVISIBILITY) != 0 || cl.stats[STAT_HEALTH] <= 0)
+    {
+        return;
+    }
+
+    entity_t & e = cl.viewent;
+    if (e.model == nullptr || e.model->type != mod_alias)
+    {
+        return;
+    }
+    alias::DrawAliasModel(e, /*viewModel=*/true);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Dynamic light glows (gl_rlight.c's R_RenderDlights)
+// ------------------------------------------------------------------------------------------------
+
+// The points round a glow's rim, as gl_rlight.c's R_RenderDlight steps them: 16 segments, the last
+// point the first again.
+constexpr int kGlowSegments = 16;
+
+struct GlowRim
+{
+    float cosines[kGlowSegments + 1];
+    float sines[kGlowSegments + 1];
+};
+
+const GlowRim & GlowRimPoints()
+{
+    static GlowRim s_rim;
+    static bool s_built = false;
+    if (!s_built)
+    {
+        for (int i = 0; i <= kGlowSegments; ++i)
+        {
+            const float a = (static_cast<float>(i) / static_cast<float>(kGlowSegments)) * 2.0f * math::kPI;
+            s_rim.cosines[i] = math::Cosf(a);
+            s_rim.sines[i]   = math::Sinf(a);
+        }
+        s_built = true;
+    }
+    return s_rim;
+}
+
+// gl_flashblend's glows, in place of lighting the walls with the dynamic lights: each a fan a third
+// of the light's radius across, orange at its centre - pulled towards the camera - and black at its
+// rim, added over the scene. With the camera inside one, the screen takes an orange tint instead.
+void RenderDlights(rs::TriangleStream & stream)
+{
+    if (gl_flashblend.value == 0.0f)
+    {
+        return;
+    }
+
+    constexpr u32 kCentreColor = vu1::PackColorRGBA(51, 26, 0, 0x80); // QuakeSpasm's (0.2, 0.1, 0)
+    constexpr u32 kRimColor    = vu1::PackColorRGBA(0, 0, 0, 0x80);
+
+    const GlowRim & rim = GlowRimPoints();
+    const float now = static_cast<float>(cl.time);
+
+    stream.SetTransform(s_viewProj);
+    stream.SetDrawFlags(rs::DrawFlags::Untextured | rs::DrawFlags::Additive);
+    stream.SetTexture(tex::DebugTexture()); // Unsampled, but a batch binds one.
+
+    for (int i = 0; i < MAX_DLIGHTS; ++i)
+    {
+        const dlight_t & light = cl_dlights[i];
+        if (light.die < now || light.radius == 0.0f)
+        {
+            continue;
+        }
+
+        const float rad = light.radius * 0.35f;
+
+        vec3_t toLight;
+        VectorSubtract(light.origin, r_origin, toLight);
+        if (VectorLength(toLight) < rad)
+        {
+            AddLightBlend(1.0f, 0.5f, 0.0f, light.radius * 0.0003f); // the view is inside it
+            continue;
+        }
+
+        vu1::DrawVertex centre = {};
+        centre.position = { light.origin[0] - (vpn[0] * rad), light.origin[1] - (vpn[1] * rad),
+                            light.origin[2] - (vpn[2] * rad) };
+        centre.rgba = kCentreColor;
+
+        vu1::DrawVertex points[kGlowSegments + 1] = {};
+        for (int k = 0; k <= kGlowSegments; ++k)
+        {
+            const float c = rim.cosines[kGlowSegments - k] * rad;
+            const float sn = rim.sines[kGlowSegments - k] * rad;
+            points[k].position = { light.origin[0] + (vright[0] * c) + (vup[0] * sn),
+                                   light.origin[1] + (vright[1] * c) + (vup[1] * sn),
+                                   light.origin[2] + (vright[2] * c) + (vup[2] * sn) };
+            points[k].rgba = kRimColor;
+        }
+
+        vu1::DrawVertex * dst = stream.ReserveVerts(kGlowSegments * 3);
+        for (int k = 0; k < kGlowSegments; ++k)
+        {
+            vu1::CopyDrawVertex(dst[0], centre);
+            vu1::CopyDrawVertex(dst[1], points[k]);
+            vu1::CopyDrawVertex(dst[2], points[k + 1]);
+            dst += 3;
+        }
+        stream.CommitVerts(dst);
+    }
+    rs::Submit(stream);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -973,12 +1095,30 @@ void SetupView()
     SetupTransforms(fovx, fovy);
     SetUpTextureSampling(fovy);
 
-    MarkSurfaces();
+    // The water's ripple moves at a radian a second (see vu1::kTurbSinAmplitude). The frame's phase
+    // goes to VU1 in turns, wrapped while it is still a double, so it keeps its precision however
+    // long the map has been running.
+    const double warpTurns = cl.time * (1.0 / (2.0 * M_PI));
+    rs::SetWarpAnimation(static_cast<float>(warpTurns - std::floor(warpTurns)), 0.0f);
 
-    // The cheat-safe draw modes take in single player only.
-    const bool singlePlayer = (cl.maxclients == 1);
-    s_lightmapOnly  = singlePlayer && r_lightmap.value != 0.0f;
-    s_drawLightmaps = !(singlePlayer && r_fullbright.value != 0.0f) && (cl.worldmodel->lightdata != nullptr);
+    MarkSurfaces();
+    alias::BeginFrame();
+
+    // The cheat-safe draw modes take in single player only, r_fullbright over r_lightmap.
+    s_fullbrightMode = false;
+    s_lightmapMode   = false;
+    if (cl.maxclients == 1)
+    {
+        if (r_fullbright.value != 0.0f || cl.worldmodel->lightdata == nullptr)
+        {
+            s_fullbrightMode = true;
+        }
+        else if (r_lightmap.value != 0.0f)
+        {
+            s_lightmapMode = true;
+        }
+    }
+    s_drawLightmaps = !s_fullbrightMode && (cl.worldmodel->lightdata != nullptr);
 }
 
 // r_wateralpha and its kin set the map's liquid opacity directly when changed, as in QuakeSpasm.
@@ -1102,7 +1242,53 @@ void RenderView()
 
     DrawEntitiesOnList(stream, true);
 
+    RenderDlights(stream);
     rs::Submit(stream);
+
+    particles::Draw();
+    DrawViewModel();
+}
+
+const math::Mat4 & ViewProjection()
+{
+    return s_viewProj;
+}
+
+bool CullModelForEntity(const entity_t & e)
+{
+    return CullModelBounds(e);
+}
+
+math::Mat4 EntityMatrix(const vec3_t origin, const vec3_t angles, const u8 scale)
+{
+    const float s = ENTSCALE_DECODE(scale);
+
+    math::Mat4 m = math::RotationX(math::DegToRad(angles[ROLL])) *
+                   math::RotationY(math::DegToRad(-angles[PITCH])) *
+                   math::RotationZ(math::DegToRad(angles[YAW]));
+
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            m.m[row][col] *= s;
+        }
+    }
+    m.m[3][0] = origin[0];
+    m.m[3][1] = origin[1];
+    m.m[3][2] = origin[2];
+    m.m[3][3] = 1.0f;
+    return m;
+}
+
+bool FullbrightMode()
+{
+    return s_fullbrightMode;
+}
+
+bool LightmapMode()
+{
+    return s_lightmapMode;
 }
 
 } // namespace ps2::view

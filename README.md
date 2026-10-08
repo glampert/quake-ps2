@@ -23,18 +23,18 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 
 **Early bring-up.** QuakeSpasm boots and runs on the PS2: in PCSX2 it finds the game data on
 `host:`, draws its console, menus and status bar, and takes the DualShock pad and a USB
-keyboard, through the attract-mode demos and every shareware map. The world draws in 3D -
-textured, lightmapped, with its fullbright texels, water and brush models - while the
-monsters, items, view weapon, particles and the sky's layers are still to come. Its PC-sized
-limits are cut down to fit the PS2's 32 MB. The port is brought
-up in phases, each checked in PCSX2:
+keyboard, through the attract-mode demos and every shareware map. The 3D view draws the world -
+textured, lightmapped, with its fullbright texels and warping water - and the brush models,
+monsters, items, view weapon, sprites and particles; the sky's scrolling layers are still to
+come. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is brought up in
+phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
 3. Game data and the game loop, headless. *Done.*
 4. 2D: console, menus, HUD. *Done.*
 5. Input: DualShock and USB keyboard. *Done.*
-6. 3D: world, lightmaps, water, sky, models, sprites, particles. *In progress: the world.*
+6. 3D: world, lightmaps, water, sky, models, sprites, particles. *In progress: the sky remains.*
 7. Sound, CD music, save games.
 
 This section says what works as each phase lands.
@@ -148,8 +148,8 @@ either way, as on the desktop, and is the way to script a session.
 ## Rendering
 
 QuakeSpasm draws through the public functions of its OpenGL renderer, and the backend
-implements those directly, with no GL underneath. The 2D and the world draw; the alias
-models, sprites, particles and the sky's layers are the rest of the 3D phase.
+implements those directly, with no GL underneath. The 2D and the 3D view draw; the sky's
+scrolling layers are the rest of the 3D phase.
 
 - **Video and the frame** ([vid.cpp](src/ps2/renderer/vid.cpp)). `VID_Init` brings the GS up at
   640x448 with two framebuffers, 16-bit by default (`ps2_fb_16bit`), and a 16-bit z-buffer.
@@ -173,16 +173,34 @@ models, sprites, particles and the sky's layers are the rest of the 3D phase.
   walking the PVS onto the textures' chains), and its multipass drawing on VU1 - each chain's
   textures, then the lightmaps multiplying the framebuffer by the light (up to nearly twice,
   QuakeSpasm's `gl_overbright`), then the fullbright texels added over that. Water, slime and
-  lava warp on VU1 over `gl_warp.c`'s subdivided polygons. Brush entities run the same passes
-  under their own transform. The sky draws flat in QuakeSpasm's `r_fastsky` colour for now.
+  lava ripple on VU1 with QuakeSpasm's warp, an 8-texel sine every 128 texels, bent at the
+  corners of a 32-unit grid their surfaces are cut on (so `gl_subdivide_size` does nothing).
+  Brush entities run the same passes
+  under their own transform. With `gl_flashblend` the dynamic lights glow as additive fans
+  instead of lighting the walls. The sky draws flat in QuakeSpasm's `r_fastsky` colour for now.
+- **Alias models** ([alias.cpp](src/ps2/renderer/alias.cpp)), in place of `r_alias.c` and
+  `gl_mesh.c`: the monsters, items and view weapon, lerped between two poses on VU1. The EE
+  copies each corner's two pose words into the frame as they are, and VU1 converts, lerps and
+  transforms them. What else a corner needs - which pose vertex it is, its skin coordinates - is
+  built once, when the model first loads, and read where it lies. They are lit as QuakeSpasm
+  lights them (`gl_overbright_models` included), with the skin's fullbright texels drawn over
+  again from the same vertices. The view weapon's depth is squeezed into the near end of the
+  z-buffer. `r_shadows` draws QuakeSpasm's flattened shadows. Players wear their colours.
+- **Sprites and particles** ([sprite.cpp](src/ps2/renderer/sprite.cpp),
+  [particles.cpp](src/ps2/renderer/particles.cpp)): sprites as quads in all five of
+  QuakeSpasm's orientations, unlit, their holes cut by the alpha test; particles as QuakeSpasm's
+  discs (or squares, `r_particles 2`), each a GS sprite VU1 expands, growing with distance.
 - **Draw data** ([brush.cpp](src/ps2/renderer/brush.cpp)): every brush surface's vertices,
   baked as the VU1 path takes them when a map loads, and the lightmaps
   ([lightmap.cpp](src/ps2/renderer/lightmap.cpp)): 256x256 atlases of one byte per luxel,
   rebuilt when a light style moves or a dynamic light reaches them.
 - **Textures** ([texmgr.cpp](src/ps2/renderer/texmgr.cpp)): the BSP's textures stay on the
-  hunk, all four of id's mip levels, and upload from there. Each samples through the CLUT for
+  hunk, all four of id's mip levels, and upload from there. Skins and sprite frames are copied,
+  their rows padded to 16 texels, since the model file they come from is gone once it has
+  loaded; a skin's glow texture draws from the skin's copy. Each samples through the CLUT for
   the palette QuakeSpasm would pick: whole, with the fullbright range black for the lit pass,
-  or that range alone for the glow pass.
+  or that range alone for the glow pass. A texture the engine frees while a frame is being
+  recorded - a model the cache evicts mid-frame - is released once that frame has drawn.
 - **Debug overlays** ([overlays.cpp](src/ps2/renderer/overlays.cpp)): an FPS counter and
   panels for frame times, memory, VRAM and draw statistics, on by default in debug builds
   (see [CVARS.md](CVARS.md)).

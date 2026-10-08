@@ -10,6 +10,7 @@
 #include "ps2/small_pool.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace ps2::tex {
 namespace {
@@ -65,44 +66,46 @@ const u16 * MakeCheckerPattern(int variant)
     return buffer;
 }
 
-// The particle image, generated rather than loaded.
+// The particle images, generated rather than loaded.
 //
-// It is Alpha8: one coverage byte per texel, sampled through the shared
-// alpha-ramp CLUT, which supplies the GS modulate identity (128) as the colour
-// and the byte itself as the alpha. So a particle's colour rides entirely on
-// its vertex colour and the image contributes only its shape. The ramp maps
-// coverage 255 to alpha 128 (= 1.0 on the GS), so a fully opaque particle
-// blends at exactly 1x rather than the ~2x an 0xFF alpha would give; coverage 0
-// maps to alpha 0, and those texels never reach the blender at all - the
-// batch's alpha test drops them.
+// They are Alpha8: one coverage byte per texel, sampled through the shared alpha-ramp CLUT, which
+// supplies the GS modulate identity (128) as the colour and the byte itself as the alpha. So a
+// particle's colour rides entirely on its vertex colour and the image contributes only its shape.
+// The ramp maps coverage 255 to alpha 128 (= 1.0 on the GS), so a fully opaque particle blends at
+// exactly 1x rather than the ~2x an 0xFF alpha would give; coverage 0 maps to alpha 0, and those
+// texels never reach the blender at all - the batch's alpha test drops them.
 //
-// The dimension is a power of two, so no ST rescale is needed (see StScaleFor).
+// Both are powers of two, so no ST rescale is needed (see StScaleFor).
+
+// QuakeSpasm's particle disc (r_part.c's R_ParticleTextureLookup with a sharpness of 8): coverage
+// 8 * (255 - r^2) about texel (16, 16), saturating, so a solid disc 16 texels in radius with a
+// crisp edge. QuakeSpasm draws it in the corner of a 64-texel texture; this is that corner.
 constexpr int kParticleDim = 32;
 
-// Coverage falling off smoothly from the centre to nothing at the edge, drawn
-// as a full sprite. The falloff is 1 - d^2 over the radius, squared again,
-// which keeps a bright core and a long thin tail instead of the linear ramp's
-// visible disc edge.
 const u8 * MakeParticlePattern()
 {
-    constexpr float kCentre = (kParticleDim - 1) * 0.5f;
-    constexpr float kRadius = kParticleDim * 0.5f;
-
     alignas(16) static u8 s_buffer[kParticleDim * kParticleDim];
     for (int y = 0; y < kParticleDim; ++y)
     {
         for (int x = 0; x < kParticleDim; ++x)
         {
-            const float dx = (static_cast<float>(x) - kCentre) / kRadius;
-            const float dy = (static_cast<float>(y) - kCentre) / kRadius;
-
-            float falloff = 1.0f - ((dx * dx) + (dy * dy));
-            falloff = (falloff <= 0.0f) ? 0.0f : (falloff * falloff);
-
-            const u32 coverage = static_cast<u32>(falloff * 255.0f);
-            s_buffer[x + (y * kParticleDim)] = static_cast<u8>((coverage > 255u) ? 255u : coverage);
+            const int dx = x - 16;
+            const int dy = y - 16;
+            const int r2 = (dx * dx) + (dy * dy);
+            const int coverage = 8 * (255 - ((r2 > 255) ? 255 : r2));
+            s_buffer[x + (y * kParticleDim)] = static_cast<u8>((coverage > 255) ? 255 : coverage);
         }
     }
+    return s_buffer;
+}
+
+// r_particles 2's square: solid. The smallest image the upload takes, a quadword.
+constexpr int kSquareParticleDim = 4;
+
+const u8 * MakeSquareParticlePattern()
+{
+    alignas(16) static u8 s_buffer[kSquareParticleDim * kSquareParticleDim];
+    std::memset(s_buffer, 255, sizeof(s_buffer));
     return s_buffer;
 }
 
@@ -114,7 +117,8 @@ using TexturePool = SmallPool<Texture, kMaxTextures>;
 static TexturePool s_pool;
 
 static const Texture * s_debugTextures[kNumDebugTextures] = {};
-static const Texture * s_particleTexture = nullptr;
+static const Texture * s_particleTexture       = nullptr;
+static const Texture * s_squareParticleTexture = nullptr;
 
 } // namespace
 
@@ -135,13 +139,17 @@ void Init()
                                      TexFlags::Builtin);
     }
 
-    // Linear filtering, or the smooth falloff would band.
+    // Linear, as QuakeSpasm filters its disc: the edge would stair-step otherwise.
     Texture & particle = Create("particle", MakeParticlePattern(), kParticleDim, kParticleDim,
                                 PixelFormat::Alpha8, TexComponents::RGBA, ImageType::Pic,
                                 TexFlags::Builtin);
     particle.magFilter = TexFilter::Linear;
     particle.minFilter = TexFilter::Linear;
     s_particleTexture  = &particle;
+
+    s_squareParticleTexture = &Create("particle_square", MakeSquareParticlePattern(), kSquareParticleDim,
+                                      kSquareParticleDim, PixelFormat::Alpha8, TexComponents::RGBA,
+                                      ImageType::Pic, TexFlags::Builtin);
 }
 
 Texture & Create(const char * name, const void * pixels, const int width, const int height,
@@ -208,6 +216,11 @@ const Texture & DebugTexture(int variant)
 const Texture & ParticleTexture()
 {
     return *s_particleTexture;
+}
+
+const Texture & SquareParticleTexture()
+{
+    return *s_squareParticleTexture;
 }
 
 } // namespace ps2::tex

@@ -204,6 +204,10 @@ void EndFrame(bool deferPresent);
 // Full sync/drain of the underlying cmdbuf. Kicks what has been recorded and waits for it.
 void KickAndWait();
 
+// Whether a frame is open, between BeginFrame and EndFrame: what is recorded so far may reference
+// any texture's pixels, and none of it has been sent yet.
+bool IsFrameOpen();
+
 // Waits out the frame EndFrame left drawing, if it did, and shows it; then returns the drawing
 // context of the last finished frame, which is what a VRAM readback of the screen copies (see
 // gs::DownloadFramebufferRows). Outside Begin/EndFrame only.
@@ -372,10 +376,10 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          FaceCull faceCull = FaceCull::None, DrawFlags flags = DrawFlags::None);
 
 // Camera-facing billboards as GS sprites, expanded entirely on VU1 - the caller transforms
-// nothing, and the billboard grows with distance the way ref_gl's particles do.
+// nothing, and the billboard grows with distance the way QuakeSpasm's particles do.
 //
 // 'quadOffset' is the world-space vector from a particle's anchor corner to its opposite one: the
-// camera's (up + right), pre-scaled by the caller's blow-up (ref_gl uses 1.5). It must be
+// camera's (up + right), pre-scaled by the caller's blow-up (QuakeSpasm's 1.5). It must be
 // orthogonal to the view axis - that is what lets every corner share the centre's depth and the
 // billboard draw as one axis-aligned sprite.
 void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
@@ -418,8 +422,8 @@ void SetTextureSampling(const gs::TextureSampling & sampling);
 // compiler cannot see.** Load-bearing, not style: gcc keeps the gather cursor in registers only
 // while it can prove nothing else reaches the object. An out-of-line member, or 'this' parked in
 // a global, spills it to the stack and reloads it around every push - six memory ops per triangle
-// in the renderer's hottest loop, measured at +6.7% on the MD2 gather. It is also why the draw
-// state lives on the stream rather than in module state.
+// in the renderer's hottest loop, measured at +6.7% on the Quake II port's model gather. It is also
+// why the draw state lives on the stream rather than in module state.
 
 // Gathered triangles on their way to the world/lit microprogram.
 class TriangleStream final
@@ -691,7 +695,7 @@ Q_ALWAYS_INLINE void Submit<TriangleStream>(TriangleStream & stream)
     stream.Flush();
 }
 
-// The keyframe-lerped equivalent, for MD2 alias models. It gathers *only* positions, in
+// The keyframe-lerped equivalent, for alias models. It gathers *only* positions, in
 // vu1::LerpPosChunk groups of one VU run each; the per-vertex attributes are the model's own baked
 // array, named once by SetAttribSource and sliced to match each flush.
 class LerpStream final
@@ -827,8 +831,8 @@ private:
     void Flush()
     {
         // Nothing claimed and nothing gathered: return without touching the redraw record. Load
-        // bearing - the MD2 shadow sets its own state between the model's submit and its
-        // rs::Resubmit, and those setters flush, which would otherwise wipe the record.
+        // bearing - an alias model's later passes set their own state between the model's submit
+        // and their rs::Resubmit, and those setters flush, which would otherwise wipe the record.
         if (m_vertCount == 0 && m_chunks == nullptr)
         {
             return;
@@ -879,7 +883,8 @@ private:
 
     // Draws the most recent flush's vertices again under whatever draw state the stream carries
     // now, without rebuilding them: the groups are still in the command buffer, so this is only a
-    // second set of chunk tags over them. The MD2 shadow is the caller.
+    // second set of chunk tags over them. An alias model's fullbright pass and shadow are the
+    // callers.
     //
     // Valid only while nothing has been pushed since that flush, and only useful if the geometry
     // went out in one cycle - a model that filled the buffer mid-way left just its tail behind.
@@ -966,7 +971,7 @@ Q_ALWAYS_INLINE void Submit<LerpStream>(LerpStream & stream)
     stream.Flush();
 }
 
-// For alias MD2 shadows.
+// For an alias model's fullbright pass and shadow.
 Q_ALWAYS_INLINE void Resubmit(LerpStream & stream)
 {
     stream.ResubmitLastFlush();

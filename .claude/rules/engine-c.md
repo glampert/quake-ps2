@@ -31,9 +31,11 @@ renderer directly. So the seam is that renderer's public surface, implemented in
 
 - 2D: `draw.h` (`Draw_*`, `GL_SetCanvas`) and `GL_Set2D`.
 - Frame: `GL_BeginRendering`/`GL_EndRendering`, `VID_*` and the `vid` global (`vid.h`).
-- Refresh: `render.h` (`R_Init`, `R_NewMap`, `R_RenderView`, ...), `R_TranslatePlayerSkin`,
-  `D_FlushCaches`, `Sky_*`, the renderer globals and cvars the client reads (`r_refdef`,
-  `r_lerpmodels`, `gl_polyblend`, ...).
+- Refresh: `render.h` (`R_Init`, `R_NewMap`, `R_RenderView`, ...), `R_TranslatePlayerSkin`
+  and `R_TranslateNewPlayerSkin`, `D_FlushCaches`, `Sky_*`, the renderer globals and cvars the
+  client reads (`r_refdef`, `r_lerpmodels`, `gl_polyblend`, ...), and what `gl_model.c` calls
+  as it loads: `GL_MakeAliasModelDisplayLists`, `GLMesh_DeleteVertexBuffers`,
+  `GL_SubdivideSurface` (a no-op: the backend cuts the water itself).
 - Textures: `gl_texmgr.h` (`TexMgr_*`).
 - Platform: `Sys_*` (sys.h, plus the globals `isDedicated` and `sys_throttle`), `PL_*`
   (platform.h), `IN_*` (input.h), `SNDDMA_*` (q_sound.h), `CDAudio_*` (cdaudio.h), and
@@ -41,16 +43,20 @@ renderer directly. So the seam is that renderer's public surface, implemented in
 
 For the 3D renderer: `gl_model.h` pads `texture_t` to 80 bytes (the BSP texture's pixels
 after it on the hunk start 16-byte aligned, which the GS uploads them in place from) and adds
-`qmodel_t::ps2_render`, the brush model's draw data; `gl_model.c` keeps all four mip levels of
-a BSP texture and keeps the light samples one byte per luxel (no `.lit`); `gl_rlight.c`'s
-`RecursiveLightPoint` reads them that way.
+`qmodel_t::ps2_render`, a brush or alias model's draw data; `gl_model.c` keeps all four mip
+levels of a BSP texture and keeps the light samples one byte per luxel (no `.lit`);
+`gl_rlight.c`'s `RecursiveLightPoint` reads them that way, and takes its texture coordinates in
+float rather than ericw's double. `mathlib.c`'s `VectorLength` and `VectorNormalize` use
+`sqrtf`: libm's `sqrt` is double, and soft-float.
 
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the
 loading plaque, and `screenshot`, TGA only, over `PS2_ReadPixels`; it also defaults
-`scr_menuscale`/`scr_sbarscale` to 2 for the 640x448 screen), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation),
-`gl_fog.c` (its message parsing must run, or the stream desyncs) and `gl_warp.c`
-(`GL_SubdivideSurface`, whose polygons the water warps on VU1).
+`scr_menuscale`/`scr_sbarscale` to 2 for the 640x448 screen), `gl_refrag.c`, `gl_rlight.c`,
+`r_part.c` (particle simulation) and `gl_fog.c` (its message parsing must run, or the stream
+desyncs). `gl_warp.c` is gone: its subdivision fed a warp computed per texel, and the PS2's,
+per vertex, wants a finer cut (brush.cpp makes it); the cvars it defined that the engine
+registers live in the backend.
 
 Two PS2 headers sit at the seam. `src/ps2/renderer/gl_types.h` gives quakedef.h the GL type
 names QuakeSpasm's headers are written with, and nothing else: with no GL function declared,
@@ -110,3 +116,18 @@ Record QuakeSpasm quirks here as they are found.
   `r_framecount` right after, so a surface lit this frame reads `dlightframe == r_framecount`.
   `R_NewMap` builds the lightmaps at frame 1, or every surface (dlight frame 0) would read as
   lit by a dynamic light.
+- **Alias models live in the cache**, between the hunk's low and high marks: a load moves them
+  (`Cache_Move`) and room for another evicts them (`Cache_Free`), which frees their textures
+  through `TexMgr_FreeTexturesForOwner`. `Mod_Extradata` reloads an evicted one - mid-frame, if
+  that is when it is drawn. So nothing the DMA reads after the draw may live there: a model's
+  corners (alias.cpp) are on the heap for as long as its `qmodel_t`, its skins are copies, and a
+  texture freed mid-frame is held until that frame has drawn (texmgr.cpp). The poses stay in the
+  cache, read by the EE as the model draws. `aliashdr_t` data is 8-byte aligned there (a 56-byte
+  cache header ahead of it), so never assume 16.
+- `Mod_LoadAliasModel` calls `GL_MakeAliasModelDisplayLists` on every load of a model, its
+  working arrays (`stverts`, `triangles`, `poseverts`) still holding it, before it copies the
+  model into the cache: what it puts on the hunk then (the poses, in `hdr->vertexes`) goes with it.
+- QuakeSpasm writes `vid_restart` at the end of every `config.cfg`. The backend registers it as
+  a no-op, as it does `vid_unlock`.
+- QuakeSpasm keeps the entity lerp times (`lerpstart`, `movelerpstart`) in float, against the
+  double `cl.time`; alias.cpp converts `cl.time` once per model and does that math in float.
