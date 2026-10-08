@@ -1,13 +1,13 @@
 #pragma once
 /* ================================================================================================
  * File: map_cycle.h
- * Brief: Memory smoke test that loads every stock map in sequence, in the order the game
- *        plays them, and logs what each one costs.
+ * Brief: Memory smoke test that loads every map of the game data in sequence, in the order the
+ *        game plays them, and logs what each one costs.
  *
- *        The point is the *transitions*, not the maps: a map change is the worst moment in
- *        the program, because the outgoing map's data can still be resident while the next
- *        one is built. Playing the units in order reproduces the real sequence of those
- *        transitions, which is where every out-of-memory failure in this port has happened.
+ *        QuakeSpasm keeps a level in its hunk, which a map change empties, and loads models and
+ *        sounds into the cache that shares it; the backend's own level data (the baked world,
+ *        the lightmaps, the textures) sits in the tagged heap beside it. What each map takes of
+ *        both is what sizes the hunk and shows how much RAM is left over.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -15,10 +15,13 @@
 #if PS2_QUAKE_DEBUG
 namespace ps2::test {
 
-// Advances the map cycle test by one frame. Call every frame from PS2_EndFrame.
-// Gated by the "ps2_testmaps" cvar; a no-op when it is 0 and once the last map
-// has been visited. "ps2_testmaps_dwell" sets the seconds spent in each map
-// after it finishes loading.
+// Registers the "ps2_testmaps" and "ps2_testmaps_dwell" cvars and the "ps2_testmaps_restart"
+// command. VID_Init calls it, with the backend's other commands.
+void InitMapCycle();
+
+// Advances the map cycle test by one frame. Call every frame from the main loop, outside
+// Host_Frame. Gated by "ps2_testmaps"; a no-op when it is 0 and once the last map has been
+// visited. "ps2_testmaps_dwell" sets the seconds spent in each map after it finishes loading.
 void RunMapCycle();
 
 } // namespace ps2::test

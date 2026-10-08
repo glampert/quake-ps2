@@ -829,6 +829,24 @@ void Cache_Report (void)
 
 /*
 ============
+Cache_UsedBytes
+
+[PS2_QUAKE]: what the cache holds now - the models and sounds the level has loaded - for the
+PS2 backend's memory reports, which size the hunk by it (ps2/tests/map_cycle.cpp).
+============
+*/
+int Cache_UsedBytes (void)
+{
+	cache_system_t	*c;
+	int		total = 0;
+
+	for (c = cache_head.next ; c != &cache_head ; c = c->next)
+		total += c->size;
+	return total;
+}
+
+/*
+============
 Cache_Init
 
 ============

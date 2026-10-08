@@ -34,6 +34,9 @@ More come back as each subsystem is ported.
 | `ps2_show_vramstats` | 1 | 0 | Arch. | GS texture heap use, resident textures, and this frame's uploads and forced GS drains, bottom left. |
 | `ps2_show_drawstats` | 1 | 0 | Arch. | What the last frame submitted (triangles, particles, batches, clipping) and the DMA chain's use, top left. Draws in profile builds only. |
 | `ps2_frame_log` | 0 | — | | Writes per-frame timings and draw counters to stdout as CSV `FLOG` rows, for `src/tools/scripts/frame_log/`. Registered in profile builds (`PS2_QUAKE_PROFILE`). |
+| `ps2_testmaps` | 0 | — | | Loads every map the game data has, in play order (start, then each episode), stays `ps2_testmaps_dwell` seconds in each, and prints what it costs: QuakeSpasm's hunk and cache and what is left of it, the backend's level data by memory tag, the heap's peak and the RAM still free. Ends with `MapCycle: done.`; `ps2_testmaps_restart` runs it again. Don't combine with `ps2_perftest`. |
+| `ps2_testmaps_dwell` | 8 | — | | Seconds `ps2_testmaps` stays in each map once it has loaded. |
+| `ps2_perftest` | 0 | 0 | Arch. | An unattended performance capture: stops the attract loop, plays demo1, demo2 and demo3 once each with `ps2_frame_log 1` and the debug panels off, then quits. Arm it in `config.cfg` or `autoexec.cfg`; it sets itself back to 0 before quitting. Runs in profile builds only (`PS2_QUAKE_PROFILE`), but every build registers it, as it is archived. |
 | `ps2_testcube` | 0 | — | | Draws the VU1 test cube on top of every frame: the GS/VU1 smoke test. |
 | `ps2_testcube_tess` | 8 | — | | The test cube's tessellation per face, 1 to 8. Higher values push a face past one VU1 batch, to exercise chunked submission. |
 | `ps2_testcube_vram_tex_eviction` | 0 | — | | Slides the cube's faces through the debug textures every 2 s, to exercise VRAM eviction. Use it with the heap shrunk (`kDebugHeapLimitWords` in `vram.cpp`). |

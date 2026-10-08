@@ -21,6 +21,8 @@
 #include "ps2/renderer/profile.h"
 #include "ps2/tests/draw_cube.h"
 #include "ps2/save/save_system.h"
+#include "ps2/tests/map_cycle.h"
+#include "ps2/tests/perf_run.h"
 
 #include <algorithm>
 #include <utility>
@@ -92,6 +94,10 @@ void VID_Init()
     // The backend's own console commands; see RegisterCommands for why here.
     ps2::sys::RegisterCommands();
     ps2::save::Init();
+    ps2::test::RegisterPerfTestCvar();
+#if PS2_QUAKE_DEBUG
+    ps2::test::InitMapCycle();
+#endif // PS2_QUAKE_DEBUG
 
     // Host_Init queues "vid_unlock" to run after the configs: QuakeSpasm locks its video mode
     // while they do. And the config.cfg it writes ends in "vid_restart", to apply the mode it saved.

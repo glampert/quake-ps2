@@ -20,11 +20,9 @@ enum class MemTag : size_t
     Hunk,      // QuakeSpasm's hunk: one block holding its hunk, zone and cache (see zone.c).
     Renderer,  // Things related to rendering / the refresh module.
     TexImage,  // Allocs related to images/textures/palettes.
-    AliasMdl,  // MD2/Alias models.
-    SpriteMdl, // Sprite models.
+    AliasMdl,  // Alias models' corners (see renderer/alias.cpp); their poses are in the hunk's cache.
     WorldMdl,  // World geometry.
     Lightmap,  // Lightmap atlas buffers (see renderer/lightmap.cpp).
-    Audio,     // Decoded sound cache. Its own tag because it is one of the largest pools in the game.
     Music,     // Streamed CD music read buffers (audio/music_stream.cpp), held only while a track plays.
     SaveData,  // A save game being written or read: the deflate state, the deflated save, the card icon.
 

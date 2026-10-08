@@ -21,13 +21,14 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 
 ### Status
 
-**Early bring-up.** QuakeSpasm boots and runs on the PS2: in PCSX2 it finds the game data on
-`host:`, draws its console, menus and status bar, and takes the DualShock pad and a USB
-keyboard, through the attract-mode demos and every shareware map. The 3D view draws all of it:
-the world - textured, lightmapped, with its fullbright texels, warping water and scrolling sky -
-and the brush models, monsters, items, view weapon, sprites and particles, and the sound effects
-and the soundtrack play through the SPU2. Games save to the memory card. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is
-brought up in phases, each checked in PCSX2:
+**Every bring-up phase is done.** QuakeSpasm runs on the PS2: in PCSX2 it finds the game data
+on `host:`, draws its console, menus and status bar, and takes the DualShock pad (with rumble)
+and a USB keyboard, through the attract-mode demos and every shareware map. The 3D view draws
+all of it: the world - textured, lightmapped, with its fullbright texels, warping water and
+scrolling sky - and the brush models, monsters, items, view weapon, sprites and particles. The
+sound effects and the soundtrack play through the SPU2, and games save to the memory card. Its
+PC-sized limits are cut down to fit the PS2's 32 MB. It hasn't been tried on real hardware yet.
+The port was brought up in phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
 2. Link and boot, rendering nothing and logging to stdout. *Done.*
@@ -38,7 +39,7 @@ brought up in phases, each checked in PCSX2:
    shareware map uses.
 7. Sound, CD music, save games. *Done.*
 
-This section says what works as each phase lands.
+What is left is refinement: GS fog, performance work, and a first run on a real console.
 
 ---
 
@@ -152,6 +153,12 @@ either way, as on the desktop, and is the way to script a session.
 | `hunk_print` | QuakeSpasm's own: prints the hunk by block, with what remains. |
 | `ps2_dump_iop_mods` | Lists the IOP modules currently loaded. |
 | `screenshot` | QuakeSpasm's own, TGA only: reads the last frame back out of GS VRAM and writes `id1/spasmNNNN.tga`. |
+| `ps2_saveinfo` | Says where saves are going, and lists the memory card's save directory. |
+
+Two unattended tests are armed by cvars (see [CVARS.md](CVARS.md)): `ps2_testmaps 1` (debug builds)
+loads every map in turn and prints what each costs in memory, and `ps2_perftest 1` (profile builds)
+plays the three demos with the frame log on and quits, for the scripts in
+[src/tools/scripts/frame_log/](src/tools/scripts/frame_log/).
 
 ---
 
@@ -390,7 +397,7 @@ src/
     vscode_extensions/  VCL/VU assembly syntax highlighting for VSCode
 ```
 
-Much of `src/ps2` is still the Quake II port's code, waiting for the phase that ports it.
+`src/ps2` started out as the Quake II port's backend; all of it is ported to QuakeSpasm now.
 
 ---
 

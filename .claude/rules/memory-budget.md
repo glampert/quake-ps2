@@ -57,10 +57,9 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
 - Hunk in use per shareware map, once the client has connected: start 4.44, e1m1 4.43, e1m2
   4.42, e1m3 4.33, **e1m4 4.71** (the peak), e1m5 4.33, e1m6 3.88, e1m7 2.83, e1m8 3.62 MB.
   About 1.8 MB of it is fixed: zone, progs, sockets, particles, console.
-- The 16 MB hunk is a placeholder. The sound cache (which lives in the hunk) and the renderer
-  aren't in yet; size it once they are. With sound on (2026-10-08), demo1's sounds hold 3.26 MB
-  of the hunk's cache: 122 sounds, kept resampled to the 22050 Hz mixing rate (twice their
-  11025 Hz size; 44100 would be four times).
+- With sound on (2026-10-08), demo1's sounds hold 3.26 MB of the hunk's cache: 122 sounds,
+  kept resampled to the 22050 Hz mixing rate (twice their 11025 Hz size; 44100 would be four
+  times). The hunk's size is settled below, from the map cycle.
 - Renderer, outside the hunk, so far: the frame's DMA chain, one 1 MB block
   (`MemTag::Renderer`) that `VID_Init` allocates for the whole run, and the `ps2::tex` pool
   (640 `Texture` slots) in `.bss`. Boot shows 3.13 MB for ELF + system with the 2D in. In
@@ -77,4 +76,14 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   Cutting the water on a 32-unit grid adds to `WorldMdl`: e1m4, the wettest map, went from
   1.10 to 1.62 MB. A map cycle that loads every shareware model ends with 5 MB of RAM left.
   The sky's two layers are 80 KB (`TexImage`).
+- **Map cycle with sound and music on (`ps2_testmaps`, 2026-10-08)**, the nine shareware
+  maps in order: QuakeSpasm's hunk (low + high) 2.83 MB (e1m7) to **4.43 MB (e1m4)**. Its
+  cache grows across the run, from 5.05 MB after start to 7.48 MB after e1m8, because
+  QuakeSpasm keeps earlier maps' models and sounds until it needs the room; the hunk still had
+  5.09-6.71 MB left on every map. Outside the hunk: `WorldMdl` 0.46-1.62 MB, `Lightmap` 128-256
+  KB, `TexImage` 1.76-2.35 MB (growing with the cached skins), `AliasMdl` 209-370 KB. The heap
+  peaked at 25.05 MB in use, with **5.21 MB of RAM free** at the end.
+- **The hunk stays 16 MB:** the shareware maps fit with 5 MB of it to spare, and the
+  registered episodes' bigger levels, with more monsters and their sounds, haven't been
+  measured. Run the cycle on the registered data before cutting it.
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

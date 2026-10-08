@@ -8,9 +8,15 @@ paths:
 
 ## Where things stand
 
-- Goal: a smooth 60 fps through the whole `ps2_perftest` capture. It currently has **0
-  dropped frames**. Reference `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms,
-  max 11.6 ms (debug).
+- Goal: a smooth 60 fps through the whole `ps2_perftest` capture.
+- **Quake 1 baseline (2026-10-08, debug build, sound and music on):** `ps2_perftest` over
+  demo1-3 logged 13,170 frames. EE work (Frame - VSync) mean 4.58 ms, p50 3.93, p95 8.02,
+  p99 9.97 ms. 151 frames ran past 17.5 ms, three of them the demo loads (0.9-1.3 s); the rest
+  missed one vsync (~21 ms). The engine's own phases aren't probed yet (only `SndMix`), so
+  those frames aren't attributed: placing the `engine_profile.h` probes comes first.
+- The rest of this section is the Quake II port's *(Q2)*. Reference
+  `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
+  frames.
 - What it took: soft-float doubles in the engine C (`-fsingle-precision-constant` +
   `math_c.h`, 59 → 1 drops); cheaper effects (`Com_FxRand`, an incremental rail spiral,
   inline `V_AddParticle`); preloading mid-level assets (player weapon fire sounds, all view
@@ -71,19 +77,22 @@ paths:
   the EE mean is about ±2%.
 - PCSX2 timing ≠ hardware for I/O and FPU latency either.
 
-## Capture recipe (`ps2_perftest`, ~2.5 min, debug build)
+## Capture recipe (`ps2_perftest`, ~4 min, debug build)
 
-1. Back up `baseq2/config.cfg` and set `ps2_perftest "1"` in it. `make run`.
+1. Back up `id1/config.cfg` and `build/debug/history.txt`, and put `ps2_perftest 1` in
+   `id1/autoexec.cfg` (or `ps2_perftest "1"` in the config). `make run`.
 2. Wait for `PerfRun: complete` / `FLOG#end` in emulog, then copy `emulog.txt` into
    `build/baselines/<tag>.emulog.txt` before the next launch overwrites it.
-3. Restore the config. The run sets `ps2_show_fps` and the like to 0, and those are
-   `CVAR_ARCHIVE`, so the quit writes them back.
+3. Restore the config and the history, and delete the `autoexec.cfg`. The run sets
+   `ps2_show_fps` and the like to 0, and those are `CVAR_ARCHIVE`, so the quit writes them
+   back. Stop PCSX2: after the quit it sits in the BIOS menu.
 4. `src/tools/scripts/frame_log/summarize_flog.py <emulog> --rows build/baselines/<tag>.flog`,
    then `compare_flog.py <before> <after>`. `frame_budget.py` realigns Server/ClParse (they
    land one row early) and lists each `FLOG#open` load with its cost.
 
-- If the notes show `pics/m_main_*.pcx` or `pause.pcx` mid-demo, a stray host key reached
-  PCSX2's USB keyboard and opened the menu. Re-run with focus away from PCSX2.
+- *(Q2)* If the notes show `pics/m_main_*.pcx` or `pause.pcx` mid-demo, a stray host key
+  reached PCSX2's USB keyboard and opened the menu. Re-run with focus away from PCSX2. (Quake
+  1 doesn't note file opens yet: `PS2Quake_FrameLogNoteOpen` has no engine caller.)
 - **Profiling a release build:** set `-DPS2_QUAKE_PROFILE=1` in the release `CONFIG_DEFS`,
   `rm -rf build/release/src`, `make release run` with `ps2_perftest 1`. Revert and rebuild
   clean afterwards.

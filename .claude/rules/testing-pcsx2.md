@@ -87,10 +87,13 @@
 
 The rest are scripted runs:
 
-- **Map cycle**: an `autoexec.cfg` that, per map, runs `map <name>`, about 150 `wait`s (the
-  client finishes connecting), `echo CYCLE <name>`, `hunk_print` and `ps2_memstats`, ending
-  with `echo CYCLE_DONE`. All nine shareware maps (start, e1m1-e1m8) loaded clean on
-  2026-10-06; the numbers are in [memory-budget.md](memory-budget.md).
+- **Map cycle** (debug builds): `ps2_testmaps 1` in `autoexec.cfg`. It loads every map the
+  data has in play order, 8 s each (`ps2_testmaps_dwell`), prints a `MapCycle [n/32] <map>`
+  line per map (hunk, cache, backend tags, heap peak, RAM free) and ends with `MapCycle: done.`
+  without quitting: stop PCSX2 then. The nine shareware maps took ~2 minutes, clean, on
+  2026-10-08; the numbers are in [memory-budget.md](memory-budget.md).
+- **Perf run** (profile builds): `ps2_perftest 1` in `autoexec.cfg`; the recipe is in
+  [performance.md](performance.md). It quits at the end, which writes `config.cfg`.
 - **Config write**: `quit` runs `Host_Shutdown`, which writes `id1/config.cfg` through
   `host:`. Then PCSX2 boots into the PS2 BIOS menu; stop it there.
 - **Stop every PCSX2 you launch once its log is read.** A run stays open after the game halts,

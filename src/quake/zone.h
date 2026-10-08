@@ -135,6 +135,7 @@ void *Cache_Alloc (cache_user_t *c, int size, const char *name);
 // wasn't enough room.
 
 void Cache_Report (void);
+int Cache_UsedBytes (void); // [PS2_QUAKE]: for the PS2 backend's memory reports
 
 #endif	/* __ZZONE_H */
 

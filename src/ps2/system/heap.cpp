@@ -80,10 +80,8 @@ static const char * const s_memTagNames[kMemTagCount] = {
     "Renderer",
     "TexImage",
     "Alias",
-    "Sprite",
     "World",
     "Lightmap",
-    "Audio",
     "Music",
     "SaveData",
 };

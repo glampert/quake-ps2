@@ -19,13 +19,13 @@ lists every backend cvar. Add new ones there, with their debug/release defaults 
 
 ## Port status
 
-The port is brought up in phases: compile, headless boot, game data, 2D, input, 3D, then sound, music
-and saves. Every file left in `src/quake` is built, or included by one that is: the 3D phase replaced
-the last of QuakeSpasm's GL renderer. Until its phase lands:
+The port was brought up in phases: compile, headless boot, game data, 2D, input, 3D, then sound,
+music and saves. All of them have landed, and every file in `src/quake` and `src/ps2` is built, or
+included by one that is. What is left is refinement: GS fog (no shareware map uses it), performance
+(the engine's profile probes, then the single-precision math pass in the plan), and real hardware.
 
-- Backend files still written against Quake 2 stay in `src/ps2` outside the Makefile source lists.
-- **Unused files are deleted, not parked.** Each phase deletes what it made unused. The pristine
-  sources are in the first commit (and in the quake2-ps2 repo for the backend).
+- **Unused files are deleted, not parked.** Whatever a change makes unused goes with it. The
+  pristine sources are in the first commit (and in the quake2-ps2 repo for the backend).
 
 ## Toolchain
 
@@ -97,12 +97,12 @@ directory. Engine output carries a `[Q1]` prefix in the PCSX2 log.
 ## Rules index (`.claude/rules/`)
 
 When a finding is durable (a hardware fact, a toolchain trap, a measured baseline, a test
-recipe), record it in the matching rule file below, so it travels with the repo. Files marked
-*(Q2)* still describe the Quake II port; revise them as their subsystem is ported.
+recipe), record it in the matching rule file below, so it travels with the repo. Facts marked
+*(Q2)* inside a file were measured on the Quake II port, and still hold as far as is known.
 
 | File | Loaded for | Covers |
 | --- | --- | --- |
-| [testing-pcsx2.md](.claude/rules/testing-pcsx2.md) | always | PCSX2 setup and logs, scripted sessions, crash triage, the known TLB flake, host harnesses *(scripting and test sections: Q2)* |
+| [testing-pcsx2.md](.claude/rules/testing-pcsx2.md) | always | PCSX2 setup and logs, scripted sessions, the unattended tests, crash triage, the known TLB flake, host harnesses |
 | [backend-cpp.md](.claude/rules/backend-cpp.md) | `src/ps2`, host tools | naming, types, file style, passing the strict `-Werror` set |
 | [ps2-platform.md](.claude/rules/ps2-platform.md) | `src/ps2` | ps2sdk traps, EE FPU, SIF DMA, IOP modules, ROM FILEIO, memory card |
 | [gs-renderer.md](.claude/rules/gs-renderer.md) | `src/ps2/renderer` | GS/libdraw facts, frame model, CLUTs, VRAM blocks, mipmaps, ST scaling |
@@ -110,6 +110,6 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [performance.md](.claude/rules/performance.md) | `src/ps2`, frame-log scripts | EE codegen facts, what PCSX2 can measure, capture/A-B/asm-test recipes |
 | [engine-c.md](.claude/rules/engine-c.md) | QuakeSpasm's C | editing rules, build mode, seams, QuakeSpasm quirks |
 | [memory-budget.md](.claude/rules/memory-budget.md) | heap, renderer, zone.c, quakedef.h | the 32 MB picture, QuakeSpasm's limits, measured budgets |
-| [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | CD music format and pipeline decisions, costs *(Q2)* |
-| [save-games.md](.claude/rules/save-games.md) | `src/ps2/save` | save design, format, icon, config.cfg policy *(Q2)* |
+| [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | audsrv's traps and the sound feeder, CD music format and pipeline decisions, costs |
+| [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, `host_cmd.c`, `menu.c` | save design, card format, icon, config.cfg policy, card image testing |
 | [vclpp-submodule.md](.claude/rules/vclpp-submodule.md) | `src/tools/vclpp` | vclpp/parse-utils conventions, verification recipes, CI, MASP mode, tyra |

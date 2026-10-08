@@ -15,6 +15,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/alias.h"
 #include "ps2/renderer/brush.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/sky.h"
 #include "ps2/renderer/view.h"
@@ -126,6 +127,9 @@ void R_NewMap()
     Fog_NewMap();          // global fog, from worldspawn
     ps2::sky::NewMap();    // a skybox, from worldspawn
     ps2::view::NewMap();   // the liquids' opacity, from worldspawn
+
+    // A "FLOG#map" row, so the frame log scripts can split a capture by level.
+    ps2::debug::FrameLogMarkMap(cl.mapname);
 }
 
 // A game switch: the player skin textures go, which TexMgr_NewGame has just freed.

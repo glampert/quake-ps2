@@ -55,7 +55,8 @@ section says why), and `host.c` wraps the `S_Update` calls in the `SndMix` profi
 (`ps2/debug/engine_profile.h`), the first of the engine probes to be placed.
 
 For rumble: `view.c` calls `PS2_RumbleDamage` from `V_ParseDamage` and `PS2_RumblePickup` from
-`V_BonusFlash_f`.
+`V_BonusFlash_f`. For the memory reports: `zone.c` adds `Cache_UsedBytes` (the cache's list is
+private to it), which `ps2_testmaps` prints.
 
 For saves and settings (`save-games.md`): `host_cmd.c`'s `Host_Savegame_f` and
 `Host_Loadgame_f`, and `menu.c`'s `M_ScanSaves`, read and write through the `PS2_Save*` hooks;

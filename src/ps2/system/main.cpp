@@ -11,6 +11,8 @@
 #include "ps2/system/iop_boot.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/debug/exception_handler.h"
+#include "ps2/tests/map_cycle.h"
+#include "ps2/tests/perf_run.h"
 
 #include <cstdlib>
 
@@ -124,6 +126,15 @@ int main(int argc, char ** argv)
         // must not land in the timings it is reporting. The frame it stretches is dropped
         // rather than logged (see FrameLogFlush).
         ps2::debug::FrameLogFlush();
+
+        // The unattended tests, between frames: they drive the game through the command buffer,
+        // which the next Host_Frame runs.
+#if PS2_QUAKE_DEBUG
+        ps2::test::RunMapCycle();
+#endif // PS2_QUAKE_DEBUG
+#if PS2_QUAKE_PROFILE
+        ps2::test::RunPerfTest();
+#endif // PS2_QUAKE_PROFILE
 
         oldtime = newtime;
     }

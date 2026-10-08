@@ -3,51 +3,42 @@
  * Brief: Map cycling memory smoke test. See map_cycle.h.
  *
  *  Drives the real console command ("map <name>") through the command buffer rather than
- *  calling into the server directly, so the sequence the test exercises is byte for byte
- *  the one a player produces. Cbuf_AddText also defers execution out of the middle of the
- *  frame we are in, which matters: SV_SpawnServer frees the resident world model, and the
- *  renderer is on the stack right now.
+ *  calling into the server directly, so the sequence the test exercises is byte for byte the
+ *  one a player produces.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#if PS2_QUAKE_DEBUG
 #include "ps2/common.h"
+
+#if PS2_QUAKE_DEBUG
 #include "ps2/tests/map_cycle.h"
-#include "ps2/renderer/model.h"
+#include "ps2/system/heap.h"
+#include "ps2/system/sys.h"
 
 #include <cstdio>
 #include <cstring>
 
+extern "C" {
+// zone.c's hunk bookkeeping, which zone.h doesn't declare.
+extern int hunk_size;
+extern int hunk_low_used;
+extern int hunk_high_used;
+}
+
 namespace ps2::test {
 namespace {
 
-// Every map in pak0, in single-player unit order (verified against the pak: 39
-// maps, no gaps, no duplicates). Order matters - the test is about the cost of
-// each transition, and this is the sequence a real playthrough produces.
+// Every map of the full game, in the order a playthrough meets them: start, then each
+// episode's levels and its secret one. A map the game data doesn't have (the shareware pak
+// has start and episode 1) is skipped.
 constexpr const char * kMaps[] = {
-    // Unit 1 - outer base
-    "base1", "base2", "base3", "train",
-    // Unit 2 - installation
-    "bunk1", "ware1", "ware2",
-    // Unit 3 - jail
-    "jail1", "jail2", "jail3", "jail4", "jail5", "security",
-    // Unit 4 - mine
-    "mintro", "mine1", "mine2", "mine3", "mine4",
-    // Unit 5 - factory
-    "fact1", "fact3", "fact2",
-    // Unit 6 - power plant
-    "power1", "power2", "cool1",
-    // Unit 7 - biggun
-    "waste1", "waste2", "waste3", "biggun",
-    // Unit 8 - hangar
-    "hangar1", "hangar2", "space",
-    // Unit 9 - research lab
-    "lab", "boss1",
-    // Unit 10 - city
-    "city1", "city2", "city3", "strike",
-    // Unit 11 - final
-    "command", "boss2",
+    "start",
+    "e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8",
+    "e2m1", "e2m2", "e2m3", "e2m4", "e2m5", "e2m6", "e2m7",
+    "e3m1", "e3m2", "e3m3", "e3m4", "e3m5", "e3m6", "e3m7",
+    "e4m1", "e4m2", "e4m3", "e4m4", "e4m5", "e4m6", "e4m7", "e4m8",
+    "end",
 };
 
 enum class State
@@ -57,25 +48,26 @@ enum class State
     Dwelling // Map is up; stay in it so it actually renders.
 };
 
-// A map that never comes up is a failed test, not a reason to hang forever. The
-// slowest stock load measured is ~8 s (power2 from host:), so this is generous.
+// A map that never comes up is a failed test, not a reason to hang forever.
 constexpr int kLoadTimeoutMs = 90 * 1000;
 
-// The world has to be resident for this many frames before we call it loaded.
-// Guards the window between Cbuf_AddText and Cbuf_Execute, where the *previous*
-// map is still up and would otherwise match if it happened to be the target.
+// The level has to be up for this many frames before it counts as loaded: it guards the window
+// between Cbuf_AddText and the command running, where the previous map is still up.
 constexpr int kFramesToConfirm = 2;
+
+static cvar_t s_enabled = ps2::MakeCvar("ps2_testmaps", "0", CVAR_NONE);
+static cvar_t s_dwell   = ps2::MakeCvar("ps2_testmaps_dwell", "8", CVAR_NONE);
 
 static State  s_state         = State::Idle;
 static int    s_nextMap       = 0;
 static bool   s_done          = false;
-static bool   s_quitOnFinish  = true;
 static int    s_issuedAtMs    = 0;
 static int    s_dwellUntilMs  = 0;
 static int    s_confirmFrames = 0;
 static int    s_skipped       = 0;
 static int    s_failed        = 0;
 static size_t s_peakBeforeMap = 0;
+static int    s_hunkPeak      = 0; // Hunk in use plus cache, the most any map took.
 static char   s_targetBsp[MAX_QPATH] = {};
 
 void Restart()
@@ -89,25 +81,13 @@ void Restart()
     s_skipped       = 0;
     s_failed        = 0;
     s_peakBeforeMap = 0;
+    s_hunkPeak      = 0;
     s_targetBsp[0]  = '\0';
 }
 
-bool MapFileExists(const char * const bspName)
+bool TargetLevelIsUp()
 {
-    FILE * file = nullptr;
-    if (FS_FOpenFile(bspName, &file) < 0 || file == nullptr)
-    {
-        if (file != nullptr) { FS_FCloseFile(file); }
-        return false;
-    }
-    FS_FCloseFile(file);
-    return true;
-}
-
-bool TargetWorldIsResident()
-{
-    const mod::ModelInstance * const world = mod::GetWorldModel();
-    return world != nullptr && std::strcmp(world->name, s_targetBsp) == 0;
+    return cls.signon == SIGNONS && cl.worldmodel != nullptr && std::strcmp(cl.worldmodel->name, s_targetBsp) == 0;
 }
 
 size_t TagBytes(const ps2::heap::MemTag tag)
@@ -115,159 +95,121 @@ size_t TagBytes(const ps2::heap::MemTag tag)
     return ps2::heap::GetStatsForMemTag(tag).totalBytes;
 }
 
-size_t LiveTotalBytes()
-{
-    size_t total = 0;
-    for (int i = 0; i < static_cast<int>(ps2::heap::MemTag::TagCount); ++i)
-    {
-        total += TagBytes(static_cast<ps2::heap::MemTag>(i));
-    }
-    return total;
-}
-
-// One line per map, with the tags that actually move between levels. The peak is
-// the global high-water (PS2_GetPeakMemBytes), so "NEW PEAK" marks the transition
-// that cost the most - which is the number the whole test exists to find.
-//
-// The tags are the level's steady state: the report waits for the registration to
-// finish, so the previous level's leftovers are gone. A second line gives this
-// load's own peak and what it was made of - where the old level's assets were
-// still resident alongside the new one's - and the dlmalloc arena, whose growth
-// beyond the live peak is what fragmentation cost.
+// One line per map: QuakeSpasm's hunk (the level, and the cache of models and sounds it loaded,
+// and what is left of the hunk after both), then the backend's level data by tag and the
+// program's totals. "NEW PEAK" marks the map whose load took the most of the heap.
 void ReportMap(const char * const name, const int index)
 {
     using ps2::heap::FormatMemoryUnit;
     using ps2::heap::MemTag;
     constexpr size_t kUnit = ps2::heap::kMemUnitStrSize;
 
-    char world[kUnit], audio[kUnit], music[kUnit], tex[kUnit], alias[kUnit], sprite[kUnit];
-    char total[kUnit], peak[kUnit], freeMem[kUnit], arena[kUnit];
+    const int hunkUsed  = hunk_low_used + hunk_high_used;
+    const int cacheUsed = Cache_UsedBytes();
+    const int hunkLeft  = hunk_size - hunkUsed - cacheUsed;
+    s_hunkPeak = (hunkUsed + cacheUsed > s_hunkPeak) ? hunkUsed + cacheUsed : s_hunkPeak;
+
+    char hunk[kUnit], cache[kUnit], left[kUnit];
+    char world[kUnit], light[kUnit], tex[kUnit], alias[kUnit], music[kUnit];
+    char peak[kUnit], freeMem[kUnit];
 
     const size_t peakNow = ps2::heap::GetPeakMemBytes();
 
-    Com_Printf("MapCycle [%2d/%2d] %-9s World %-9s Audio %-9s Mus %-9s Tex %-9s Mdl %-9s Spr %-9s "
-               "TOTAL %-9s PEAK %-9s FREE %-9s%s\n",
-               index + 1, ArrayLength(kMaps), name,
-               FormatMemoryUnit(TagBytes(MemTag::WorldMdl),  true, world,  sizeof(world)),
-               FormatMemoryUnit(TagBytes(MemTag::Audio),     true, audio,  sizeof(audio)),
-               FormatMemoryUnit(TagBytes(MemTag::Music),     true, music,  sizeof(music)),
-               FormatMemoryUnit(TagBytes(MemTag::TexImage),  true, tex,    sizeof(tex)),
-               FormatMemoryUnit(TagBytes(MemTag::AliasMdl),  true, alias,  sizeof(alias)),
-               FormatMemoryUnit(TagBytes(MemTag::SpriteMdl), true, sprite, sizeof(sprite)),
-               FormatMemoryUnit(LiveTotalBytes(),            true, total,  sizeof(total)),
-               FormatMemoryUnit(peakNow,                     true, peak,   sizeof(peak)),
+    Con_Printf("MapCycle [%2d/%2d] %-6s Hunk %-9s Cache %-9s HunkLeft %-9s | World %-9s Light %-9s Tex %-9s "
+               "Mdl %-9s Mus %-9s | PEAK %-9s FREE %-9s%s\n",
+               index + 1, ps2::ArrayLength(kMaps), name,
+               FormatMemoryUnit(static_cast<size_t>(hunkUsed),  true, hunk,  sizeof(hunk)),
+               FormatMemoryUnit(static_cast<size_t>(cacheUsed), true, cache, sizeof(cache)),
+               FormatMemoryUnit(static_cast<size_t>((hunkLeft > 0) ? hunkLeft : 0), true, left, sizeof(left)),
+               FormatMemoryUnit(TagBytes(MemTag::WorldMdl), true, world, sizeof(world)),
+               FormatMemoryUnit(TagBytes(MemTag::Lightmap), true, light, sizeof(light)),
+               FormatMemoryUnit(TagBytes(MemTag::TexImage), true, tex,   sizeof(tex)),
+               FormatMemoryUnit(TagBytes(MemTag::AliasMdl), true, alias, sizeof(alias)),
+               FormatMemoryUnit(TagBytes(MemTag::Music),    true, music, sizeof(music)),
+               FormatMemoryUnit(peakNow,                    true, peak,  sizeof(peak)),
                FormatMemoryUnit(ps2::heap::GetAvailableMemBytes(), true, freeMem, sizeof(freeMem)),
                (peakNow > s_peakBeforeMap) ? "  <- NEW PEAK" : "");
 
-    const auto atPeak = [](const MemTag tag) { return ps2::heap::GetWindowPeakTagBytes(tag); };
-    Com_Printf("MapCycle [%2d/%2d] %-9s load peak %-9s Tex %-9s Mdl %-9s Spr %-9s Audio %-9s ARENA %-9s\n",
-               index + 1, ArrayLength(kMaps), name,
-               FormatMemoryUnit(ps2::heap::GetWindowPeakMemBytes(), true, peak,   sizeof(peak)),
-               FormatMemoryUnit(atPeak(MemTag::TexImage),           true, tex,    sizeof(tex)),
-               FormatMemoryUnit(atPeak(MemTag::AliasMdl),           true, alias,  sizeof(alias)),
-               FormatMemoryUnit(atPeak(MemTag::SpriteMdl),          true, sprite, sizeof(sprite)),
-               FormatMemoryUnit(atPeak(MemTag::Audio),              true, audio,  sizeof(audio)),
-               FormatMemoryUnit(ps2::heap::GetHeapStats().arenaBytes, true, arena, sizeof(arena)));
+    Con_Printf("MapCycle [%2d/%2d] %-6s load peak %-9s ARENA %-9s\n",
+               index + 1, ps2::ArrayLength(kMaps), name,
+               FormatMemoryUnit(ps2::heap::GetWindowPeakMemBytes(), true, peak, sizeof(peak)),
+               FormatMemoryUnit(ps2::heap::GetHeapStats().arenaBytes, true, freeMem, sizeof(freeMem)));
 }
 
-// Where the free memory sits, which the memtag table cannot show. A pass can end
-// with megabytes free and still fail the next big allocation, because dlmalloc
-// never moves a live block - so what matters is not how much is free but how it is
-// arranged. Printed per pass so the trend across a long session is visible: a
-// number that climbs pass over pass is the heap degrading, one that holds is not.
+// Where the free memory sits, which the memtag table cannot show: dlmalloc never moves a live
+// block, so what matters is not how much is free but how it is arranged. See the Quake II
+// port's notes on it; a number that climbs pass over pass is the heap degrading.
 void ReportHeap(const int pass)
 {
     const ps2::heap::HeapStats hs = ps2::heap::GetHeapStats();
-
     char a[ps2::heap::kMemUnitStrSize], b[ps2::heap::kMemUnitStrSize], c[ps2::heap::kMemUnitStrSize];
 
-    // The top chunk is one contiguous run at the end of the arena, and fastbins are
-    // small chunks dlmalloc deliberately leaves uncoalesced until a large request
-    // needs them. Neither is fragmentation. What is left over is: free bytes stuck
-    // in holes between live blocks, which only a future allocation of the right
-    // size can ever use.
+    // The top chunk is one contiguous run at the end of the arena, and fastbins are small chunks
+    // dlmalloc leaves uncoalesced on purpose. Neither is fragmentation; what is left over is.
     const size_t nonInterior    = hs.topChunkBytes + hs.fastbinBytes;
     const size_t interior       = (hs.freeBytes > nonInterior) ? (hs.freeBytes - nonInterior) : 0u;
     const size_t interiorChunks = (hs.freeChunks > 1u) ? (hs.freeChunks - 1u) : 0u;
 
-    Com_Printf("MapCycle: ---- heap after pass %d ----\n", pass);
-    Com_Printf("MapCycle:   arena %s   in use %s   free %s\n",
+    Con_Printf("MapCycle: ---- heap after pass %d ----\n", pass);
+    Con_Printf("MapCycle:   arena %s   in use %s   free %s\n",
                ps2::heap::FormatMemoryUnit(hs.arenaBytes, true, a, sizeof(a)),
                ps2::heap::FormatMemoryUnit(hs.inUseBytes, true, b, sizeof(b)),
                ps2::heap::FormatMemoryUnit(hs.freeBytes,  true, c, sizeof(c)));
-    Com_Printf("MapCycle:   top chunk %s   fastbins %s in %zu\n",
+    Con_Printf("MapCycle:   top chunk %s   fastbins %s in %u\n",
                ps2::heap::FormatMemoryUnit(hs.topChunkBytes, true, a, sizeof(a)),
                ps2::heap::FormatMemoryUnit(hs.fastbinBytes,  true, b, sizeof(b)),
-               hs.fastbinChunks);
-    Com_Printf("MapCycle:   interior holes %s in %zu chunks (avg %s)\n",
-               ps2::heap::FormatMemoryUnit(interior, true, a, sizeof(a)), interiorChunks,
-               ps2::heap::FormatMemoryUnit((interiorChunks != 0u) ? (interior / interiorChunks) : 0u,
-                                           true, b, sizeof(b)));
-
-    if (hs.freeBytes != 0u)
-    {
-        // Share of free memory that is neither the top run nor a fastbin. An upper
-        // bound on fragmentation, not a measurement: mallinfo reports no largest
-        // free chunk, so an interior hole could well be bigger than the top and
-        // serve a large request anyway. The number to watch is its trend, and
-        // whether the top chunk still covers the biggest allocation a map needs.
-        const double pct = 100.0 * static_cast<double>(interior) / static_cast<double>(hs.freeBytes);
-        Com_Printf("MapCycle:   scattered %.1f%% of free space (upper bound on fragmentation)\n", pct);
-        Com_Printf("MapCycle:   guaranteed contiguous: at least %s (the top chunk)\n",
-                   ps2::heap::FormatMemoryUnit(hs.topChunkBytes, true, a, sizeof(a)));
-    }
+               static_cast<unsigned>(hs.fastbinChunks));
+    Con_Printf("MapCycle:   interior holes %s in %u chunks\n",
+               ps2::heap::FormatMemoryUnit(interior, true, a, sizeof(a)), static_cast<unsigned>(interiorChunks));
 }
 
 void Finish()
 {
     char peak[ps2::heap::kMemUnitStrSize], total[ps2::heap::kMemUnitStrSize];
+    char hunk[ps2::heap::kMemUnitStrSize], hunkSize[ps2::heap::kMemUnitStrSize];
 
-    Com_Printf("MapCycle: pass complete - %d loaded, %d skipped (not in pak), %d timed out.\n",
-               ArrayLength(kMaps) - s_skipped - s_failed, s_skipped, s_failed);
-    Com_Printf("MapCycle: worst moment across the whole run was %s of %s installed.\n",
+    Con_Printf("MapCycle: pass complete - %d loaded, %d skipped (not in the game data), %d timed out.\n",
+               ps2::ArrayLength(kMaps) - s_skipped - s_failed, s_skipped, s_failed);
+    Con_Printf("MapCycle: the heap peaked at %s of %s installed; the most hunk any map took, cache included, "
+               "was %s of %s.\n",
                ps2::heap::FormatMemoryUnit(ps2::heap::GetPeakMemBytes(), true, peak, sizeof(peak)),
-               ps2::heap::FormatMemoryUnit(ps2::heap::GetTotalMemBytes(), true, total, sizeof(total)));
+               ps2::heap::FormatMemoryUnit(ps2::heap::GetTotalMemBytes(), true, total, sizeof(total)),
+               ps2::heap::FormatMemoryUnit(static_cast<size_t>(s_hunkPeak), true, hunk, sizeof(hunk)),
+               ps2::heap::FormatMemoryUnit(static_cast<size_t>(hunk_size), true, hunkSize, sizeof(hunkSize)));
 
-    // Survives Restart(), so re-running the test in the same session numbers the
-    // passes and makes drift between them obvious.
+    // Survives Restart(), so re-running the test in the same session numbers the passes and
+    // makes drift between them obvious.
     static int s_passesRun = 0;
     ReportHeap(++s_passesRun);
-
-    if (s_quitOnFinish)
-    {
-        Com_Printf("MapCycle test completed - quitting now...\n");
-        Cbuf_AddText("quit\n");
-    }
+    Con_Printf("MapCycle: done.\n");
 
     s_done = true;
 }
 
-// Issues the next map, skipping any that are not in the pak. Returns false when
-// the list is exhausted.
+// Issues the next map, skipping any the game data doesn't have. Returns false when the list is
+// exhausted.
 bool StartNextMap()
 {
-    while (s_nextMap < ArrayLength(kMaps))
+    while (s_nextMap < ps2::ArrayLength(kMaps))
     {
         const char * const name = kMaps[s_nextMap];
         std::snprintf(s_targetBsp, sizeof(s_targetBsp), "maps/%s.bsp", name);
 
-        if (!MapFileExists(s_targetBsp))
+        if (!COM_FileExists(s_targetBsp, nullptr))
         {
-            Com_Printf("MapCycle: skipping '%s' (not in the pak).\n", name);
             ++s_skipped;
             ++s_nextMap;
             continue;
         }
 
-        // Sampled before the load so ReportMap can tell whether *this* transition
-        // set a new high-water, rather than just echoing the running maximum - and
-        // the window peak restarted, so it measures this transition alone.
+        // Sampled before the load so ReportMap can tell whether this map set a new high-water,
+        // and the window peak restarted, so it measures this load alone.
         s_peakBeforeMap = ps2::heap::GetPeakMemBytes();
         ps2::heap::ResetWindowPeak();
 
         Cbuf_AddText(va("map %s\n", name));
 
-        s_issuedAtMs    = Sys_Milliseconds();
+        s_issuedAtMs    = ps2::sys::Milliseconds();
         s_confirmFrames = 0;
         s_state         = State::Loading;
         return true;
@@ -277,21 +219,18 @@ bool StartNextMap()
 
 } // namespace
 
+void InitMapCycle()
+{
+    Cvar_RegisterVariable(&s_enabled);
+    Cvar_RegisterVariable(&s_dwell);
+    Cmd_AddCommand("ps2_testmaps_restart", &Restart);
+}
+
 void RunMapCycle()
 {
-    static const cvar_t * s_enabled = Cvar_Get("ps2_testmaps",       "0", 0);
-    static const cvar_t * s_dwell   = Cvar_Get("ps2_testmaps_dwell", "8", 0);
-
-    if (s_enabled->value == 0.0f || s_done)
+    if (s_enabled.value == 0.0f || s_done)
     {
         return;
-    }
-
-    static bool s_cmdRegistered = false;
-    if (!s_cmdRegistered)
-    {
-        Cmd_AddCommand("ps2_testmaps_restart", Restart);
-        s_cmdRegistered = true;
     }
 
     switch (s_state)
@@ -304,20 +243,16 @@ void RunMapCycle()
         break;
 
     case State::Loading:
-        // Registration finished as well as the world resident: CL_PrepRefresh draws
-        // frames between its loads, and a level with many models can outlast the
-        // dwell inside it - which reported the previous level's leftovers as this
-        // one's, before EndRegistration had freed them.
-        if (TargetWorldIsResident() && !mod::IsRegistering() && ++s_confirmFrames >= kFramesToConfirm)
+        if (TargetLevelIsUp() && ++s_confirmFrames >= kFramesToConfirm)
         {
-            const int dwellMs = static_cast<int>(s_dwell->value * 1000.0f);
-            s_dwellUntilMs = Sys_Milliseconds() + ((dwellMs > 0) ? dwellMs : 1);
+            const int dwellMs = static_cast<int>(s_dwell.value * 1000.0f);
+            s_dwellUntilMs = ps2::sys::Milliseconds() + ((dwellMs > 0) ? dwellMs : 1);
             s_state = State::Dwelling;
             break;
         }
-        if ((Sys_Milliseconds() - s_issuedAtMs) > kLoadTimeoutMs)
+        if ((ps2::sys::Milliseconds() - s_issuedAtMs) > kLoadTimeoutMs)
         {
-            Com_Printf("MapCycle: '%s' never came up after %d seconds - moving on.\n",
+            Con_Printf("MapCycle: '%s' never came up after %d seconds - moving on.\n",
                        kMaps[s_nextMap], kLoadTimeoutMs / 1000);
             ++s_failed;
             ++s_nextMap;
@@ -326,7 +261,7 @@ void RunMapCycle()
         break;
 
     case State::Dwelling:
-        if (Sys_Milliseconds() >= s_dwellUntilMs)
+        if (ps2::sys::Milliseconds() >= s_dwellUntilMs)
         {
             ReportMap(kMaps[s_nextMap], s_nextMap);
             ++s_nextMap;
