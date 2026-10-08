@@ -8,8 +8,8 @@
 #include "ps2/renderer/brush.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/math/math.h"
 
-#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -142,7 +142,7 @@ void CutWarpPiece(const WarpPiece & piece, const int axis, Emit & emit)
     }
 
     WarpPiece remainder = piece;
-    for (float at = (std::floor(lo / kWarpCellSize) + 1.0f) * kWarpCellSize; at < hi - kWarpCutMargin; at += kWarpCellSize)
+    for (float at = (math::Floorf(lo / kWarpCellSize) + 1.0f) * kWarpCellSize; at < hi - kWarpCutMargin; at += kWarpCellSize)
     {
         if (at - lo < kWarpCutMargin)
         {

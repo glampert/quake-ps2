@@ -18,8 +18,8 @@
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/scrap_atlas.h" // SkylinePacker, shared with the 2D scrap atlases
+#include "ps2/math/math.h"
 
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -120,7 +120,7 @@ void AddDynamicLights(const msurface_t & surf)
 
         // How much of the light's radius survives the trip to the surface's plane.
         const float planeDist = DotProduct(dl.origin, surf.plane->normal) - surf.plane->dist;
-        const float rad = dl.radius - std::fabs(planeDist);
+        const float rad = dl.radius - math::Fabsf(planeDist);
         if (rad < dl.minlight)
         {
             continue;

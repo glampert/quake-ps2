@@ -13,9 +13,10 @@
  *        constants once, interleave the independent calls and drop the ones whose result is
  *        never read - which matters more than the instruction count of any single call.
  *
- *        Written as C89 (the engine builds as -std=gnu89) that also passes the C++ backend's
- *        warnings. Only the four FPU instructions GCC will not emit on its own are asm, and they
- *        fall back to libm off the EE so a host harness can include this header.
+ *        Written as C89 that also passes the C++ backend's warnings (the engine builds as
+ *        -std=gnu11, and mathlib.h includes this for all of it). Only the four FPU instructions
+ *        GCC will not emit on its own are asm, and they fall back to libm off the EE so a host
+ *        harness can include this header.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

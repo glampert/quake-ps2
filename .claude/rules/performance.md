@@ -15,6 +15,12 @@ paths:
   missed outside the loads:** no frame ran between 25 and 100 ms. About 150 frames read 17.5-21
   ms, and none of them is a miss (see "A Frame over a field" below). The engine's own phases
   aren't probed yet (only `SndMix`).
+- **After the single-precision math pass (2026-10-09, `q1-math.*`):** EE work outside the demo
+  loads (the 4.58 above counts them) went from 4.35 to 3.89 ms mean (-10.5%), p95 8.01 → 7.57,
+  p99 9.94 → 9.49 ms. View -3% (`AngleVectors`), Ui -19% (the 2D's `floor`), Sound -3%; the
+  rest is in the engine's unprobed frame, where the view's bob, idle sway and gun angles called
+  double `sin` every frame. Demos don't run the server, so no capture measures its QuakeC and
+  physics math yet.
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.

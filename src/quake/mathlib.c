@@ -61,12 +61,13 @@ void PerpendicularVector( vec3_t dst, const vec3_t src )
 	/*
 	** find the smallest magnitude axially aligned vector
 	*/
+	// [PS2_QUAKE]: single precision (see mathlib.h)
 	for ( pos = 0, i = 0; i < 3; i++ )
 	{
-		if ( fabs( src[i] ) < minelem )
+		if ( PS2Quake_Fabsf( src[i] ) < minelem )
 		{
 			pos = i;
-			minelem = fabs( src[i] );
+			minelem = PS2Quake_Fabsf( src[i] );
 		}
 	}
 	tempvec[0] = tempvec[1] = tempvec[2] = 0.0F;
@@ -190,8 +191,9 @@ void VectorAngles (const vec3_t forward, vec3_t angles)
 	temp[0] = forward[0];
 	temp[1] = forward[1];
 	temp[2] = 0;
-	angles[PITCH] = -atan2(forward[2], VectorLength(temp)) / M_PI_DIV_180;
-	angles[YAW] = atan2(forward[1], forward[0]) / M_PI_DIV_180;
+	// [PS2_QUAKE]: single precision (see mathlib.h)
+	angles[PITCH] = -atan2f(forward[2], VectorLength(temp)) / M_PI_DIV_180;
+	angles[YAW] = atan2f(forward[1], forward[0]) / M_PI_DIV_180;
 	angles[ROLL] = 0;
 }
 
@@ -200,15 +202,16 @@ void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
 	float		angle;
 	float		sr, sp, sy, cr, cp, cy;
 
+	// [PS2_QUAKE]: single precision (see mathlib.h)
 	angle = angles[YAW] * (M_PI*2 / 360);
-	sy = sin(angle);
-	cy = cos(angle);
+	sy = PS2Quake_Sinf(angle);
+	cy = PS2Quake_Cosf(angle);
 	angle = angles[PITCH] * (M_PI*2 / 360);
-	sp = sin(angle);
-	cp = cos(angle);
+	sp = PS2Quake_Sinf(angle);
+	cp = PS2Quake_Cosf(angle);
 	angle = angles[ROLL] * (M_PI*2 / 360);
-	sr = sin(angle);
-	cr = cos(angle);
+	sr = PS2Quake_Sinf(angle);
+	cr = PS2Quake_Cosf(angle);
 
 	forward[0] = cp*cy;
 	forward[1] = cp*sy;
@@ -273,18 +276,18 @@ void CrossProduct (vec3_t v1, vec3_t v2, vec3_t cross)
 	cross[2] = v1[0]*v2[1] - v1[1]*v2[0];
 }
 
-// [PS2_QUAKE]: sqrtf here and in VectorNormalize: libm's sqrt is double, and so soft-float on the
-// EE, which has a single-precision square root instruction. Both run per entity per frame.
+// [PS2_QUAKE]: single precision (see mathlib.h), here and in VectorNormalize: the EE's sqrt.s.
+// Both run per entity per frame.
 vec_t VectorLength(vec3_t v)
 {
-	return sqrtf(DotProduct(v,v));
+	return PS2Quake_Sqrtf(DotProduct(v,v));
 }
 
 float VectorNormalize (vec3_t v)
 {
 	float	length, ilength;
 
-	length = sqrtf(DotProduct(v,v));
+	length = PS2Quake_Sqrtf(DotProduct(v,v));
 
 	if (length)
 	{

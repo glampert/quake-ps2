@@ -27,6 +27,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // mathlib.h
 
 #include <math.h>
+// [PS2_QUAKE]: single-precision PS2Quake_Sinf/Cosf/Sqrtf/Floorf/Ceilf/Fabsf, which every engine
+// call to libm's sin/cos/sqrt/floor/ceil/fabs uses instead. Those take and return double, and the
+// EE has no double FPU: each ran as libgcc soft-float. atan2/atan/tan, which it lacks, are
+// newlib's float atan2f/atanf/tanf, except in the QuakeC builtins PF_vectoyaw and
+// PF_vectoangles, whose whole degrees need double's atan2 (see there).
+#include "ps2/math/math_c.h"
 
 #ifndef M_PI
 #define M_PI		3.14159265358979323846	// matches value in gcc v2 math.h

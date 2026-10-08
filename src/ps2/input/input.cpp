@@ -23,6 +23,7 @@
 #include "ps2/input/rumble.h"
 #include "ps2/system/sys.h"
 #include "ps2/save/save_system.h"
+#include "ps2/math/math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -255,7 +256,7 @@ struct StickAxis
 
 float Magnitude(const StickAxis & axis)
 {
-    return std::sqrt((axis.x * axis.x) + (axis.y * axis.y));
+    return ps2::math::Sqrtf((axis.x * axis.x) + (axis.y * axis.y));
 }
 
 // in_sdl.c's IN_ApplyDeadzone: a circular inner dead zone and a circular outer threshold, with

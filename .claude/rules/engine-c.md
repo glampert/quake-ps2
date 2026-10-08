@@ -16,8 +16,10 @@ paths:
   -fsingle-precision-constant` and a lenient warning set. None of the backend's C++ style or
   `-Werror` rules apply here.
 - **No double FPU on the EE.** Unsuffixed constants are made float by the flag. Don't add
-  `double` math or `<math.h>` double calls to engine code. QuakeSpasm's own `double` time
-  (`realtime`, `cl.time`, `Sys_DoubleTime`) stays until profiling says otherwise.
+  `double` math or `<math.h>` double calls to engine code: use `PS2Quake_Sinf`, `Cosf`,
+  `Sqrtf`, `Floorf`, `Ceilf` and `Fabsf` from `ps2/math/math_c.h` (`mathlib.h` includes it),
+  and newlib's float `atan2f`, `atanf` and `tanf`. QuakeSpasm's own `double` time (`realtime`,
+  `cl.time`, `Sys_DoubleTime`) stays until profiling says otherwise.
 - `Sys_Error` and `Host_Error` are `FUNC_NORETURN` here (unlike Quake II's `Sys_Error`).
 - A changed `.c` here needs only `make`. There is no separate engine build.
 - Files the PS2 doesn't build are deleted, not left behind. A file QuakeSpasm keeps only as
@@ -47,8 +49,27 @@ after it on the hunk start 16-byte aligned, which the GS uploads them in place f
 `qmodel_t::ps2_render`, a brush or alias model's draw data; `gl_model.c` keeps all four mip
 levels of a BSP texture and keeps the light samples one byte per luxel (no `.lit`);
 `gl_rlight.c`'s `RecursiveLightPoint` reads them that way, and takes its texture coordinates in
-float rather than ericw's double. `mathlib.c`'s `VectorLength` and `VectorNormalize` use
-`sqrtf`: libm's `sqrt` is double, and soft-float.
+float rather than ericw's double.
+
+For the math: `mathlib.h` includes `ps2/math/math_c.h`, and every engine call to libm's `sin`,
+`cos`, `sqrt`, `floor`, `ceil` and `fabs` is its `PS2Quake_*` version, tagged per function;
+`atan`, `tan` and most `atan2`s are newlib's float versions. Three things stay double, on
+purpose:
+
+- `PF_vectoyaw` and `PF_vectoangles` keep `atan2`. They truncate to whole degrees, and on target
+  `atan2f` put every vector at exactly 135 or 225 degrees one degree low, where double matches
+  a PC build (all 40,960 axis and diagonal vectors tested, and all but one in each of two
+  random sets of 200,000). QuakeC aims monsters with them, a few calls a second. Their square
+  roots did go single, and matched the PC's pitch for all 216,384 vectors tested.
+- `CalcSurfaceExtents`' `val` sum (ericw's comment says why); only the `floor`/`ceil` of its
+  float result went single.
+- `FloorDivMod`, which nothing calls since the software renderer went.
+
+Arguments built from the double `cl.time` (the idle sway, the gun's angles,
+`R_EntityParticles`) lost only their libm call: the double multiply in front of it waits for
+the double-time work. `PS2Quake_Cosf`'s error grows with the argument (5e-6 at 50 radians),
+which these tolerate. `PS2Quake_Floorf`/`Ceilf` match libm for every normal float; a denormal
+input reads as zero, as the EE's FPU treats it anyway.
 
 For sound: `snd_dma.c` defaults `snd_mixspeed` to 22050 instead of 44100 (the README's Sound
 section says why), and `host.c` wraps the `S_Update` calls in the `SndMix` profile probe

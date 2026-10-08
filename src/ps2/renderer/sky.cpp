@@ -298,7 +298,7 @@ void ProjectSkyPolygon(const int nump, const vec3_t * vecs)
         VectorAdd(vecs[i], v, v);
     }
 
-    const float av[3] = { std::fabs(v[0]), std::fabs(v[1]), std::fabs(v[2]) };
+    const float av[3] = { math::Fabsf(v[0]), math::Fabsf(v[1]), math::Fabsf(v[2]) };
 
     int axis;
     if (av[0] > av[1] && av[0] > av[2])
@@ -441,9 +441,9 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 // the side. -1 when two components tie for it, which leaves the face for the full cut to settle.
 int FaceOf(const float * const v)
 {
-    const float ax = std::fabs(v[0]);
-    const float ay = std::fabs(v[1]);
-    const float az = std::fabs(v[2]);
+    const float ax = math::Fabsf(v[0]);
+    const float ay = math::Fabsf(v[1]);
+    const float az = math::Fabsf(v[2]);
     if (ax > ay && ax > az)
     {
         return (v[0] < 0.0f) ? 1 : 0;

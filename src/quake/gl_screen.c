@@ -254,7 +254,7 @@ float AdaptFovx (float fov_x, float width, float height)
 		return fov_x;
 	if ((x = height / width) == 0.75)
 		return fov_x;
-	a = atan(0.75 / x * tan(fov_x / 360 * M_PI));
+	a = atanf(0.75 / x * tanf(fov_x / 360 * M_PI)); // [PS2_QUAKE]: single precision (see mathlib.h)
 	a = a * 360 / M_PI;
 	return a;
 }
@@ -271,8 +271,9 @@ float CalcFovy (float fov_x, float width, float height)
 	if (fov_x < 1 || fov_x > 179)
 		Sys_Error ("Bad fov: %f", fov_x);
 
-	x = width / tan(fov_x / 360 * M_PI);
-	a = atan(height / x);
+	// [PS2_QUAKE]: single precision (see mathlib.h)
+	x = width / tanf(fov_x / 360 * M_PI);
+	a = atanf(height / x);
 	a = a * 360 / M_PI;
 	return a;
 }

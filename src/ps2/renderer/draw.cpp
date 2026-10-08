@@ -23,8 +23,8 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/system/heap.h"
+#include "ps2/math/math.h"
 
-#include <cmath>
 #include <cstring>
 
 extern "C" {
@@ -372,7 +372,7 @@ struct ScreenRect
 
 int ToPixel(const float v)
 {
-    return static_cast<int>(std::floor(v + 0.5f));
+    return static_cast<int>(ps2::math::Floorf(v + 0.5f));
 }
 
 // A rectangle in the current canvas's units, on screen. The edges are rounded rather than the

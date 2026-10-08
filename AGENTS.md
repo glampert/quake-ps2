@@ -22,7 +22,7 @@ lists every backend cvar. Add new ones there, with their debug/release defaults 
 The port was brought up in phases: compile, headless boot, game data, 2D, input, 3D, then sound,
 music and saves. All of them have landed, and every file in `src/quake` and `src/ps2` is built, or
 included by one that is. What is left is refinement: GS fog (no shareware map uses it), performance
-(the engine's profile probes, then the single-precision math pass in the plan), and real hardware.
+(the engine's profile probes, then moving its time from double to float), and real hardware.
 
 - **Unused files are deleted, not parked.** Whatever a change makes unused goes with it. The
   pristine sources are in the first commit (and in the quake2-ps2 repo for the backend).
