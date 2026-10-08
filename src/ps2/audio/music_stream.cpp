@@ -92,7 +92,7 @@ bool MusicStream::StartReaderThread()
     ee_thread_status_t mainStatus = {};
     if (ReferThreadStatus(GetThreadId(), &mainStatus) < 0)
     {
-        Com_Printf("WARNING: MusicStream: can't read the main thread's priority.\n");
+        Con_Printf("WARNING: MusicStream: can't read the main thread's priority.\n");
         return false;
     }
     m_priority = mainStatus.current_priority;
@@ -117,7 +117,7 @@ bool MusicStream::StartReaderThread()
 
     if (m_threadId < 0 || StartThread(m_threadId, this) < 0)
     {
-        Com_Printf("WARNING: MusicStream: can't start the reader thread.\n");
+        Con_Printf("WARNING: MusicStream: can't start the reader thread.\n");
         if (m_threadId >= 0)
         {
             DeleteThread(m_threadId);
@@ -409,7 +409,7 @@ bool MusicStream::AllocateBuffers(const char * const path)
     void * const memory = ps2::heap::TryAllocAligned(ps2::heap::MemAlign(64), bytes, MemTag::Music);
     if (memory == nullptr)
     {
-        Com_Printf("WARNING: %s: no memory for its %d KB of stream buffers, the track stays silent.\n",
+        Con_Printf("WARNING: %s: no memory for its %d KB of stream buffers, the track stays silent.\n",
                    path, static_cast<int>(bytes / 1024u));
         return false;
     }
@@ -473,7 +473,7 @@ MusicStream::OpenResult MusicStream::Open(const char * const path, const int ext
 
     if (error != nullptr)
     {
-        Com_Printf("WARNING: %s: %s\n", path, error);
+        Con_Printf("WARNING: %s: %s\n", path, error);
         close(fd);
         return OpenResult::Unusable;
     }
@@ -570,7 +570,7 @@ bool MusicStream::AcquireBuffer()
 
     if (buffer.state != BufferState::Ready || buffer.resultBytes != buffer.requestBytes)
     {
-        Com_Printf("WARNING: music stream read failed (%d of %d bytes).\n",
+        Con_Printf("WARNING: music stream read failed (%d of %d bytes).\n",
                    static_cast<int>(buffer.resultBytes), buffer.requestBytes);
         m_finished = true;
         m_failed   = true;

@@ -26,7 +26,7 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 keyboard, through the attract-mode demos and every shareware map. The 3D view draws all of it:
 the world - textured, lightmapped, with its fullbright texels, warping water and scrolling sky -
 and the brush models, monsters, items, view weapon, sprites and particles, and the sound effects
-play through the SPU2. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is
+and the soundtrack play through the SPU2. Its PC-sized limits are cut down to fit the PS2's 32 MB. The port is
 brought up in phases, each checked in PCSX2:
 
 1. Compile QuakeSpasm with the EE toolchain. *Done.*
@@ -36,7 +36,7 @@ brought up in phases, each checked in PCSX2:
 5. Input: DualShock and USB keyboard. *Done.*
 6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which no
    shareware map uses.
-7. Sound, CD music, save games. *Sound is in.*
+7. Sound, CD music, save games. *Sound and CD music are in.*
 
 This section says what works as each phase lands.
 
@@ -76,7 +76,16 @@ This section says what works as each phase lands.
      id1/
        pak0.pak
        pak1.pak   (registered game only)
+       music/     (optional, trackNN.adp or trackNN.wav soundtrack - see below)
    ```
+
+   The soundtrack is optional. Rip the Quake CD's audio tracks 2-11 to 16-bit PCM WAVs named
+   `id1/music/trackNN.wav` (NN = the CD track number; any case), then run `make music` to encode
+   them into the `trackNN.adp` files the game streams: SPU2 ADPCM at 22050 Hz, about 1.5 MB a
+   minute. Only the `.adp` files need to go onto a USB stick. Input must be at 22050 Hz or exactly
+   twice that (a CD rip); convert anything else first, e.g. `afconvert -f WAVE -d LEI16@22050 -c 2
+   in.flac out.wav` on macOS. Skipping `make music` works too: a track with no `.adp` plays from its
+   `trackNN.wav`, at seven times the bytes read and more EE time to resample a 44.1 kHz rip.
 
 ### Building
 
@@ -290,6 +299,26 @@ feeder is awake about 0.45 ms a frame, most of it waiting on the IOP while the m
 runs. A new sound reaches the speakers after `_snd_mixahead` (0.1 s) plus the 43 ms queue.
 `-nosound` turns sound off, as on QuakeSpasm, and an IOP driver that doesn't come up only costs
 the sound.
+
+**CD music.** QuakeSpasm plays a map's track off the Quake CD, or else from a loose
+`music/trackNN` file through its codec libraries. This port reads no audio CD and has no codec
+layer, so [cd_audio.cpp](src/ps2/audio/cd_audio.cpp) implements QuakeSpasm's `BGM_*` music over
+loose `id1/music/trackNN.adp` files, SPU2 ADPCM: the PS2's native sample format, 3.5 times
+smaller than 16-bit PCM, encoded by `make music` ([musenc](src/tools/host/musenc.cpp)). A track
+with no `.adp` plays from its `trackNN.wav`. [`MusicStream`](src/ps2/audio/music_stream.h) keeps
+two read buffers in flight (8 KB each for ADPCM, up to 64 KB each for a WAV), allocated only
+while a track plays, and decodes on demand; the file reads come from a reader thread at the
+main thread's priority. The music goes into the mixer's raw-sample channel, as `bgmusic.c`'s
+did, so it reaches the SPU2 inside the audsrv stream; a 44.1 kHz WAV goes through a 23-tap
+half-band decimator ([half_band.h](src/ps2/audio/half_band.h)) on the way in, and other rates
+through a linear resampler. The file format is the Quake II port's, so its tracks play here too.
+
+It behaves as `bgmusic.c` does: `bgm_extmusic` (the options menu's "External Music") turns it on
+and off, `bgmvolume` ("CD Music Volume") sets the level, `music_loop` decides whether a track
+starts over when it ends, and `music <name>`, `music_stop`, `music_pause` and `music_resume`
+drive it from the console. Turning `bgm_extmusic` off stops the music and turning it on starts
+the map's track again, right away rather than at the next map. In PCSX2 the ADPCM decode costs
+about 0.16 ms of EE time per frame, and mixing the music in another 0.08 ms.
 
 ---
 

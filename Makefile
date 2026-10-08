@@ -80,6 +80,7 @@ PS2_CXX_SRC =                         \
 	ps2/audio/snd.cpp                 \
 	ps2/audio/audsrv_device.cpp       \
 	ps2/audio/mix_ring.cpp            \
+	ps2/audio/music_stream.cpp        \
 	ps2/audio/cd_audio.cpp            \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \

@@ -5,7 +5,7 @@
  *
  *        Mostly renderer events, but not exclusively: the frame log writes one column
  *        per event and so needs every one of them declared in a single place. Sound
- *        (the audio backend's submit) and the engine phases probed from C live here
+ *        (the sound feeder thread's time) and the engine phases probed from C live here
  *        for that reason rather than because they belong to the renderer.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -50,7 +50,7 @@ PS2_PROFILE_DECLARE_EVENT(ClScene);
 PS2_PROFILE_DECLARE_EVENT(SndMix);
 PS2_PROFILE_DECLARE_EVENT(FsIo);
 
-// CDAudio_Update: the music stream's decode and raw-sample top-up (ps2/audio/cd_audio.cpp).
+// BGM_Update: the music stream's decode and raw-sample top-up (ps2/audio/cd_audio.cpp).
 PS2_PROFILE_DECLARE_EVENT(Music);
 
 } // namespace ps2::prof_evt

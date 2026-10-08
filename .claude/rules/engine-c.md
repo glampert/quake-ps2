@@ -38,8 +38,9 @@ renderer directly. So the seam is that renderer's public surface, implemented in
   `GL_SubdivideSurface` (a no-op: the backend cuts the water itself).
 - Textures: `gl_texmgr.h` (`TexMgr_*`).
 - Platform: `Sys_*` (sys.h, plus the globals `isDedicated` and `sys_throttle`), `PL_*`
-  (platform.h), `IN_*` (input.h), `SNDDMA_*` (q_sound.h), `CDAudio_*` (cdaudio.h), and
-  `net_drivers[]`/`net_numdrivers` (loopback only).
+  (platform.h), `IN_*` (input.h), `SNDDMA_*` (q_sound.h), `CDAudio_*` (cdaudio.h), `BGM_*`
+  with `bgmloop` and `bgm_extmusic` (bgmusic.h), and `net_drivers[]`/`net_numdrivers`
+  (loopback only).
 
 For the 3D renderer: `gl_model.h` pads `texture_t` to 80 bytes (the BSP texture's pixels
 after it on the hunk start 16-byte aligned, which the GS uploads them in place from) and adds

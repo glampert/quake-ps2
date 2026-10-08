@@ -3,8 +3,8 @@
  * File: spu_adpcm.h
  * Brief: SPU2 ADPCM - the PS1/PS2 sound chip's native 4-bit sample encoding, the payload of
  *        Sony's .VAG files - and the layout of the music files streamed from it
- *        (baseq2/music/trackNN.adp: written by src/tools/host/musenc.cpp, played by
- *        music_stream.cpp for the CD audio replacement in cd_audio.cpp).
+ *        (id1/music/trackNN.adp: written by src/tools/host/musenc.cpp, played by
+ *        music_stream.cpp for the CD music in cd_audio.cpp).
  *
  *        Header-only and free of ps2sdk types on purpose: the EE runtime and the host
  *        encoder include this same file, so the encoder's closed-loop search and the SNR
@@ -150,6 +150,8 @@ inline void DecodeBlock(const std::uint8_t * block, std::int16_t * out, const in
 // silent blocks to whole chunks; frameCount says where the music really ends.
 namespace music_file {
 
+// "Q2MU": the format came over from the Quake II port unchanged, magic included, so a track
+// encoded for either port plays in both.
 constexpr char          kMagic[4]    = { 'Q', '2', 'M', 'U' };
 constexpr std::uint16_t kVersion     = 1;
 constexpr int           kHeaderBytes = 2048;

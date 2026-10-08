@@ -4,9 +4,9 @@
  * Brief: Streams one music file off disk and decodes it to 16-bit stereo PCM on demand,
  *        never holding more of it in memory than two read buffers. Two formats:
  *
- *         - baseq2/music/trackNN.adp, SPU2 ADPCM (layout in spu_adpcm.h), what `make music`
+ *         - id1/music/trackNN.adp, SPU2 ADPCM (layout in spu_adpcm.h), what `make music`
  *           produces: two 8 KB buffers hold ~650 ms at 22050Hz.
- *         - baseq2/music/trackNN.wav, 16-bit PCM, mono or stereo, the fallback for when
+ *         - id1/music/trackNN.wav, 16-bit PCM, mono or stereo, the fallback for when
  *           the .adp hasn't been made. 3.5x the bytes per second (7x for a 44.1kHz CD rip),
  *           so its buffers grow with the byte rate - two of up to 64 KB, ~740 ms of a CD rip.
  *
@@ -21,9 +21,9 @@
  *        the IOP that puts its caller to sleep until the data lands, and on a USB stick one
  *        can take tens of milliseconds - a dropped frame if the main loop issued it. So they
  *        come from a reader thread instead, at the main thread's own priority: it never
- *        preempts frame work, it just gets the CPU whenever the main thread sleeps, which
- *        happens several times a frame (the audsrv RPCs in SNDDMA_Submit, any file I/O), and
- *        whenever MusicStream yields to it explicitly after queueing a read. Both SDK file
+ *        preempts frame work, it just gets the CPU whenever the main thread sleeps (on any
+ *        file I/O of its own) and whenever MusicStream yields to it explicitly after queueing
+ *        a read. The sound feeder (snd.cpp) sits above both and preempts either. Both SDK file
  *        clients (fio for host:, fileXio for mass:) serialize their RPCs with semaphores, so
  *        the reader can share them with the main thread's own file I/O safely.
  *
@@ -68,6 +68,14 @@ public:
     // is copied to both sides). Returns fewer when the next read hasn't landed yet - just
     // call again next frame - or when the stream has ended, see Finished().
     int Decode(s16 * outStereo, int maxFrames);
+
+    // Ends the music with the pass it is in, whatever loop count Open() was given. The
+    // reads may already have run into the next pass; that data is dropped unplayed.
+    void StopLooping()
+    {
+        m_requestLoopsLeft = 0;
+        m_decodeLoopsLeft  = 0;
+    }
 
     // True once the last frame of the last pass has been decoded, or a read failed.
     bool Finished() const { return m_finished; }
