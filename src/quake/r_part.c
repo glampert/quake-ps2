@@ -628,9 +628,13 @@ void CL_RunParticles (void)
 	particle_t		*p, *kill;
 	int				i;
 	float			time1, time2, time3, dvel, frametime, grav;
+	float			now; // [PS2_QUAKE]: cl.time, read once (below)
 	extern	cvar_t	sv_gravity;
 
 	frametime = cl.time - cl.oldtime;
+	// [PS2_QUAKE]: the particles' die times are float. Compared with the double cl.time, each test
+	// was a soft-float call per particle per frame - the most of any site in the client.
+	now = cl.time;
 	time3 = frametime * 15;
 	time2 = frametime * 10;
 	time1 = frametime * 5;
@@ -640,7 +644,7 @@ void CL_RunParticles (void)
 	for ( ;; )
 	{
 		kill = active_particles;
-		if (kill && kill->die < cl.time)
+		if (kill && kill->die < now) // [PS2_QUAKE]: was cl.time
 		{
 			active_particles = kill->next;
 			kill->next = free_particles;
@@ -655,7 +659,7 @@ void CL_RunParticles (void)
 		for ( ;; )
 		{
 			kill = p->next;
-			if (kill && kill->die < cl.time)
+			if (kill && kill->die < now) // [PS2_QUAKE]: was cl.time
 			{
 				p->next = kill->next;
 				kill->next = free_particles;

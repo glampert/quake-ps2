@@ -825,9 +825,12 @@ void DrawBrushModel(rs::TriangleStream & stream, entity_t & e)
     // whose surfaces every copy shares).
     if (model.firstmodelsurface != 0 && gl_flashblend.value == 0.0f)
     {
+        // The lights' die times are float, so they're tested against the clock as a float: against
+        // the double cl.time, every test was a soft-float call, 64 per brush model drawn.
+        const float now = static_cast<float>(cl.time);
         for (int k = 0; k < MAX_DLIGHTS; ++k)
         {
-            if (static_cast<double>(cl_dlights[k].die) < cl.time || cl_dlights[k].radius == 0.0f)
+            if (cl_dlights[k].die < now || cl_dlights[k].radius == 0.0f)
             {
                 continue;
             }

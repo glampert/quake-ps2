@@ -171,16 +171,19 @@ void R_PushDlights (void)
 {
 	int		i;
 	dlight_t	*l;
+	float		now; // [PS2_QUAKE]
 
 	if (gl_flashblend.value)
 		return;
+
+	now = cl.time; // [PS2_QUAKE]: compared as a float: against the double, a soft-float call per light
 
 	r_dlightframecount = r_framecount + 1;	// because the count hasn't advanced yet for this frame
 	l = cl_dlights;
 
 	for (i=0 ; i<MAX_DLIGHTS ; i++, l++)
 	{
-		if (l->die < cl.time || !l->radius)
+		if (l->die < now || !l->radius) // [PS2_QUAKE]: was cl.time
 			continue;
 		R_MarkLights (l, i, cl.worldmodel->nodes);
 	}

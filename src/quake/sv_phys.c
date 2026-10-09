@@ -1173,6 +1173,7 @@ void SV_Physics (void)
 	int	i;
 	int	entity_cap; // For sv_freezenonclients 
 	edict_t	*ent;
+	float	svtime; // [PS2_QUAKE]: sv.time as a float, for the nextthink test below
 
 // let the progs know that a new frame has started
 	pr_global_struct->self = EDICT_TO_PROG(sv.edicts);
@@ -1186,6 +1187,9 @@ void SV_Physics (void)
 // treat each object in turn
 //
 	ent = sv.edicts;
+	// [PS2_QUAKE]: nextthink is float. Compared with the double sv.time, the test was a soft-float
+	// call per entity per frame; it only picks the lerp interval sent to the client.
+	svtime = sv.time;
 
 	if (sv_freezenonclients.value)
 	  entity_cap = svs.maxclients + 1; // Only run physics on clients and the world
@@ -1226,7 +1230,7 @@ void SV_Physics (void)
 	//capture interval to nextthink here and send it to client for better
 	//lerp timing, but only if interval is not 0.1 (which client assumes)
 		ent->sendinterval = false;
-		if (!ent->free && ent->v.nextthink > sv.time && (ent->v.movetype == MOVETYPE_STEP || ent->v.movetype == MOVETYPE_WALK || ent->v.frame != ent->oldframe))
+		if (!ent->free && ent->v.nextthink > svtime && (ent->v.movetype == MOVETYPE_STEP || ent->v.movetype == MOVETYPE_WALK || ent->v.frame != ent->oldframe))
 		{
 			int j = Q_rint((ent->v.nextthink-ent->oldthinktime)*255);
 			if (j >= 0 && j < 256 && j != 25 && j != 26) //25 and 26 are close enough to 0.1 to not send

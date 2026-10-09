@@ -71,6 +71,16 @@ the double-time work. `PS2Quake_Cosf`'s error grows with the argument (5e-6 at 5
 which these tolerate. `PS2Quake_Floorf`/`Ceilf` match libm for every normal float; a denormal
 input reads as zero, as the EE's FPU treats it anyway.
 
+For the clocks: `realtime`, `cl.time`, `sv.time` and `host_frametime` stay double. `realtime`
+counts from boot, and as a float it would lose frame precision within hours. What cost was
+comparing float times against them once per item, each a soft-float call, so those loops read
+the clock into a float once: `CL_RunParticles` (each particle's `die`), `CL_DecayLights`,
+`R_PushDlights` and `CL_ReadFromServer`'s dlight count, and `SV_Physics`'s `nextthink` test,
+which only picks the lerp interval sent to the client. `SV_RunThink` and `SV_Physics_Pusher`
+still compare in double: they decide when QuakeC thinks run, and float could move one by a
+frame. `world.c`'s collision keeps QuakeSpasm's `DoublePrecisionDotProduct` (see
+performance.md for what it costs).
+
 For the effects' random numbers: `common.h` adds `COM_FxRand`, MSVC's `rand()` inline (a
 32-bit LCG returning 15 bits, the range the effects were written for), with its state in
 `common.c`. `r_part.c`, the dynamic lights' flicker in `cl_main.c`, and the ricochet sounds and

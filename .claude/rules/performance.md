@@ -35,6 +35,20 @@ paths:
   takes 0.83-1.26 s of `ClParse`, 0.18-0.24 s of it `FsIo`. No steady frame dropped; the
   worst took 12.5 ms. `Music` doubled to 280 µs against `q1-fxrand` because `id1/music` now
   holds the CD rip as 44.1 kHz WAVs with no `.adp` (`make music` encodes them).
+- **Clock compares in float (2026-10-09, `q1-timers.*` against `q1-probes-adp.*`, both with
+  the `.adp` soundtrack):** the soft-float counter (below) found the demos making ~1,450
+  soft-float calls a frame, nearly all of them a float time compared with the double `cl.time`
+  once per particle (475), per brush model per dynamic light (397, in view.cpp) and per light
+  slot in three loops (130 each). Reading the clock into a float once per loop (engine-c.md
+  lists the sites) left ~200. Steady-frame EE work: mean 3.90 → 3.46 ms (-11%), p95 7.58 →
+  6.33, p99 9.39 → 7.97, max 12.36 → 11.18 ms; `ClParticles` 257 → 63 µs, `EntBrush` 448 →
+  327, `SndMix` 472 → 433 (`CL_DecayLights` runs inside it).
+- **Open: the server's collision.** On a live e1m1 the counter found ~9,100 soft-float calls a
+  frame, 7,400 of them in `SV_HullPointContents` and `SV_RecursiveHullCheck` (`world.c`): the
+  `DoublePrecisionDotProduct` QuakeSpasm uses against stuck-in-wall bugs, run per hull node of
+  every trace and point test. No demo capture sees it (a demo runs no server). Going back to
+  id's float trades that collision fix away, and the EE rounds toward zero where id's x87
+  carried extra precision, so it needs a gameplay check, not just a capture.
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.
@@ -145,6 +159,22 @@ paths:
   the shadow and compile everything with `-fmax-errors=0`.
 - Compare per function (instructions, loads, stores, lq/sq), normalizing branch targets.
   Static counts understate loops, so check loop bodies by hand.
+
+## Counting soft-float calls per call site (~5 min, scratch only)
+
+What a frame log can't show is which code pays for `double`: it runs as libgcc calls
+(`__adddf3`, `__ltdf2`, `__extendsfdf2`, ...) inside whichever probe called them.
+
+- Write a C file of wrappers, one per routine the ELF links (`nm` lists them: 20 on
+  2026-10-09), e.g. `double __wrap___adddf3(double a, double b) { Count(0,
+  __builtin_return_address(0)); return __real___adddf3(a, b); }`. `Count` bumps a hash table
+  keyed by return address and kind, and an `atexit` handler prints it as `SFC,` lines.
+- Take the debug link line (`make -n -B | grep -- "-o build/debug/quake_unstripped.elf"`), add
+  the object and `-Wl,--wrap=__<name>` for every routine, link to the scratchpad and strip.
+- Run it as the perf run (its quit runs the `atexit`) or as a live map that ends in `quit`.
+- `addr2line -f -i` on each return address minus 8 (the `jal` and its delay slot) gives the
+  call site; group by the outermost function and divide by the frame-log row count.
+  `CalcSurfaceExtents` shows up large but runs only at map load.
 
 ## Proving an EE/VU0 asm rewrite on target (~6 s)
 

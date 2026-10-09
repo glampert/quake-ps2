@@ -336,13 +336,15 @@ void CL_DecayLights (void)
 	int			i;
 	dlight_t	*dl;
 	float		time;
+	float		now; // [PS2_QUAKE]
 
 	time = cl.time - cl.oldtime;
+	now = cl.time; // [PS2_QUAKE]: compared as a float: against the double, a soft-float call per light
 
 	dl = cl_dlights;
 	for (i=0 ; i<MAX_DLIGHTS ; i++, dl++)
 	{
-		if (dl->die < cl.time || !dl->radius)
+		if (dl->die < now || !dl->radius) // [PS2_QUAKE]: was cl.time
 			continue;
 
 		dl->radius -= time*dl->decay;
@@ -624,6 +626,7 @@ int CL_ReadFromServer (void)
 	beam_t		*b; //johnfitz
 	dlight_t	*l; //johnfitz
 	int			i; //johnfitz
+	float		now; // [PS2_QUAKE]: cl.time as a float, for the dlight count below
 
 
 	cl.oldtime = cl.time;
@@ -675,8 +678,9 @@ int CL_ReadFromServer (void)
 	dev_peakstats.beams = q_max(num_beams, dev_peakstats.beams);
 
 	//dlights
+	now = cl.time; // [PS2_QUAKE]: against the double, each light's test was a soft-float call
 	for (i=0, l=cl_dlights ; i<MAX_DLIGHTS ; i++, l++)
-		if (l->die >= cl.time && l->radius)
+		if (l->die >= now && l->radius) // [PS2_QUAKE]: was cl.time
 			num_dlights++;
 	if (num_dlights > 32 && dev_peakstats.dlights <= 32)
 		Con_DWarning ("%i dlights exceeded standard limit of 32 (max = %d).\n", num_dlights, MAX_DLIGHTS);
