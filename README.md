@@ -184,10 +184,11 @@ mass:/QUAKE/
 | `screenshot` | QuakeSpasm's own, TGA only: reads the last frame back out of GS VRAM and writes `id1/spasmNNNN.tga`. |
 | `ps2_saveinfo` | Says where saves are going, and lists the memory card's save directory. |
 
-Two unattended tests are armed by cvars (see [CVARS.md](CVARS.md)): `ps2_testmaps 1` (debug builds)
+Unattended tests are armed by cvars (see [CVARS.md](CVARS.md)). `ps2_testmaps 1` (debug builds)
 loads every level in the paks in turn (the campaign in play order, then the deathmatch maps) and
-prints what each costs in memory, and `ps2_perftest 1` (profile builds)
-plays the three demos with the frame log on and quits, for the scripts in
+prints what each costs in memory. `ps2_perftest 1` (profile builds) plays the three demos with the
+frame log on and quits, and `ps2_testmaps 2` does the same over every level: it turns a full
+circle at a few viewpoints spread over each, then quits. Both captures are for the scripts in
 [src/tools/scripts/frame_log/](src/tools/scripts/frame_log/).
 
 ---

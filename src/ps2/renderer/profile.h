@@ -90,6 +90,11 @@ void FrameLogFlush();
 // Emits a marker row so a run can be split by map. Call from R_NewMap.
 void FrameLogMarkMap(const char * mapName);
 
+// Emits a marker row for the map cycle's perf pass, "FLOG#view,<row>,<what>": the rows after it
+// look around from the viewpoint <what> describes ("<n>,<kind>,<origin>"), until the next view or
+// map marker. "0,end,-" ends a level's tour: the rows up to the next map are its way out.
+void FrameLogMarkView(const char * what);
+
 // Records a file being opened, written as an "FLOG#open,<row>,<name>" line with the next dump -
 // the row being the one whose columns are charged with the read. COM_FindFile calls it through
 // PS2Quake_FrameLogNoteOpen for every file the engine opens, and the music stream for its tracks,
@@ -114,6 +119,7 @@ inline void FrameLogInit() {}
 inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}
+inline void FrameLogMarkView(const char *) {}
 inline void FrameLogNoteOpen(const char *) {}
 inline void FrameLogNoteOpens(bool) {}
 inline void FrameLogFinish() {}

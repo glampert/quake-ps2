@@ -8,7 +8,8 @@ paths:
 
 ## Where things stand
 
-- Goal: a smooth 60 fps through the whole `ps2_perftest` capture.
+- Goal: a smooth 60 fps through the whole `ps2_perftest` capture, and on every level of the map
+  cycle's perf pass (`ps2_testmaps 2`).
 - **Quake 1 baseline (2026-10-08, debug build, sound and music on):** `ps2_perftest` over
   demo1-3 logged 13,170 frames. EE work (Frame - VSync) mean 4.58 ms, p50 3.93, p95 8.02,
   p99 9.97 ms, and at most 14 ms outside the three demo loads (0.9-1.3 s each). **No vsync was
@@ -48,7 +49,19 @@ paths:
   `DoublePrecisionDotProduct` QuakeSpasm uses against stuck-in-wall bugs, run per hull node of
   every trace and point test. No demo capture sees it (a demo runs no server). Going back to
   id's float trades that collision fix away, and the EE rounds toward zero where id's x87
-  carried extra precision, so it needs a gameplay check, not just a capture.
+  carried extra precision, so it needs a gameplay check, not just a capture. The map pass below
+  measures what the server costs on every level.
+- **Every level, live (2026-10-09, `q1-mapperf.*`):** the map cycle's perf pass over the
+  registered data, 38 levels and 190 viewpoints, 30,441 steady frames in 10.8 minutes. 32 levels
+  never dropped a steady frame, and every episode 1 and deathmatch level stayed under 15 ms of EE
+  work. Six dropped 396 frames between them: e4m7 258 of its 801, e2m2 84, e2m3 48, e2m1 4, e2m7
+  and e3m1 one each. EE work mean 6.17 ms, p95 12.6, p99 17.5, against the demos' 3.46 mean,
+  because a live level runs the server: `Server` averages 3.9 ms a frame over the tours, and is
+  14.1 of the 18.9 ms of the average over-budget frame (View 3.4). It grows with the monsters:
+  dm4, with none, 0.5 ms; e2m2 10.9 and e4m7 13.1 ms at their means, with the monsters standing
+  still under notarget (awake ones cost more). The one outlier on the rendering side is e2m3's
+  viewpoint 2, the teleporter exit at (1144 1776 -61): 7,200 triangles, View 5.8 ms, EE p95 24.5
+  ms. Nothing was opened mid-level.
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.
@@ -132,8 +145,9 @@ paths:
    back. Stop PCSX2: after the quit it sits in the BIOS menu.
 4. `src/tools/scripts/frame_log/summarize_flog.py <emulog> --rows build/baselines/<tag>.flog`,
    then `compare_flog.py <before> <after>`. `frame_budget.py` realigns Server, ClParse and
-   ClScene (they land one row early) and lists each `FLOG#open` load with its cost. The open
-   notes are written in perf runs only (`FrameLogNoteOpens`), 64 per log batch.
+   ClScene (they land one row early) and lists each mid-level `FLOG#open` load with its cost
+   (`--all-opens` lists the level loads' too). The open notes are written in perf runs only
+   (`FrameLogNoteOpens`), 64 per log batch.
 
 - If the notes show `gfx/mainmenu.lmp`, `gfx/qplaque.lmp` or `gfx/pause.lmp` mid-demo, a stray
   host key reached PCSX2's USB keyboard and opened the menu. Re-run with focus away from PCSX2.
@@ -145,6 +159,36 @@ paths:
   `rm -rf build/release/src`, `make release run` with `ps2_perftest 1`. Revert and rebuild
   clean afterwards.
 - `build/baselines/` is untracked and local, holding captures, summaries and config backups.
+
+## Every level: the map cycle's perf pass (`ps2_testmaps 2`, debug build)
+
+The demos see three levels; this sees all of them. The registered data's 38 took 10.8 minutes
+(about 17 s a level), and the shareware 9 take about 3.
+
+1. Use the scratch-directory recipe, with `ps2_testmaps 2` in its `autoexec.cfg` (the cvar isn't
+   archived, so the config can't arm it), and back up the card. Wait for `FLOG#end`, then stop
+   PCSX2.
+2. The pass sets up the capture as `ps2_perftest` does, then loads each level in the map cycle's
+   order. In each it turns `god` and `notarget` on, then visits `ps2_testmaps_views` (5)
+   viewpoints: the spawn first, then each time the intermission camera, deathmatch start or
+   teleporter exit farthest from those already picked, moved to with `setpos`. At each it writes
+   `FLOG#view,<row>,<n>,<kind>,<origin>` and turns a full circle, 2 degrees a frame.
+3. `frame_budget.py <log>`: the per-map table names each level's slowest viewpoint, and the 20
+   slowest viewpoints follow, with the View, World, Ent, Sky and tris means that say what made
+   them slow. A viewpoint's first 15 frames (the teleport, and the textures it uploads) settle
+   apart, as a map's first 30 do.
+
+- **Two captures compare row for row** (`compare_flog.py`), as the demos do: a level's
+  viewpoints come from its entities and are the same every run, and the turn steps per frame,
+  not per second.
+- **What it doesn't see:** fights (the demos have them; with notarget the monsters stand where
+  the level put them), and anything between the viewpoints.
+- Noclip still touches triggers. A viewpoint inside a trigger_teleport is never reached
+  (`MapCycle: viewpoint <n> ... was never reached`): the turn happens where the trigger put the
+  player. A viewpoint inside a trigger_changelevel ends the level early (`MapCycle: left ...`).
+- The tour counts the frames `Host_Frame` ran (`host_framecount`), not the main loop's passes:
+  `Host_FilterTime` skips most passes while a level settles, and the first build's turns were
+  over in 40 ms.
 
 ## Codegen A/B across the backend (no tree edits)
 

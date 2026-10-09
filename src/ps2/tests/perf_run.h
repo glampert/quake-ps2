@@ -40,6 +40,14 @@ void RegisterPerfTestCvar();
 // Do not enable alongside "ps2_testmaps" - both drive the game through the command buffer
 // and would fight over it.
 void RunPerfTest();
+
+// What every unattended capture does before its first measured frame and after its last, shared
+// by RunPerfTest's demos and the map cycle's perf pass ("ps2_testmaps 2"). BeginPerfCapture forces
+// "developer 0" and "ps2_frame_log 1", turns the file-open notes on and the on-screen debug
+// panels off (archived, and left off). EndPerfCapture writes the frame log's last batch and its
+// FLOG#end row, then queues a quit, which writes the config.
+void BeginPerfCapture();
+void EndPerfCapture();
 #endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::test

@@ -4,9 +4,11 @@
 A debug build prints one FLOG row per frame (ps2::debug::FrameLogCapture, see
 src/ps2/renderer/profile.cpp): the profiler events in microseconds and the draw
 counters, under a FLOG#hdr naming the columns. FLOG#map marks a level load,
+FLOG#view the viewpoint the map cycle's perf pass looks around from next,
 FLOG#open names a file opened in that row and FLOG#end closes a complete run.
-The perf run (ps2_perftest 1) plays the demos with the log on and quits, and
-the rows end up in PCSX2's logs/emulog.txt (with EnableIOPConsole on).
+The perf run (ps2_perftest 1) plays the demos with the log on and quits, as the
+perf pass (ps2_testmaps 2) does after touring every level, and the rows end up
+in PCSX2's logs/emulog.txt (with EnableIOPConsole on).
 
 The game's stdout interleaves without newlines, so rows can be embedded mid-line
 (e.g. "[Q1] Map: e1m1FLOG#map,12,e1m1"); this pulls them out by position rather
@@ -22,7 +24,7 @@ import re, sys, statistics
 
 def extract(path):
     text = open(path, errors='replace').read()
-    hdr, rows, maps, opens, end = None, [], [], [], None
+    hdr, rows, maps, views, opens, end = None, [], [], [], [], None
     for m in re.finditer(r'FLOG(#\w+)?,', text):
         start = m.start()
         line_end = text.find('\n', start)
@@ -35,10 +37,11 @@ def extract(path):
         kind = m.group(1)
         if kind == '#hdr':   hdr = chunk
         elif kind == '#map': maps.append(chunk)
+        elif kind == '#view': views.append(chunk)
         elif kind == '#end': end = chunk
         elif kind == '#open': opens.append(chunk)
         elif kind is None:   rows.append(chunk)
-    return hdr, rows, maps, opens, end
+    return hdr, rows, maps, views, opens, end
 
 def main():
     path = sys.argv[1]
@@ -46,11 +49,12 @@ def main():
     if '--rows' in sys.argv:
         out = sys.argv[sys.argv.index('--rows') + 1]
 
-    hdr, rows, maps, opens, end = extract(path)
+    hdr, rows, maps, views, opens, end = extract(path)
     if out:
         with open(out, 'w') as f:
             if hdr: f.write(hdr + '\n')
             for r in maps: f.write(r + '\n')
+            for r in views: f.write(r + '\n')
             for r in rows: f.write(r + '\n')
             for r in opens: f.write(r + '\n')
             if end: f.write(end + '\n')
@@ -67,7 +71,7 @@ def main():
             try: data[c].append(float(v))
             except ValueError: pass
 
-    print(f"frames: {len(rows)}  malformed: {bad}  maps: {len(maps)}  opens: {len(opens)}  end: {end}")
+    print(f"frames: {len(rows)}  malformed: {bad}  maps: {len(maps)}  views: {len(views)}  opens: {len(opens)}  end: {end}")
     print(f"{'column':<16}{'mean':>12}{'p50':>10}{'p95':>10}{'max':>10}")
     def pct(v, q):
         v = sorted(v); return v[min(len(v) - 1, int(len(v) * q))]

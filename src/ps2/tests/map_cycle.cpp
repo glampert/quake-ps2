@@ -1,10 +1,11 @@
 /* ================================================================================================
  * File: map_cycle.cpp
- * Brief: Map cycling memory smoke test. See map_cycle.h.
+ * Brief: Map cycling memory and performance test. See map_cycle.h.
  *
- *  Drives the real console command ("map <name>") through the command buffer rather than
- *  calling into the server directly, so the sequence the test exercises is byte for byte the
- *  one a player produces.
+ *  Drives the real console commands ("map <name>", and for the perf pass "setpos", "god" and
+ *  "notarget") through the command buffer rather than calling into the server directly, so the
+ *  sequence the test exercises is byte for byte the one a player produces. The perf pass's
+ *  turns are the one exception: it sets the client's view angles, as a held stick would.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -13,11 +14,14 @@
 
 #if PS2_QUAKE_DEBUG
 #include "ps2/tests/map_cycle.h"
+#include "ps2/tests/perf_run.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/system/heap.h"
 #include "ps2/system/sys.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 extern "C" {
@@ -60,9 +64,10 @@ constexpr int kMinLevelBytes = 32 * 1024;
 
 enum class State
 {
-    Idle,    // Nothing issued yet; kick off the next map.
-    Loading, // Command issued, waiting for the world to come up.
-    Dwelling // Map is up; stay in it so it actually renders.
+    Idle,     // Nothing issued yet; kick off the next map.
+    Loading,  // Command issued, waiting for the world to come up.
+    Dwelling, // Map is up; stay in it so it actually renders.
+    Touring   // Perf pass: map is up; looking around from each of its viewpoints.
 };
 
 // A map that never comes up is a failed test, not a reason to hang forever.
@@ -74,6 +79,7 @@ constexpr int kFramesToConfirm = 2;
 
 static cvar_t s_enabled = ps2::MakeCvar("ps2_testmaps", "0", CVAR_NONE);
 static cvar_t s_dwell   = ps2::MakeCvar("ps2_testmaps_dwell", "8", CVAR_NONE);
+static cvar_t s_views   = ps2::MakeCvar("ps2_testmaps_views", "5", CVAR_NONE);
 
 static MapEntry s_maps[kMaxMaps] = {}; // the levels to visit, in order (BuildMapList)
 static int      s_mapCount       = 0;
@@ -89,6 +95,8 @@ static int    s_failed        = 0;
 static size_t s_peakBeforeMap = 0;
 static int    s_hunkPeak      = 0; // Hunk in use plus cache, the most any map took.
 static char   s_targetBsp[MAX_QPATH] = {};
+static bool   s_perfPass      = false; // this pass is "ps2_testmaps 2"
+static int    s_cutShort      = 0;     // perf pass: levels left before their tour ended
 
 void Restart()
 {
@@ -102,6 +110,7 @@ void Restart()
     s_peakBeforeMap = 0;
     s_hunkPeak      = 0;
     s_targetBsp[0]  = '\0';
+    s_cutShort      = 0;
     s_mapCount      = 0;
     s_listBuilt     = false; // rescanned, in case the game directory changed in between
 }
@@ -234,6 +243,283 @@ void BuildMapList()
 }
 
 // ------------------------------------------------------------------------------------------------
+// The perf pass's tour
+// ------------------------------------------------------------------------------------------------
+
+// A spot the perf pass looks around from: the player's origin there (the eye is the view height
+// above it), the pitch it looks at, and the yaw its turn starts from.
+struct Viewpoint
+{
+    vec3_t       origin;
+    float        pitch;
+    float        yaw;
+    const char * kind; // what marks it in the map: "spawn", "intermission", "deathmatch", "teleport"
+};
+
+// The spots a level can offer. id's offer 10 (dm1) to 28 (e4m6).
+constexpr int kMaxCandidates = 64;
+
+// The most viewpoints "ps2_testmaps_views" can ask of a level.
+constexpr int kMaxViews = 16;
+
+// A full turn at each viewpoint: 2 degrees a frame, 3 seconds at 60 fps. A step per frame rather
+// than per second, so every run looks the same way in the same frame however fast it ran.
+constexpr float kYawStep    = 2.0f;
+constexpr int   kTurnFrames = 180;
+
+// setpos travels to the server as a command, and the player's new origin comes back with the
+// next update. A spot inside a trigger_teleport is never reached (the trigger moves the player
+// on), so after this many frames the turn starts from wherever the player is.
+constexpr int   kArriveFrames = 30;
+constexpr float kArriveDist2  = 4.0f; // within 2 units: the protocol sends origins in 1/8ths
+
+// QuakeC's info_teleport_destination raises itself 27 units at spawn, and a teleporter puts the
+// player at its origin.
+constexpr float kTeleportRaise = 27.0f;
+
+static Viewpoint s_tour[kMaxViews] = {};
+static int       s_tourCount = 0;
+static int       s_tourView  = 0;  // the viewpoint being visited
+static int       s_tourFrame = 0;  // frames spent at it, arriving included
+static int       s_turnFrame = -1; // frames into its turn; -1 while still arriving
+static int       s_lastFrame = 0;  // host_framecount when the tour last advanced
+
+// Reads the spots a tour can use out of the level's entity lump, the map's own text: the
+// intermission cameras, the deathmatch starts and the teleporters' exits. All three are spread
+// over the level, and the cameras frame the views its designer wanted seen. The coop starts are
+// left out: they crowd the single-player one.
+int CollectCandidates(Viewpoint * const out)
+{
+    int count = 0;
+    const char * data = cl.worldmodel->entities;
+    while (count < kMaxCandidates)
+    {
+        data = COM_Parse(data);
+        if (data == nullptr || com_token[0] != '{')
+        {
+            break;
+        }
+
+        char   classname[64] = {};
+        vec3_t origin = { 0.0f, 0.0f, 0.0f };
+        vec3_t mangle = { 0.0f, 0.0f, 0.0f };
+        float  angle  = 0.0f;
+        for (;;)
+        {
+            data = COM_Parse(data);
+            if (data == nullptr || com_token[0] == '}')
+            {
+                break;
+            }
+
+            char key[64];
+            q_strlcpy(key, com_token, sizeof(key));
+            data = COM_ParseEx(data, CPE_ALLOWTRUNC);
+            if (data == nullptr)
+            {
+                break;
+            }
+
+            if (std::strcmp(key, "classname") == 0)
+            {
+                q_strlcpy(classname, com_token, sizeof(classname));
+            }
+            else if (std::strcmp(key, "origin") == 0)
+            {
+                std::sscanf(com_token, "%f %f %f", &origin[0], &origin[1], &origin[2]);
+            }
+            else if (std::strcmp(key, "mangle") == 0)
+            {
+                std::sscanf(com_token, "%f %f %f", &mangle[0], &mangle[1], &mangle[2]);
+            }
+            else if (std::strcmp(key, "angle") == 0)
+            {
+                angle = static_cast<float>(std::atof(com_token));
+            }
+        }
+        if (data == nullptr)
+        {
+            break; // a truncated lump: keep what came before it
+        }
+
+        Viewpoint v = {};
+        VectorCopy(origin, v.origin);
+        v.yaw = angle;
+        if (std::strcmp(classname, "info_intermission") == 0)
+        {
+            // The camera is the eye: the intermission takes the view height away.
+            v.origin[2] -= static_cast<float>(DEFAULT_VIEWHEIGHT);
+            v.pitch = mangle[0];
+            v.yaw   = mangle[1];
+            v.kind  = "intermission";
+        }
+        else if (std::strcmp(classname, "info_player_deathmatch") == 0)
+        {
+            v.kind = "deathmatch";
+        }
+        else if (std::strcmp(classname, "info_teleport_destination") == 0)
+        {
+            v.origin[2] += kTeleportRaise;
+            v.kind = "teleport";
+        }
+        else
+        {
+            continue;
+        }
+        out[count++] = v;
+    }
+    return count;
+}
+
+// Picks the tour: where the player spawned, then each time the candidate farthest from every
+// spot already picked, so the views spread over the level rather than bunching where most of its
+// teleporters are. Ties go to the earlier entity, so a level always gets the same tour.
+void PlanTour()
+{
+    Viewpoint candidates[kMaxCandidates];
+    const int numCandidates = CollectCandidates(candidates);
+
+    Viewpoint & spawn = s_tour[0];
+    VectorCopy(cl_entities[cl.viewentity].origin, spawn.origin);
+    spawn.pitch = 0.0f;
+    spawn.yaw   = cl.viewangles[YAW];
+    spawn.kind  = "spawn";
+    s_tourCount = 1;
+
+    const int asked  = static_cast<int>(s_views.value);
+    const int wanted = (asked < 1) ? 1 : (asked > kMaxViews) ? kMaxViews : asked;
+
+    bool taken[kMaxCandidates] = {};
+    while (s_tourCount < wanted)
+    {
+        int   best     = -1;
+        float bestDist = -1.0f;
+        for (int c = 0; c < numCandidates; ++c)
+        {
+            if (taken[c])
+            {
+                continue;
+            }
+            float nearest = 1.0e30f;
+            for (int t = 0; t < s_tourCount; ++t)
+            {
+                vec3_t d;
+                VectorSubtract(candidates[c].origin, s_tour[t].origin, d);
+                const float dist = DotProduct(d, d);
+                nearest = (dist < nearest) ? dist : nearest;
+            }
+            if (nearest > bestDist)
+            {
+                bestDist = nearest;
+                best     = c;
+            }
+        }
+        if (best < 0)
+        {
+            break; // fewer spots than asked for
+        }
+        taken[best] = true;
+        s_tour[s_tourCount++] = candidates[best];
+    }
+}
+
+void StartTour(const MapEntry & map, const int index)
+{
+    // Nothing in the level may cut the tour short or make two runs differ: god mode keeps the
+    // player alive, and with notarget the monsters stay where the level put them.
+    Cbuf_AddText("god 1\nnotarget 1\n");
+
+    PlanTour();
+    s_tourView  = 0;
+    s_tourFrame = 0;
+    s_turnFrame = -1;
+    s_lastFrame = host_framecount;
+
+    char kinds[kMaxViews * 14] = {};
+    for (int i = 0; i < s_tourCount; ++i)
+    {
+        q_strlcat(kinds, (i > 0) ? ", " : "", sizeof(kinds));
+        q_strlcat(kinds, s_tour[i].kind, sizeof(kinds));
+    }
+    Con_Printf("MapCycle [%2d/%2d] %-6s %-5s %d viewpoints: %s\n", index + 1, s_mapCount, map.name, map.pak,
+               s_tourCount, kinds);
+}
+
+// Runs one frame of the tour. Returns false once every viewpoint has had its turn.
+bool AdvanceTour()
+{
+    if (s_tourView >= s_tourCount)
+    {
+        return false;
+    }
+
+    // The main loop calls the test on every pass, and Host_Frame only runs a frame on some of them
+    // (Host_FilterTime holds it to host_maxfps): the tour counts the frames that ran.
+    if (host_framecount == s_lastFrame)
+    {
+        return true;
+    }
+    s_lastFrame = host_framecount;
+    const Viewpoint & v = s_tour[s_tourView];
+
+    if (s_tourFrame == 0)
+    {
+        // The marker goes first: the rows after it are this viewpoint's, arriving included.
+        char what[96];
+        std::snprintf(what, sizeof(what), "%d,%s,%.0f %.0f %.0f", s_tourView + 1, v.kind,
+                      static_cast<double>(v.origin[0]), static_cast<double>(v.origin[1]),
+                      static_cast<double>(v.origin[2]));
+        ps2::debug::FrameLogMarkView(what);
+
+        if (s_tourView > 0)
+        {
+            Cbuf_AddText(va("setpos %.1f %.1f %.1f\n", static_cast<double>(v.origin[0]),
+                            static_cast<double>(v.origin[1]), static_cast<double>(v.origin[2])));
+        }
+    }
+
+    if (s_turnFrame < 0)
+    {
+        // The spawn is where the player already stands.
+        vec3_t d;
+        VectorSubtract(cl_entities[cl.viewentity].origin, v.origin, d);
+        const bool there = (s_tourView == 0) || DotProduct(d, d) < kArriveDist2;
+        if (there || s_tourFrame >= kArriveFrames)
+        {
+            if (!there)
+            {
+                Con_Printf("MapCycle: viewpoint %d (%s) was never reached - turning where the player is.\n",
+                           s_tourView + 1, v.kind);
+            }
+            s_turnFrame = 0;
+        }
+    }
+
+    // Facing the way the turn starts while arriving, then around in steps.
+    const float step = static_cast<float>((s_turnFrame > 0) ? s_turnFrame : 0);
+    cl.viewangles[PITCH] = v.pitch;
+    cl.viewangles[YAW]   = anglemod(v.yaw + kYawStep * step);
+    cl.viewangles[ROLL]  = 0.0f;
+
+    ++s_tourFrame;
+    if (s_turnFrame >= 0 && ++s_turnFrame >= kTurnFrames)
+    {
+        ++s_tourView;
+        s_tourFrame = 0;
+        s_turnFrame = -1;
+    }
+    return true;
+}
+
+// Marks where the level's tour stops counting. The next map command runs in a frame that still
+// draws this level, and its load lands in that row; the marker keeps the row out of the level's
+// figures.
+void EndTour()
+{
+    ps2::debug::FrameLogMarkView("0,end,-");
+}
+
+// ------------------------------------------------------------------------------------------------
 // Reports
 // ------------------------------------------------------------------------------------------------
 
@@ -317,6 +603,10 @@ void Finish()
 
     Con_Printf("MapCycle: pass complete - %d of %d maps loaded, %d timed out.\n",
                s_mapCount - s_failed, s_mapCount, s_failed);
+    if (s_cutShort > 0)
+    {
+        Con_Printf("MapCycle: %d levels were left before their tour ended.\n", s_cutShort);
+    }
     Con_Printf("MapCycle: the heap peaked at %s of %s installed; the most hunk any map took, cache included, "
                "was %s of %s.\n",
                ps2::heap::FormatMemoryUnit(ps2::heap::GetPeakMemBytes(), true, peak, sizeof(peak)),
@@ -331,6 +621,45 @@ void Finish()
     Con_Printf("MapCycle: done.\n");
 
     s_done = true;
+
+#if PS2_QUAKE_PROFILE
+    if (s_perfPass)
+    {
+        EndPerfCapture();
+    }
+#endif // PS2_QUAKE_PROFILE
+}
+
+// Reads which pass this is and lists the maps. The perf pass starts its capture here, before the
+// first map loads, so the frame log marks that map too.
+void BeginPass()
+{
+    s_perfPass = (static_cast<int>(s_enabled.value) == 2);
+
+#if PS2_QUAKE_PROFILE
+    // Once per boot: a "ps2_testmaps_restart" mid-pass starts the maps over in the same capture.
+    static bool s_captureStarted = false;
+    if (s_perfPass && !s_captureStarted)
+    {
+        s_captureStarted = true;
+        BeginPerfCapture();
+    }
+#else
+    if (s_perfPass)
+    {
+        Con_Printf("MapCycle: the perf pass needs a profile build (PS2_QUAKE_PROFILE) - running the memory pass.\n");
+        s_perfPass = false;
+    }
+#endif // PS2_QUAKE_PROFILE
+
+    BuildMapList();
+
+    if (s_perfPass)
+    {
+        Con_Printf("MapCycle: perf pass - up to %d viewpoints a level, a full turn at each; developer 0, overlays "
+                   "off, frame log and file-open notes on.\n",
+                   static_cast<int>(s_views.value));
+    }
 }
 
 // Issues the next map of the list. Returns false when the list is exhausted.
@@ -363,6 +692,7 @@ void InitMapCycle()
 {
     Cvar_RegisterVariable(&s_enabled);
     Cvar_RegisterVariable(&s_dwell);
+    Cvar_RegisterVariable(&s_views);
     Cmd_AddCommand("ps2_testmaps_restart", &Restart);
 }
 
@@ -378,7 +708,7 @@ void RunMapCycle()
     case State::Idle:
         if (!s_listBuilt)
         {
-            BuildMapList();
+            BeginPass();
         }
         if (!StartNextMap())
         {
@@ -389,6 +719,12 @@ void RunMapCycle()
     case State::Loading:
         if (TargetLevelIsUp() && ++s_confirmFrames >= kFramesToConfirm)
         {
+            if (s_perfPass)
+            {
+                StartTour(s_maps[s_nextMap], s_nextMap);
+                s_state = State::Touring;
+                break;
+            }
             const int dwellMs = static_cast<int>(s_dwell.value * 1000.0f);
             s_dwellUntilMs = ps2::sys::Milliseconds() + ((dwellMs > 0) ? dwellMs : 1);
             s_state = State::Dwelling;
@@ -407,6 +743,28 @@ void RunMapCycle()
     case State::Dwelling:
         if (ps2::sys::Milliseconds() >= s_dwellUntilMs)
         {
+            ReportMap(s_maps[s_nextMap], s_nextMap);
+            ++s_nextMap;
+            s_state = State::Idle;
+        }
+        break;
+
+    case State::Touring:
+        if (!TargetLevelIsUp())
+        {
+            // Noclip still touches triggers, so a viewpoint inside a trigger_changelevel ends the
+            // level. The frame log names whatever loaded instead with its own map marker.
+            Con_Printf("MapCycle: left '%s' at viewpoint %d of %d - moving on.\n", s_maps[s_nextMap].name,
+                       s_tourView + 1, s_tourCount);
+            EndTour();
+            ++s_cutShort;
+            ++s_nextMap;
+            s_state = State::Idle;
+            break;
+        }
+        if (!AdvanceTour())
+        {
+            EndTour();
             ReportMap(s_maps[s_nextMap], s_nextMap);
             ++s_nextMap;
             s_state = State::Idle;

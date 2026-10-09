@@ -7,8 +7,9 @@ and exits non-zero if any column's mean moved past the threshold, so it can gate
 a refactor. Columns are matched by name from each file's FLOG#hdr, so captures
 from builds that log different columns still compare on the ones they share.
 
-Both captures have to be the same run - the ps2_perftest demos - or the
-differences are the content, not the code.
+Both captures have to be the same run - the ps2_perftest demos, or the map
+cycle's perf pass over the same game data - or the differences are the content,
+not the code.
 
 Usage: compare_flog.py <before> <after> [--threshold 3.0]
 """
@@ -24,7 +25,7 @@ from summarize_flog import extract
 RATE_COLUMNS = {'frame'}
 
 def load(path):
-    hdr, rows, _, _, _ = extract(path)
+    hdr, rows, *_ = extract(path)
     if hdr is None:
         sys.exit(f"{path}: no FLOG#hdr - not a frame-log capture")
     cols = hdr.split(',')[1:]

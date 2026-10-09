@@ -81,17 +81,11 @@ void NextDemoOrFinish()
     Con_Printf("PerfRun: complete - %d of %d demos played, %d timed out.\n",
                ps2::ArrayLength(kDemos) - s_failed, ps2::ArrayLength(kDemos), s_failed);
 
-    // The frame log writes in batches, so the tail of the run is still buffered. This also marks
-    // the end, which is what tells a completed capture apart from one the emulator cut short.
-    ps2::debug::FrameLogFinish();
-
     // Disarm before quitting, so the config the quit writes has it back at 0. A run that never
     // reaches here (a crash, or the emulator being closed) deliberately stays armed.
     Cvar_SetQuick(&s_enabled, "0");
 
-    // Through the command buffer, so the quit runs at the top of the next frame, from where
-    // Host_Shutdown takes everything down in the usual order.
-    Cbuf_AddText("quit\n");
+    EndPerfCapture();
     s_done = true;
 }
 #endif // PS2_QUAKE_PROFILE
@@ -104,6 +98,40 @@ void RegisterPerfTestCvar()
 }
 
 #if PS2_QUAKE_PROFILE
+void BeginPerfCapture()
+{
+    // Set directly rather than through the command buffer: they have to be in effect before
+    // the first measured frame. developer 0 keeps Con_DPrintf out of the run - each line is
+    // a round trip to the IOP, a spike in whatever frame it lands in.
+    Cvar_Set("developer", "0");
+    Cvar_Set("ps2_frame_log", "1");
+
+    // Every file the run opens gets a line in the log, which is how a load mid-level names
+    // itself. Only these runs ask for them: a map load opens hundreds of files, and each note
+    // is a line the next dump sends through the IOP.
+    ps2::debug::FrameLogNoteOpens(true);
+
+    // And every on-screen debug panel off: they cost EE time of their own, and the frame log
+    // carries every number they show. They are archived and not restored, so the config the
+    // run's quit writes keeps them off: set them back by hand afterwards.
+    Cvar_Set("ps2_show_fps", "0");
+    Cvar_Set("ps2_show_memstats", "0");
+    Cvar_Set("ps2_show_vramstats", "0");
+    Cvar_Set("ps2_show_drawstats", "0");
+    Cvar_Set("ps2_show_profile", "0");
+}
+
+void EndPerfCapture()
+{
+    // The frame log writes in batches, so the tail of the run is still buffered. This also marks
+    // the end, which is what tells a completed capture apart from one the emulator cut short.
+    ps2::debug::FrameLogFinish();
+
+    // Through the command buffer, so the quit runs at the top of the next frame, from where
+    // Host_Shutdown takes everything down in the usual order.
+    Cbuf_AddText("quit\n");
+}
+
 void RunPerfTest()
 {
     if (s_enabled.value == 0.0f || s_done)
@@ -114,26 +142,7 @@ void RunPerfTest()
     switch (s_state)
     {
     case State::Idle:
-        // Set directly rather than through the command buffer: they have to be in effect before
-        // the first measured frame. developer 0 keeps Con_DPrintf out of the run - each line is
-        // a round trip to the IOP, a spike in whatever frame it lands in.
-        Cvar_Set("developer", "0");
-        Cvar_Set("ps2_frame_log", "1");
-
-        // Every file the run opens gets a line in the log, which is how a load mid-demo names
-        // itself. Only this run asks for them: a map load opens hundreds of files, and each note
-        // is a line the next dump sends through the IOP.
-        ps2::debug::FrameLogNoteOpens(true);
-
-        // And every on-screen debug panel off: they cost EE time of their own, and the frame log
-        // carries every number they show. They are archived and not restored, so the config the
-        // run's quit writes keeps them off: set them back by hand afterwards.
-        Cvar_Set("ps2_show_fps", "0");
-        Cvar_Set("ps2_show_memstats", "0");
-        Cvar_Set("ps2_show_vramstats", "0");
-        Cvar_Set("ps2_show_drawstats", "0");
-        Cvar_Set("ps2_show_profile", "0");
-
+        BeginPerfCapture();
         Con_Printf("PerfRun: starting - %d demos, developer 0, overlays off, frame log and file-open notes on.\n",
                    ps2::ArrayLength(kDemos));
 

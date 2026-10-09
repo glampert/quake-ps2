@@ -357,5 +357,14 @@ void FrameLogMarkMap(const char * mapName)
     std::printf("FLOG#map,%u,%s\n", s_frameIndex, (mapName != nullptr) ? mapName : "?");
 }
 
+void FrameLogMarkView(const char * what)
+{
+    if (!Enabled())
+    {
+        return;
+    }
+    std::printf("FLOG#view,%u,%s\n", s_frameIndex, (what != nullptr) ? what : "?");
+}
+
 } // namespace ps2::debug
 #endif // PS2_QUAKE_PROFILE
