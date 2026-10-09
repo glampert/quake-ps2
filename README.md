@@ -23,7 +23,7 @@ debugging code carry over, ported to QuakeSpasm's interfaces.
 
 **Every bring-up phase is done.** QuakeSpasm runs on the PS2: in PCSX2 it finds the game data
 on `host:`, draws its console, menus and status bar, and takes the DualShock pad (with rumble)
-and a USB keyboard, through the attract-mode demos and every shareware map. The 3D view draws
+and a USB keyboard, through the attract-mode demos and every map of the registered game. The 3D view draws
 all of it: the world - textured, lightmapped, with its fullbright texels, warping water and
 scrolling sky - and the brush models, monsters, items, view weapon, sprites and particles. The
 sound effects and the soundtrack play through the SPU2, and games save to the memory card. Its
@@ -35,8 +35,8 @@ The port was brought up in phases, each checked in PCSX2:
 3. Game data and the game loop, headless. *Done.*
 4. 2D: console, menus, HUD. *Done.*
 5. Input: DualShock and USB keyboard. *Done.*
-6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which no
-   shareware map uses.
+6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which none
+   of id's 38 maps uses (only custom maps set it).
 7. Sound, CD music, save games. *Done.*
 
 What is left is refinement: GS fog, performance work, and a first run on a real console.
@@ -156,7 +156,8 @@ either way, as on the desktop, and is the way to script a session.
 | `ps2_saveinfo` | Says where saves are going, and lists the memory card's save directory. |
 
 Two unattended tests are armed by cvars (see [CVARS.md](CVARS.md)): `ps2_testmaps 1` (debug builds)
-loads every map in turn and prints what each costs in memory, and `ps2_perftest 1` (profile builds)
+loads every level in the paks in turn (the campaign in play order, then the deathmatch maps) and
+prints what each costs in memory, and `ps2_perftest 1` (profile builds)
 plays the three demos with the frame log on and quits, for the scripts in
 [src/tools/scripts/frame_log/](src/tools/scripts/frame_log/).
 

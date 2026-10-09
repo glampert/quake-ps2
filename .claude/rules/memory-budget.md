@@ -83,7 +83,16 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   5.09-6.71 MB left on every map. Outside the hunk: `WorldMdl` 0.46-1.62 MB, `Lightmap` 128-256
   KB, `TexImage` 1.76-2.35 MB (growing with the cached skins), `AliasMdl` 209-370 KB. The heap
   peaked at 25.05 MB in use, with **5.21 MB of RAM free** at the end.
-- **The hunk stays 16 MB:** the shareware maps fit with 5 MB of it to spare, and the
-  registered episodes' bigger levels, with more monsters and their sounds, haven't been
-  measured. Run the cycle on the registered data before cutting it.
+- **The full registered game (2026-10-09)**, pak0 + pak1: 38 maps, the campaign's 32 and then
+  dm1-dm6, with sound and music on, all clean in 5.5 minutes. The hunk (low + high) peaked at
+  **4.63 MB (e3m5)**; most of episodes 2-4 sit at 3.6-4.6 MB. The cache kept growing, to 9.89 MB
+  by `end`, so hunk and cache together peaked at 13.80 MB of the 16 MB, and the least hunk left
+  was **2.20 MB (e4m7)**. Outside the hunk: `WorldMdl` up to 2.12 MB (e3m1), `Lightmap` up to
+  384 KB (e3m5), `TexImage` up to 2.84 MB, and `AliasMdl` 518 KB by the end (every model the
+  run met). The heap peaked at 26.16 MB: **3.20 MB of RAM** stayed outside dlmalloc's arena,
+  and 3.35 MB was free inside it (3.10 MB of that the top chunk). The log is
+  `build/baselines/q1-mapcycle-registered.emulog.txt`.
+- **The hunk stays 16 MB:** every level fits with room to spare, but the cache fills whatever
+  the levels leave. A smaller hunk would trade that room for models and sounds evicted and read
+  back mid-level (`Mod_Extradata`, `S_LoadSound`), a hitch each.
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which is RAM for level data.

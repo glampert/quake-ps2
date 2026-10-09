@@ -87,11 +87,19 @@
 
 The rest are scripted runs:
 
-- **Map cycle** (debug builds): `ps2_testmaps 1` in `autoexec.cfg`. It loads every map the
-  data has in play order, 8 s each (`ps2_testmaps_dwell`), prints a `MapCycle [n/32] <map>`
-  line per map (hunk, cache, backend tags, heap peak, RAM free) and ends with `MapCycle: done.`
-  without quitting: stop PCSX2 then. The nine shareware maps took ~2 minutes, clean, on
-  2026-10-08; the numbers are in [memory-budget.md](memory-budget.md).
+- **Map cycle** (debug builds): `ps2_testmaps 1` in `autoexec.cfg`. It lists every level in the
+  paks (the campaign in play order, then the rest alphabetically: pak1's dm1-dm6), names the
+  campaign maps the data lacks, loads each for 8 s (`ps2_testmaps_dwell`), prints a
+  `MapCycle [n/N] <map> <pak>` line per map (hunk, cache, backend tags, heap peak, RAM free) and
+  ends with `MapCycle: done.` without quitting: stop PCSX2 then.
+- **Running a test on chosen data without touching `id1/`:** copy `build/debug/quake.elf` into a
+  scratch directory beside an `id1/` of symlinks (`pak0.pak` alone is the shareware data: id's
+  1.06 releases ship the same pak0; add `pak1.pak` and `music` for the full game) and its own
+  `autoexec.cfg`, then `PCSX2 -batch -logfile <log> -elf <dir>/quake.elf`: `host:` is the ELF's
+  directory. With no `config.cfg` there, the game reads the memory card's, and nothing writes
+  one unless the run quits. The nine shareware maps took ~2 minutes, clean, on
+  2026-10-08, and the full registered data's 38 took 5.5 minutes, clean, on 2026-10-09; the
+  numbers are in [memory-budget.md](memory-budget.md).
 - **Perf run** (profile builds): `ps2_perftest 1` in `autoexec.cfg`; the recipe is in
   [performance.md](performance.md). It quits at the end, which writes `config.cfg`.
 - **Config write**: `quit` runs `Host_Shutdown`, which writes `id1/config.cfg` through

@@ -1,8 +1,10 @@
 #pragma once
 /* ================================================================================================
  * File: map_cycle.h
- * Brief: Memory smoke test that loads every map of the game data in sequence, in the order the
- *        game plays them, and logs what each one costs.
+ * Brief: Memory smoke test that loads every level in the game data's paks in sequence and logs
+ *        what each one costs: the campaign in the order the game plays it (the shareware pak0 has
+ *        start and episode 1, the registered pak1 the rest), then any other levels (pak1's
+ *        deathmatch arenas) alphabetically.
  *
  *        QuakeSpasm keeps a level in its hunk, which a map change empties, and loads models and
  *        sounds into the cache that shares it; the backend's own level data (the baked world,

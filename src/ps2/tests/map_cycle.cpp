@@ -16,6 +16,7 @@
 #include "ps2/system/heap.h"
 #include "ps2/system/sys.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -29,10 +30,10 @@ extern int hunk_high_used;
 namespace ps2::test {
 namespace {
 
-// Every map of the full game, in the order a playthrough meets them: start, then each
-// episode's levels and its secret one. A map the game data doesn't have (the shareware pak
-// has start and episode 1) is skipped.
-constexpr const char * kMaps[] = {
+// The campaign, in the order a playthrough meets its maps: start, then each episode's levels and
+// its secret one, then end. The shareware pak0 has start and episode 1; the registered pak1 adds
+// the rest, and the deathmatch arenas, which the cycle visits after these.
+constexpr const char * kCampaign[] = {
     "start",
     "e1m1", "e1m2", "e1m3", "e1m4", "e1m5", "e1m6", "e1m7", "e1m8",
     "e2m1", "e2m2", "e2m3", "e2m4", "e2m5", "e2m6", "e2m7",
@@ -40,6 +41,22 @@ constexpr const char * kMaps[] = {
     "e4m1", "e4m2", "e4m3", "e4m4", "e4m5", "e4m6", "e4m7", "e4m8",
     "end",
 };
+
+// A level the cycle visits, and the pak it came from, for the report.
+struct MapEntry
+{
+    char name[32]; // as the "map" command takes it: "e2m1", not "maps/e2m1.bsp"
+    char pak[16];  // the pak's file name without its extension: "pak1"
+};
+
+// Room for every map of id's data (38 with the registered pak) and then some; a pak with more
+// levels than this has the rest left out, which the cycle says when it starts.
+constexpr int kMaxMaps = 128;
+
+// QuakeSpasm's own test for a level in a pak (ExtraMaps_Init): a .bsp under maps/ bigger than
+// this. The brush models beside the levels - the ammo boxes, the health packs, the exploding
+// boxes - are a few KB each.
+constexpr int kMinLevelBytes = 32 * 1024;
 
 enum class State
 {
@@ -58,13 +75,16 @@ constexpr int kFramesToConfirm = 2;
 static cvar_t s_enabled = ps2::MakeCvar("ps2_testmaps", "0", CVAR_NONE);
 static cvar_t s_dwell   = ps2::MakeCvar("ps2_testmaps_dwell", "8", CVAR_NONE);
 
+static MapEntry s_maps[kMaxMaps] = {}; // the levels to visit, in order (BuildMapList)
+static int      s_mapCount       = 0;
+static bool     s_listBuilt      = false;
+
 static State  s_state         = State::Idle;
 static int    s_nextMap       = 0;
 static bool   s_done          = false;
 static int    s_issuedAtMs    = 0;
 static int    s_dwellUntilMs  = 0;
 static int    s_confirmFrames = 0;
-static int    s_skipped       = 0;
 static int    s_failed        = 0;
 static size_t s_peakBeforeMap = 0;
 static int    s_hunkPeak      = 0; // Hunk in use plus cache, the most any map took.
@@ -78,17 +98,144 @@ void Restart()
     s_issuedAtMs    = 0;
     s_dwellUntilMs  = 0;
     s_confirmFrames = 0;
-    s_skipped       = 0;
     s_failed        = 0;
     s_peakBeforeMap = 0;
     s_hunkPeak      = 0;
     s_targetBsp[0]  = '\0';
+    s_mapCount      = 0;
+    s_listBuilt     = false; // rescanned, in case the game directory changed in between
 }
 
 bool TargetLevelIsUp()
 {
     return cls.signon == SIGNONS && cl.worldmodel != nullptr && std::strcmp(cl.worldmodel->name, s_targetBsp) == 0;
 }
+
+// ------------------------------------------------------------------------------------------------
+// The map list
+// ------------------------------------------------------------------------------------------------
+
+int CampaignIndex(const char * const name)
+{
+    for (int i = 0; i < ps2::ArrayLength(kCampaign); ++i)
+    {
+        if (std::strcmp(kCampaign[i], name) == 0)
+        {
+            return i;
+        }
+    }
+    return ps2::ArrayLength(kCampaign);
+}
+
+bool InMapList(const char * const name)
+{
+    for (int i = 0; i < s_mapCount; ++i)
+    {
+        if (std::strcmp(s_maps[i].name, name) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Collects every level in the game data's paks: the campaign's first, in play order, then the rest
+// alphabetically. Only paks are read, which is where id's maps live; a loose maps/ directory (a
+// custom level dropped in) isn't looked at. Whatever the data lacks - the shareware pak has 9 of
+// the campaign's 32 maps - is simply not in the list, and the start of the run says which.
+void BuildMapList()
+{
+    s_mapCount  = 0;
+    s_listBuilt = true;
+
+    int tooLong = 0;
+    int noRoom  = 0;
+
+    // Highest priority first, so a level two paks both have is listed from the one the engine
+    // would load it from.
+    for (const searchpath_t * search = com_searchpaths; search != nullptr; search = search->next)
+    {
+        const pack_t * const pak = search->pack;
+        if (pak == nullptr)
+        {
+            continue; // a directory
+        }
+
+        char pakName[sizeof(MapEntry::pak)];
+        COM_StripExtension(COM_SkipPath(pak->filename), pakName, sizeof(pakName));
+
+        for (int i = 0; i < pak->numfiles; ++i)
+        {
+            const packfile_t & file = pak->files[i];
+            if (std::strncmp(file.name, "maps/", 5) != 0 || q_strcasecmp(COM_FileGetExtension(file.name), "bsp") != 0 ||
+                file.filelen <= kMinLevelBytes)
+            {
+                continue;
+            }
+
+            char name[MAX_QPATH];
+            COM_StripExtension(file.name + 5, name, sizeof(name));
+            if (std::strlen(name) >= sizeof(MapEntry::name))
+            {
+                ++tooLong;
+                continue;
+            }
+            if (InMapList(name))
+            {
+                continue;
+            }
+            if (s_mapCount == kMaxMaps)
+            {
+                ++noRoom;
+                continue;
+            }
+
+            MapEntry & entry = s_maps[s_mapCount++];
+            q_strlcpy(entry.name, name, sizeof(entry.name));
+            q_strlcpy(entry.pak, pakName, sizeof(entry.pak));
+        }
+    }
+
+    std::sort(s_maps, s_maps + s_mapCount, [](const MapEntry & a, const MapEntry & b) {
+        const int ia = CampaignIndex(a.name);
+        const int ib = CampaignIndex(b.name);
+        return (ia != ib) ? (ia < ib) : (std::strcmp(a.name, b.name) < 0);
+    });
+
+    int campaign = 0;
+    while (campaign < s_mapCount && CampaignIndex(s_maps[campaign].name) < ps2::ArrayLength(kCampaign))
+    {
+        ++campaign;
+    }
+
+    Con_Printf("MapCycle: %d maps - %d of the campaign's %d, then %d more.\n", s_mapCount, campaign,
+               ps2::ArrayLength(kCampaign), s_mapCount - campaign);
+
+    // The campaign maps the data doesn't have, on one line: a shareware run lists episodes 2-4
+    // and end here, and that is all it says about them.
+    if (campaign < ps2::ArrayLength(kCampaign))
+    {
+        char missing[256] = {};
+        for (const char * const name : kCampaign)
+        {
+            if (!InMapList(name))
+            {
+                q_strlcat(missing, " ", sizeof(missing));
+                q_strlcat(missing, name, sizeof(missing));
+            }
+        }
+        Con_Printf("MapCycle: not in this game data:%s\n", missing);
+    }
+    if (tooLong > 0 || noRoom > 0)
+    {
+        Con_Printf("MapCycle: left out %d maps with names of %d characters or more, and %d past the first %d.\n",
+                   tooLong, static_cast<int>(sizeof(MapEntry::name)), noRoom, kMaxMaps);
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Reports
+// ------------------------------------------------------------------------------------------------
 
 size_t TagBytes(const ps2::heap::MemTag tag)
 {
@@ -98,7 +245,7 @@ size_t TagBytes(const ps2::heap::MemTag tag)
 // One line per map: QuakeSpasm's hunk (the level, and the cache of models and sounds it loaded,
 // and what is left of the hunk after both), then the backend's level data by tag and the
 // program's totals. "NEW PEAK" marks the map whose load took the most of the heap.
-void ReportMap(const char * const name, const int index)
+void ReportMap(const MapEntry & map, const int index)
 {
     using ps2::heap::FormatMemoryUnit;
     using ps2::heap::MemTag;
@@ -115,9 +262,9 @@ void ReportMap(const char * const name, const int index)
 
     const size_t peakNow = ps2::heap::GetPeakMemBytes();
 
-    Con_Printf("MapCycle [%2d/%2d] %-6s Hunk %-9s Cache %-9s HunkLeft %-9s | World %-9s Light %-9s Tex %-9s "
+    Con_Printf("MapCycle [%2d/%2d] %-6s %-5s Hunk %-9s Cache %-9s HunkLeft %-9s | World %-9s Light %-9s Tex %-9s "
                "Mdl %-9s Mus %-9s | PEAK %-9s FREE %-9s%s\n",
-               index + 1, ps2::ArrayLength(kMaps), name,
+               index + 1, s_mapCount, map.name, map.pak,
                FormatMemoryUnit(static_cast<size_t>(hunkUsed),  true, hunk,  sizeof(hunk)),
                FormatMemoryUnit(static_cast<size_t>(cacheUsed), true, cache, sizeof(cache)),
                FormatMemoryUnit(static_cast<size_t>((hunkLeft > 0) ? hunkLeft : 0), true, left, sizeof(left)),
@@ -130,8 +277,8 @@ void ReportMap(const char * const name, const int index)
                FormatMemoryUnit(ps2::heap::GetAvailableMemBytes(), true, freeMem, sizeof(freeMem)),
                (peakNow > s_peakBeforeMap) ? "  <- NEW PEAK" : "");
 
-    Con_Printf("MapCycle [%2d/%2d] %-6s load peak %-9s ARENA %-9s\n",
-               index + 1, ps2::ArrayLength(kMaps), name,
+    Con_Printf("MapCycle [%2d/%2d] %-6s %-5s load peak %-9s ARENA %-9s\n",
+               index + 1, s_mapCount, map.name, map.pak,
                FormatMemoryUnit(ps2::heap::GetWindowPeakMemBytes(), true, peak, sizeof(peak)),
                FormatMemoryUnit(ps2::heap::GetHeapStats().arenaBytes, true, freeMem, sizeof(freeMem)));
 }
@@ -168,8 +315,8 @@ void Finish()
     char peak[ps2::heap::kMemUnitStrSize], total[ps2::heap::kMemUnitStrSize];
     char hunk[ps2::heap::kMemUnitStrSize], hunkSize[ps2::heap::kMemUnitStrSize];
 
-    Con_Printf("MapCycle: pass complete - %d loaded, %d skipped (not in the game data), %d timed out.\n",
-               ps2::ArrayLength(kMaps) - s_skipped - s_failed, s_skipped, s_failed);
+    Con_Printf("MapCycle: pass complete - %d of %d maps loaded, %d timed out.\n",
+               s_mapCount - s_failed, s_mapCount, s_failed);
     Con_Printf("MapCycle: the heap peaked at %s of %s installed; the most hunk any map took, cache included, "
                "was %s of %s.\n",
                ps2::heap::FormatMemoryUnit(ps2::heap::GetPeakMemBytes(), true, peak, sizeof(peak)),
@@ -186,35 +333,28 @@ void Finish()
     s_done = true;
 }
 
-// Issues the next map, skipping any the game data doesn't have. Returns false when the list is
-// exhausted.
+// Issues the next map of the list. Returns false when the list is exhausted.
 bool StartNextMap()
 {
-    while (s_nextMap < ps2::ArrayLength(kMaps))
+    if (s_nextMap >= s_mapCount)
     {
-        const char * const name = kMaps[s_nextMap];
-        std::snprintf(s_targetBsp, sizeof(s_targetBsp), "maps/%s.bsp", name);
-
-        if (!COM_FileExists(s_targetBsp, nullptr))
-        {
-            ++s_skipped;
-            ++s_nextMap;
-            continue;
-        }
-
-        // Sampled before the load so ReportMap can tell whether this map set a new high-water,
-        // and the window peak restarted, so it measures this load alone.
-        s_peakBeforeMap = ps2::heap::GetPeakMemBytes();
-        ps2::heap::ResetWindowPeak();
-
-        Cbuf_AddText(va("map %s\n", name));
-
-        s_issuedAtMs    = ps2::sys::Milliseconds();
-        s_confirmFrames = 0;
-        s_state         = State::Loading;
-        return true;
+        return false;
     }
-    return false;
+
+    const char * const name = s_maps[s_nextMap].name;
+    std::snprintf(s_targetBsp, sizeof(s_targetBsp), "maps/%s.bsp", name);
+
+    // Sampled before the load so ReportMap can tell whether this map set a new high-water,
+    // and the window peak restarted, so it measures this load alone.
+    s_peakBeforeMap = ps2::heap::GetPeakMemBytes();
+    ps2::heap::ResetWindowPeak();
+
+    Cbuf_AddText(va("map %s\n", name));
+
+    s_issuedAtMs    = ps2::sys::Milliseconds();
+    s_confirmFrames = 0;
+    s_state         = State::Loading;
+    return true;
 }
 
 } // namespace
@@ -236,6 +376,10 @@ void RunMapCycle()
     switch (s_state)
     {
     case State::Idle:
+        if (!s_listBuilt)
+        {
+            BuildMapList();
+        }
         if (!StartNextMap())
         {
             Finish();
@@ -253,7 +397,7 @@ void RunMapCycle()
         if ((ps2::sys::Milliseconds() - s_issuedAtMs) > kLoadTimeoutMs)
         {
             Con_Printf("MapCycle: '%s' never came up after %d seconds - moving on.\n",
-                       kMaps[s_nextMap], kLoadTimeoutMs / 1000);
+                       s_maps[s_nextMap].name, kLoadTimeoutMs / 1000);
             ++s_failed;
             ++s_nextMap;
             s_state = State::Idle;
@@ -263,7 +407,7 @@ void RunMapCycle()
     case State::Dwelling:
         if (ps2::sys::Milliseconds() >= s_dwellUntilMs)
         {
-            ReportMap(kMaps[s_nextMap], s_nextMap);
+            ReportMap(s_maps[s_nextMap], s_nextMap);
             ++s_nextMap;
             s_state = State::Idle;
         }
