@@ -641,7 +641,7 @@ void BeginFrame(const bool dither)
     PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
     s_frameStarted = true;
 
-    // Reset. Safe here rather than a frame late: PS2_BeginFrame runs debug::FrameLogCapture,
+    // Reset. Safe here rather than a frame late: GL_BeginRendering runs debug::FrameLogCapture,
     // which reads the finished frame's counters, before it calls this.
     PS2_PROFILE_ONLY(GetStats() = {});
 

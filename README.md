@@ -35,11 +35,11 @@ The port was brought up in phases, each checked in PCSX2:
 3. Game data and the game loop, headless. *Done.*
 4. 2D: console, menus, HUD. *Done.*
 5. Input: DualShock and USB keyboard. *Done.*
-6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done*, but for fog, which none
-   of id's 38 maps uses (only custom maps set it).
+6. 3D: world, lightmaps, water, sky, models, sprites, particles. *Done.* GS fog was left out on
+   purpose: none of id's 38 maps sets it, so it stays a future exercise for custom maps.
 7. Sound, CD music, save games. *Done.*
 
-What is left is refinement: GS fog, performance work, and a first run on a real console.
+What is left is refinement: performance work, and a first run on a real console.
 
 ---
 
@@ -145,6 +145,35 @@ tail -f ~/Library/Application\ Support/PCSX2/logs/emulog.txt | grep '\[Q1\]'
 QuakeSpasm only runs them for the registered version. An `id1/autoexec.cfg` runs at boot
 either way, as on the desktop, and is the way to script a session.
 
+### Running on a console
+
+It hasn't been tried on real hardware yet; this is what the boot code expects. Build the release ELF
+(`make release`, then `build/release/quake.elf`) and copy it and `id1/` side by side into a folder on
+a FAT32/exFAT USB drive or on a PFS partition of the internal HDD. Launch the ELF from a loader such
+as wLaunchELF:
+
+```
+mass:/QUAKE/
+  quake.elf
+  id1/
+    pak0.pak
+    pak1.pak   (registered game only)
+    music/     (optional: the trackNN.adp files `make music` writes; the .wav files can stay behind)
+```
+
+- **Where it looks.** Boot looks for `id1/pak0.pak` on `host:` first, which fails at once on a
+  console, then on the HDD, then over USB. On both, the folder the ELF was launched from is tried
+  before the drive's root. On the HDD the launch partition goes first, then the other partitions; over
+  USB every FAT volume is tried (`mass0:` to `mass9:`, one per partition), after waiting up to 10
+  seconds for the drive to come up. The storage, keyboard and sound drivers are embedded in the ELF,
+  so nothing else needs installing.
+- **If it finds nothing**, the error screen shows the path the loader passed, the folders it searched,
+  the HDD's status and the USB volumes it mounted.
+- **Saves and settings go to the memory card** in slot 1 (see [Save games](#save-games)), never to
+  the USB drive or the HDD.
+- **The debug ELF** (`build/debug/quake.elf`) runs the same way, with assertions on and the debug
+  overlays showing.
+
 ### Debugging commands
 
 | Command | What it does |
@@ -166,8 +195,8 @@ plays the three demos with the frame log on and quits, for the scripts in
 ## Rendering
 
 QuakeSpasm draws through the public functions of its OpenGL renderer, and the backend
-implements those directly, with no GL underneath. All of it draws but fog (`gl_fog.c` still
-parses it, so a map that sets it plays, unfogged).
+implements those directly, with no GL underneath. All of it draws but fog, which no id map sets
+(`gl_fog.c` still parses it, so a custom map that sets it plays, unfogged).
 
 - **Video and the frame** ([vid.cpp](src/ps2/renderer/vid.cpp)). `VID_Init` brings the GS up at
   640x448 with two framebuffers, 16-bit by default (`ps2_fb_16bit`), and a 16-bit z-buffer.

@@ -23,31 +23,33 @@ PS2_PROFILE_DECLARE_EVENT(DmaFlush);
 PS2_PROFILE_DECLARE_EVENT(View);
 PS2_PROFILE_DECLARE_EVENT(World);
 PS2_PROFILE_DECLARE_EVENT(Vis);
-PS2_PROFILE_DECLARE_EVENT(MarkLeaves);
-PS2_PROFILE_DECLARE_EVENT(BspWalk);
-PS2_PROFILE_DECLARE_EVENT(LmChain);
 PS2_PROFILE_DECLARE_EVENT(TexChains);
 PS2_PROFILE_DECLARE_EVENT(LmChains);
 PS2_PROFILE_DECLARE_EVENT(Entities);
 PS2_PROFILE_DECLARE_EVENT(EntCull);
 PS2_PROFILE_DECLARE_EVENT(EntShade);
-PS2_PROFILE_DECLARE_EVENT(EntColorLUT);
 PS2_PROFILE_DECLARE_EVENT(EntGeom);
 PS2_PROFILE_DECLARE_EVENT(EntShadow);
 PS2_PROFILE_DECLARE_EVENT(EntBrush);
 PS2_PROFILE_DECLARE_EVENT(Particles);
-PS2_PROFILE_DECLARE_EVENT(AlphaSurfs);
 PS2_PROFILE_DECLARE_EVENT(TurbSurfs);
 PS2_PROFILE_DECLARE_EVENT(Sky);
 PS2_PROFILE_DECLARE_EVENT(Ui);
 PS2_PROFILE_DECLARE_EVENT(Overlay);
+
+// The sound feeder thread's wall time since the last S_Update (audio/snd.cpp). It runs every 5 ms
+// whatever the main thread is doing, so this time sits inside the other columns, not beside them.
 PS2_PROFILE_DECLARE_EVENT(Sound);
 
 // Engine phases outside the refresh calls, probed from C (see debug/engine_profile.h).
 PS2_PROFILE_DECLARE_EVENT(Server);
 PS2_PROFILE_DECLARE_EVENT(ClParse);
 PS2_PROFILE_DECLARE_EVENT(ClScene);
+PS2_PROFILE_DECLARE_EVENT(ClParticles);
 PS2_PROFILE_DECLARE_EVENT(SndMix);
+
+// Sys_FileOpenRead/Seek/Read (system/sys.cpp): the engine's file reads, inside whichever phase
+// loads.
 PS2_PROFILE_DECLARE_EVENT(FsIo);
 
 // BGM_Update: the music stream's decode and raw-sample top-up (ps2/audio/cd_audio.cpp).
@@ -89,12 +91,16 @@ void FrameLogFlush();
 void FrameLogMarkMap(const char * mapName);
 
 // Records a file being opened, written as an "FLOG#open,<row>,<name>" line with the next dump -
-// the row being the one whose columns are charged with the read. Meant to be called through
-// PS2Quake_FrameLogNoteOpen from the engine's file opens, so every mid-level load names itself
-// in the log. Note that the server frame and the client's packet reads, where most of those
-// happen, run before the frame's rollover: the read then stretches the Frame of the row after
-// (see debug/engine_profile.h).
+// the row being the one whose columns are charged with the read. COM_FindFile calls it through
+// PS2Quake_FrameLogNoteOpen for every file the engine opens, and the music stream for its tracks,
+// so every mid-level load names itself in the log. Note that the server frame and the client's
+// message reads, where most of those happen, run before the frame's rollover: the read then
+// stretches the Frame of the row after (see debug/engine_profile.h).
+//
+// Off until FrameLogNoteOpens(true): only the perf run turns the notes on. A map load opens
+// hundreds of files, and every note is a line the next dump sends through the IOP.
 void FrameLogNoteOpen(const char * fileName);
+void FrameLogNoteOpens(bool enable);
 
 // Ends the log: writes whatever the batch still holds, rather than waiting for
 // it to fill, then an "FLOG#end" row. Call once when a run finishes - without it
@@ -109,6 +115,7 @@ inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}
 inline void FrameLogNoteOpen(const char *) {}
+inline void FrameLogNoteOpens(bool) {}
 inline void FrameLogFinish() {}
 #endif // PS2_QUAKE_PROFILE
 

@@ -13,8 +13,7 @@ paths:
   demo1-3 logged 13,170 frames. EE work (Frame - VSync) mean 4.58 ms, p50 3.93, p95 8.02,
   p99 9.97 ms, and at most 14 ms outside the three demo loads (0.9-1.3 s each). **No vsync was
   missed outside the loads:** no frame ran between 25 and 100 ms. About 150 frames read 17.5-21
-  ms, and none of them is a miss (see "A Frame over a field" below). The engine's own phases
-  aren't probed yet (only `SndMix`).
+  ms, and none of them is a miss (see "A Frame over a field" below).
 - **After the single-precision math pass (2026-10-09, `q1-math.*`):** EE work outside the demo
   loads (the 4.58 above counts them) went from 4.35 to 3.89 ms mean (-10.5%), p95 8.01 → 7.57,
   p99 9.94 → 9.49 ms. View -3% (`AngleVectors`), Ui -19% (the 2D's `floor`), Sound -3%; the
@@ -26,6 +25,16 @@ paths:
   (10.64 → 9.60 ms): 1024 particles at seven draws each, at 12 cycles a draw against
   `rand()`'s 56. The capture's worst frame went from 13.37 to 12.37 ms. To find such frames in a
   log, look for a jump of 800 or more in the `particles` column.
+- **With the engine probes (2026-10-09, `q1-probes.*`)**, steady-frame means: `ClParticles` 258
+  µs, `ClScene` 60, `ClParse` 34, `Server` 0 (a demo runs no server), `FsIo` 0, and 321 µs left
+  unattributed (`frame_budget.py`'s `rest`). `CL_RunParticles` is the engine's biggest phase
+  after the mixer: each particle's `die < cl.time` compares a float with the double clock, a
+  soft-float call per particle per frame - the first target for the double-time work. No file
+  is opened mid-demo: every one of the 78 opens falls in a demo's start or map load (about 40
+  per load: the BSP and its brush models, sprites, monster models, sounds, the track), which
+  takes 0.83-1.26 s of `ClParse`, 0.18-0.24 s of it `FsIo`. No steady frame dropped; the
+  worst took 12.5 ms. `Music` doubled to 280 µs against `q1-fxrand` because `id1/music` now
+  holds the CD rip as 44.1 kHz WAVs with no `.adp` (`make music` encodes them).
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.
@@ -108,12 +117,16 @@ paths:
    `ps2_show_fps` and the like to 0, and those are `CVAR_ARCHIVE`, so the quit writes them
    back. Stop PCSX2: after the quit it sits in the BIOS menu.
 4. `src/tools/scripts/frame_log/summarize_flog.py <emulog> --rows build/baselines/<tag>.flog`,
-   then `compare_flog.py <before> <after>`. `frame_budget.py` realigns Server/ClParse (they
-   land one row early) and lists each `FLOG#open` load with its cost.
+   then `compare_flog.py <before> <after>`. `frame_budget.py` realigns Server, ClParse and
+   ClScene (they land one row early) and lists each `FLOG#open` load with its cost. The open
+   notes are written in perf runs only (`FrameLogNoteOpens`), 64 per log batch.
 
-- *(Q2)* If the notes show `pics/m_main_*.pcx` or `pause.pcx` mid-demo, a stray host key
-  reached PCSX2's USB keyboard and opened the menu. Re-run with focus away from PCSX2. (Quake
-  1 doesn't note file opens yet: `PS2Quake_FrameLogNoteOpen` has no engine caller.)
+- If the notes show `gfx/mainmenu.lmp`, `gfx/qplaque.lmp` or `gfx/pause.lmp` mid-demo, a stray
+  host key reached PCSX2's USB keyboard and opened the menu. Re-run with focus away from PCSX2.
+- **Running a capture without touching `id1/`:** the scratch-directory recipe in
+  [testing-pcsx2.md](testing-pcsx2.md), with `ps2_perftest 1` in its `autoexec.cfg`. The run's
+  quit writes `config.cfg` there, but with saves on the card (`ps2_savedevice mc`) it also
+  rewrites the card's copy: back up and restore `memcards/Mcd001.ps2`.
 - **Profiling a release build:** set `-DPS2_QUAKE_PROFILE=1` in the release `CONFIG_DEFS`,
   `rm -rf build/release/src`, `make release run` with `ps2_perftest 1`. Revert and rebuild
   clean afterwards.

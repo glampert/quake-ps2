@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "q_ctype.h"
+#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]: COM_FindFile names what it opens in the frame log
 #include <errno.h>
 
 static char	*largv[MAX_NUM_ARGVS + 1];
@@ -1810,6 +1811,8 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 				// found it!
 				com_filesize = pak->files[i].filelen;
 				file_from_pak = 1;
+				if (handle || file) // [PS2_QUAKE]: an open, not COM_FileExists - for the perf run's log
+					PS2Quake_FrameLogNoteOpen (filename);
 				if (path_id)
 					*path_id = search->path_id;
 				if (handle)
@@ -1845,6 +1848,8 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 
 			if (path_id)
 				*path_id = search->path_id;
+			if (handle || file) // [PS2_QUAKE]: an open, not COM_FileExists - for the perf run's log
+				PS2Quake_FrameLogNoteOpen (filename);
 			if (handle)
 			{
 				com_filesize = Sys_FileOpenRead (netpath, &i);

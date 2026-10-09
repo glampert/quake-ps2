@@ -81,8 +81,14 @@ still while paused) and, beside it, `COM_FxRand`'s state from the same `cl.time`
 multiplicative hash so that seeds a frame apart don't give the same first draw.
 
 For sound: `snd_dma.c` defaults `snd_mixspeed` to 22050 instead of 44100 (the README's Sound
-section says why), and `host.c` wraps the `S_Update` calls in the `SndMix` profile probe
-(`ps2/debug/engine_profile.h`), the first of the engine probes to be placed.
+section says why).
+
+For the profiler (`ps2/debug/engine_profile.h`, compiled out of release builds): `host.c` wraps
+`Host_ServerFrame` (`Server`), `CL_RunParticles` (`ClParticles`) and the `S_Update` calls
+(`SndMix`) in probes, and `cl_main.c`'s `CL_ReadFromServer` its message loop (`ClParse`) and
+`CL_RelinkEntities`/`CL_UpdateTEnts` (`ClScene`). `common.c`'s `COM_FindFile` names each file it
+opens (not `COM_FileExists`' lookups) to the frame log, which writes it only during a perf run.
+The reads themselves are timed in the backend's `Sys_File*` (`FsIo`).
 
 For rumble: `view.c` calls `PS2_RumbleDamage` from `V_ParseDamage` and `PS2_RumblePickup` from
 `V_BonusFlash_f`. For the memory reports: `zone.c` adds `Cache_UsedBytes` (the cache's list is

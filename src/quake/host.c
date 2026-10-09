@@ -24,7 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "bgmusic.h"
-#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]: the SndMix probe below
+#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]: the profile probes below
 #include "ps2/engine_hooks.h" // [PS2_QUAKE]: where config.cfg is written
 #include <setjmp.h>
 
@@ -725,8 +725,10 @@ void _Host_Frame (float time)
 // check for commands typed to the host
 	Host_GetConsoleCommands ();
 
+	PS2Quake_ProfileBegin(PS2_PROF_SERVER); // [PS2_QUAKE]: the server frame's cost, for the profiler
 	if (sv.active)
 		Host_ServerFrame ();
+	PS2Quake_ProfileEnd(PS2_PROF_SERVER); // [PS2_QUAKE]
 
 //-------------------
 //
@@ -749,7 +751,9 @@ void _Host_Frame (float time)
 
 	SCR_UpdateScreen ();
 
+	PS2Quake_ProfileBegin(PS2_PROF_CL_PARTICLES); // [PS2_QUAKE]: the particles' cost, for the profiler
 	CL_RunParticles (); //johnfitz -- seperated from rendering
+	PS2Quake_ProfileEnd(PS2_PROF_CL_PARTICLES); // [PS2_QUAKE]
 
 	if (host_speeds.value)
 		time2 = Sys_DoubleTime ();

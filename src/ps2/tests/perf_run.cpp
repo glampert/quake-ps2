@@ -120,6 +120,11 @@ void RunPerfTest()
         Cvar_Set("developer", "0");
         Cvar_Set("ps2_frame_log", "1");
 
+        // Every file the run opens gets a line in the log, which is how a load mid-demo names
+        // itself. Only this run asks for them: a map load opens hundreds of files, and each note
+        // is a line the next dump sends through the IOP.
+        ps2::debug::FrameLogNoteOpens(true);
+
         // And every on-screen debug panel off: they cost EE time of their own, and the frame log
         // carries every number they show. They are archived and not restored, so the config the
         // run's quit writes keeps them off: set them back by hand afterwards.
@@ -129,7 +134,7 @@ void RunPerfTest()
         Cvar_Set("ps2_show_drawstats", "0");
         Cvar_Set("ps2_show_profile", "0");
 
-        Con_Printf("PerfRun: starting - %d demos, developer 0, overlays off, frame log on.\n",
+        Con_Printf("PerfRun: starting - %d demos, developer 0, overlays off, frame log and file-open notes on.\n",
                    ps2::ArrayLength(kDemos));
 
         // Out of the attract loop, and whatever it is playing stopped, so the first demo starting

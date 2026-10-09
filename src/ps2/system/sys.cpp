@@ -12,6 +12,7 @@
 #include "ps2/system/iop_boot.h"
 #include "ps2/debug/scr_print.h"
 #include "ps2/debug/profile.h"
+#include "ps2/renderer/profile.h"
 
 #include <cerrno>
 #include <cstdarg>
@@ -377,8 +378,13 @@ void Sys_SendKeyEvents()
 // File IO
 // ------------------------------------------------------------------------------------------------
 
+// The opens, seeks and reads below are what COM_LoadFile and the pak reads come down to, so they
+// carry the FsIo profile event: every load the engine makes is timed, whichever phase made it.
+
 int Sys_FileOpenRead(const char * path, int * hndl)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::FsIo);
+
     const int handle = FindFileHandle();
     std::FILE * file = std::fopen(path, "rb");
 
@@ -415,11 +421,13 @@ void Sys_FileClose(int handle)
 
 void Sys_FileSeek(int handle, int position)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::FsIo);
     std::fseek(s_fileHandles[handle], position, SEEK_SET);
 }
 
 int Sys_FileRead(int handle, void * dest, int count)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::FsIo);
     return static_cast<int>(std::fread(dest, 1, static_cast<size_t>(count), s_fileHandles[handle]));
 }
 

@@ -17,39 +17,35 @@
 
 namespace ps2::prof_evt {
 
-PS2_PROFILE_DEFINE_EVENT(Frame,      "Frame",       kScreenOverlay, 0);
-PS2_PROFILE_DEFINE_EVENT(VSync,      "VSync",       kScreenOverlay, 1);
-PS2_PROFILE_DEFINE_EVENT(GsWait,     "GsWait",      kScreenOverlay, 2);
-PS2_PROFILE_DEFINE_EVENT(DmaSend,    "DmaSend",     kScreenOverlay, 3);
-PS2_PROFILE_DEFINE_EVENT(DmaFlush,   " CacheFlsh",  kScreenOverlay, 4);
-PS2_PROFILE_DEFINE_EVENT(View,       "View",        kScreenOverlay, 5);
-PS2_PROFILE_DEFINE_EVENT(World,      "World",       kScreenOverlay, 6);
-PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",         kScreenOverlay, 7);
-PS2_PROFILE_DEFINE_EVENT(MarkLeaves, " Leaves",     kScreenOverlay, 8);
-PS2_PROFILE_DEFINE_EVENT(BspWalk,    " BspWalk",    kScreenOverlay, 9);
-PS2_PROFILE_DEFINE_EVENT(LmChain,    "  LmChain",   kScreenOverlay, 10);
-PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",   kScreenOverlay, 11);
-PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",    kScreenOverlay, 12);
-PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",    kScreenOverlay, 13);
-PS2_PROFILE_DEFINE_EVENT(EntCull,    " Cull",       kScreenOverlay, 14);
-PS2_PROFILE_DEFINE_EVENT(EntShade,   " Shade",      kScreenOverlay, 15);
-PS2_PROFILE_DEFINE_EVENT(EntColorLUT," ColorLUT",   kScreenOverlay, 16);
-PS2_PROFILE_DEFINE_EVENT(EntGeom,    " Geom",       kScreenOverlay, 17);
-PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",     kScreenOverlay, 18);
-PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",      kScreenOverlay, 19);
-PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",   kScreenOverlay, 20);
-PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs",  kScreenOverlay, 21);
-PS2_PROFILE_DEFINE_EVENT(TurbSurfs,  " TurbSurfs",  kScreenOverlay, 22);
-PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",         kScreenOverlay, 23);
-PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",          kScreenOverlay, 24);
-PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",     kScreenOverlay, 25);
-PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",       kScreenOverlay, 26);
-PS2_PROFILE_DEFINE_EVENT(Server,     "Server",      kScreenOverlay, 27);
-PS2_PROFILE_DEFINE_EVENT(ClParse,    "ClParse",     kScreenOverlay, 28);
-PS2_PROFILE_DEFINE_EVENT(ClScene,    "ClScene",     kScreenOverlay, 29);
-PS2_PROFILE_DEFINE_EVENT(SndMix,     "SndMix",      kScreenOverlay, 30);
-PS2_PROFILE_DEFINE_EVENT(FsIo,       "FsIo",        kScreenOverlay, 31);
-PS2_PROFILE_DEFINE_EVENT(Music,      "Music",       kScreenOverlay, 32);
+PS2_PROFILE_DEFINE_EVENT(Frame,       "Frame",       kScreenOverlay, 0);
+PS2_PROFILE_DEFINE_EVENT(VSync,       "VSync",       kScreenOverlay, 1);
+PS2_PROFILE_DEFINE_EVENT(GsWait,      "GsWait",      kScreenOverlay, 2);
+PS2_PROFILE_DEFINE_EVENT(DmaSend,     "DmaSend",     kScreenOverlay, 3);
+PS2_PROFILE_DEFINE_EVENT(DmaFlush,    " CacheFlsh",  kScreenOverlay, 4);
+PS2_PROFILE_DEFINE_EVENT(View,        "View",        kScreenOverlay, 5);
+PS2_PROFILE_DEFINE_EVENT(World,       "World",       kScreenOverlay, 6);
+PS2_PROFILE_DEFINE_EVENT(Vis,         "Vis",         kScreenOverlay, 7);
+PS2_PROFILE_DEFINE_EVENT(TexChains,   "TexChains",   kScreenOverlay, 8);
+PS2_PROFILE_DEFINE_EVENT(LmChains,    "LmChains",    kScreenOverlay, 9);
+PS2_PROFILE_DEFINE_EVENT(Entities,    "Entities",    kScreenOverlay, 10);
+PS2_PROFILE_DEFINE_EVENT(EntCull,     " Cull",       kScreenOverlay, 11);
+PS2_PROFILE_DEFINE_EVENT(EntShade,    " Shade",      kScreenOverlay, 12);
+PS2_PROFILE_DEFINE_EVENT(EntGeom,     " Geom",       kScreenOverlay, 13);
+PS2_PROFILE_DEFINE_EVENT(EntShadow,   " Shadow",     kScreenOverlay, 14);
+PS2_PROFILE_DEFINE_EVENT(EntBrush,    " Brush",      kScreenOverlay, 15);
+PS2_PROFILE_DEFINE_EVENT(Particles,   "Particles",   kScreenOverlay, 16);
+PS2_PROFILE_DEFINE_EVENT(TurbSurfs,   "TurbSurfs",   kScreenOverlay, 17);
+PS2_PROFILE_DEFINE_EVENT(Sky,         "Sky",         kScreenOverlay, 18);
+PS2_PROFILE_DEFINE_EVENT(Ui,          "Ui",          kScreenOverlay, 19);
+PS2_PROFILE_DEFINE_EVENT(Overlay,     "Overlay",     kScreenOverlay, 20);
+PS2_PROFILE_DEFINE_EVENT(Sound,       "Sound",       kScreenOverlay, 21);
+PS2_PROFILE_DEFINE_EVENT(Server,      "Server",      kScreenOverlay, 22);
+PS2_PROFILE_DEFINE_EVENT(ClParse,     "ClParse",     kScreenOverlay, 23);
+PS2_PROFILE_DEFINE_EVENT(ClScene,     "ClScene",     kScreenOverlay, 24);
+PS2_PROFILE_DEFINE_EVENT(ClParticles, "ClPart",      kScreenOverlay, 25);
+PS2_PROFILE_DEFINE_EVENT(SndMix,      "SndMix",      kScreenOverlay, 26);
+PS2_PROFILE_DEFINE_EVENT(FsIo,        "FsIo",        kScreenOverlay, 27);
+PS2_PROFILE_DEFINE_EVENT(Music,       "Music",       kScreenOverlay, 28);
 
 } // namespace ps2::prof_evt
 
@@ -61,11 +57,11 @@ PS2_PROFILE_DEFINE_EVENT(Music,      "Music",       kScreenOverlay, 32);
 namespace {
 
 static ps2::debug::ProfileEvent * const s_engineEvents[PS2_PROF_SITE_COUNT] = {
-    &ps2::prof_evt::Server,  // PS2_PROF_SERVER
-    &ps2::prof_evt::ClParse, // PS2_PROF_CL_PARSE
-    &ps2::prof_evt::ClScene, // PS2_PROF_CL_SCENE
-    &ps2::prof_evt::SndMix,  // PS2_PROF_SND_MIX
-    &ps2::prof_evt::FsIo,    // PS2_PROF_FS_IO
+    &ps2::prof_evt::Server,      // PS2_PROF_SERVER
+    &ps2::prof_evt::ClParse,     // PS2_PROF_CL_PARSE
+    &ps2::prof_evt::ClScene,     // PS2_PROF_CL_SCENE
+    &ps2::prof_evt::ClParticles, // PS2_PROF_CL_PARTICLES
+    &ps2::prof_evt::SndMix,      // PS2_PROF_SND_MIX
 };
 
 static ps2::debug::CpuCycles s_engineStart[PS2_PROF_SITE_COUNT];
@@ -104,7 +100,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 33;
+constexpr int kNumEvents = 29;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -139,8 +135,9 @@ cvar_t s_frameLog = ps2::MakeCvar("ps2_frame_log", "0", CVAR_NONE); // <-- ENABL
 
 // Files opened since the last dump, written out with it. A file opened while a level runs is a
 // synchronous read inside whatever frame asked for it, and without a name the log can only show
-// the spike. Loading a map opens hundreds; past the buffer only the count is kept.
-constexpr int kMaxOpenNotes = 16;
+// the spike. A demo's map load opens about 40 (the perf run, 2026-10-09); past the buffer only
+// the count is kept.
+constexpr int kMaxOpenNotes = 64;
 
 struct OpenNote
 {
@@ -149,7 +146,9 @@ struct OpenNote
 };
 
 static OpenNote s_openNotes[kMaxOpenNotes];
-static int s_openCount = 0; // including the ones past the buffer
+static int  s_openCount = 0; // including the ones past the buffer
+static u32  s_openOverflowRow = 0; // the row of the first note that didn't fit
+static bool s_noteOpens = false; // FrameLogNoteOpens: on for the perf run only
 
 // Cycles to microseconds. Cold - only runs at dump time, so the 64-bit divide
 // (a libgcc call on the R5900) is fine; it is what the capture path exists to avoid.
@@ -176,9 +175,9 @@ void WriteBatch()
     {
         s_headerDone = true;
         std::printf("FLOG#hdr,frame,"
-                    "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
-                    "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,"
+                    "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,"
+                    "TexChains,LmChains,Entities,EntCull,EntShade,EntGeom,EntShadow,EntBrush,"
+                    "Particles,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,ClParticles,SndMix,FsIo,Music,"
                     "tris,batches,particles,"
                     "vramUploads,vramOomSyncs,vramResident,"
                     "chainKB,chainKicks,chainDrains\n");
@@ -220,7 +219,7 @@ void WriteBatch()
     }
     if (s_openCount > kMaxOpenNotes)
     {
-        std::printf("FLOG#open,%u,+%d more\n", s_frameIndex, s_openCount - kMaxOpenNotes);
+        std::printf("FLOG#open,%u,+%d more\n", s_openOverflowRow, s_openCount - kMaxOpenNotes);
     }
     s_openCount = 0;
 
@@ -261,16 +260,16 @@ void FrameLogCapture()
     s.frameIndex = s_frameIndex;
 
     static const ps2::debug::ProfileEvent * const s_events[kNumEvents] = {
-        &prof_evt::Frame,       &prof_evt::VSync,      &prof_evt::GsWait,    &prof_evt::DmaSend,
-        &prof_evt::DmaFlush,    &prof_evt::View,       &prof_evt::World,     &prof_evt::Vis,
-        &prof_evt::MarkLeaves,  &prof_evt::BspWalk,    &prof_evt::LmChain,   &prof_evt::TexChains,
-        &prof_evt::LmChains,    &prof_evt::Entities,   &prof_evt::EntCull,   &prof_evt::EntShade,
-        &prof_evt::EntColorLUT, &prof_evt::EntGeom,    &prof_evt::EntShadow, &prof_evt::EntBrush,
-        &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::TurbSurfs, &prof_evt::Sky,
-        &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,     &prof_evt::Server,
-        &prof_evt::ClParse,     &prof_evt::ClScene,    &prof_evt::SndMix,    &prof_evt::FsIo,
+        &prof_evt::Frame,     &prof_evt::VSync,       &prof_evt::GsWait,    &prof_evt::DmaSend,
+        &prof_evt::DmaFlush,  &prof_evt::View,        &prof_evt::World,     &prof_evt::Vis,
+        &prof_evt::TexChains, &prof_evt::LmChains,    &prof_evt::Entities,  &prof_evt::EntCull,
+        &prof_evt::EntShade,  &prof_evt::EntGeom,     &prof_evt::EntShadow, &prof_evt::EntBrush,
+        &prof_evt::Particles, &prof_evt::TurbSurfs,   &prof_evt::Sky,       &prof_evt::Ui,
+        &prof_evt::Overlay,   &prof_evt::Sound,       &prof_evt::Server,    &prof_evt::ClParse,
+        &prof_evt::ClScene,   &prof_evt::ClParticles, &prof_evt::SndMix,    &prof_evt::FsIo,
         &prof_evt::Music,
     };
+    static_assert(ArrayLength(s_events) == kNumEvents, "the frame log's columns and its events disagree");
     for (int i = 0; i < kNumEvents; ++i)
     {
         s.cycles[i] = s_events[i]->lastFrameCycles;
@@ -322,19 +321,29 @@ void FrameLogFinish()
     std::fflush(stdout);
 }
 
+void FrameLogNoteOpens(const bool enable)
+{
+    s_noteOpens = enable;
+}
+
 void FrameLogNoteOpen(const char * fileName)
 {
-    if (!Enabled())
+    if (!s_noteOpens || !Enabled())
     {
         return;
     }
+    // The row the open is charged to: the frame being measured now, which FrameLogCapture will
+    // number one past the last row it wrote.
+    const u32 row = s_frameIndex + 1;
     if (s_openCount < kMaxOpenNotes)
     {
-        // The row the open is charged to: the frame being measured now, which FrameLogCapture
-        // will number one past the last row it wrote.
         OpenNote & note = s_openNotes[s_openCount];
-        note.frameIndex = s_frameIndex + 1;
+        note.frameIndex = row;
         std::snprintf(note.name, sizeof(note.name), "%s", (fileName != nullptr) ? fileName : "?");
+    }
+    else if (s_openCount == kMaxOpenNotes)
+    {
+        s_openOverflowRow = row;
     }
     ++s_openCount;
 }

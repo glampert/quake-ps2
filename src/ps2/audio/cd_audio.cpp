@@ -170,6 +170,7 @@ bool OpenMusicFile(const char * const * relatives, const int count)
             {
             case MusicStream::OpenResult::Opened:
                 q_strlcpy(s_playingPath, path, sizeof(s_playingPath));
+                ps2::debug::FrameLogNoteOpen(relatives[i]); // as COM_FindFile names the engine's opens
                 return true;
 
             case MusicStream::OpenResult::Unusable:

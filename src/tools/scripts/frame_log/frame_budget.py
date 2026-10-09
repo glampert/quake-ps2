@@ -6,14 +6,16 @@ frames miss vsync and what they were doing. Takes a raw PCSX2 emulog or a .flog
 written by summarize_flog.py --rows.
 
 A frame's EE work is Frame - VSync. The vsync spin sits in the middle of the Frame
-scope, so Frame alone jitters by however much the post-flip tail (sound, dlight and
-lightstyle ticks) moves between frames; EE work is the stable measure. A frame whose
-work passes one field (16683 us) waits for the next one, and Frame lands near 33.4 ms:
-that is a dropped frame.
+scope (the present is deferred to the next GL_BeginRendering), so Frame alone reads one
+field plus however much the work after the spin grew since the last frame; EE work is the
+stable measure. A frame whose work passes one field (16683 us) waits for the next one, and
+Frame lands near 33.4 ms: that is a dropped frame.
 
-SV_Frame and CL_ReadPackets run before PS2_BeginFrame rolls the profiler over, so the
-Server and ClParse columns land one row early (see src/ps2/debug/engine_profile.h).
-They are shifted back here before anything is added up.
+Host_ServerFrame and CL_ReadFromServer run before GL_BeginRendering rolls the profiler
+over, so the Server, ClParse and ClScene columns land one row early (see
+src/ps2/debug/engine_profile.h). They are shifted back here before anything is added up.
+ClParticles, SndMix and Music run after the rollover and need no shift. Sound is the
+feeder thread's time, spread across the other columns, so it is never subtracted.
 
 Prints, in order:
   - dropped frames, frames over budget and frames with no margin left, for steady frames
@@ -68,27 +70,27 @@ def pct(v, q):
     return v[min(len(v) - 1, int(len(v) * q))] if v else 0
 
 def report_budget(rows, maps):
-    # Shift Server and ClParse back to the row whose Frame holds their time, so a row's
+    # Shift the early columns back to the row whose Frame holds their time, so a row's
     # columns add up to its own Frame.
     prev = {}
     for r in rows:
-        for c in ('Server', 'ClParse'):
+        for c in ('Server', 'ClParse', 'ClScene'):
             if c in r:
                 r[c], prev[c] = prev.get(c, 0), r[c]
     for r in rows:
         r['ee'] = r['Frame'] - r['VSync']
         r['map'] = map_of(r['frame'], maps)
-        # Sound nests inside SndMix when the engine probes exist; older logs lack them.
-        # Music (CDAudio_Update) runs after S_Update, outside it.
-        eng = sum(r.get(c, 0) for c in ('Server', 'ClParse', 'ClScene'))
-        snd = (r['SndMix'] if 'SndMix' in r else r['Sound']) + r.get('Music', 0)
+        # Music (BGM_Update) runs just before S_Update, outside SndMix.
+        eng = sum(r.get(c, 0) for c in ('Server', 'ClParse', 'ClScene', 'ClParticles'))
+        snd = r.get('SndMix', 0) + r.get('Music', 0)
         r['rest'] = r['ee'] - r['View'] - r['Ui'] - r['Overlay'] - snd - eng
 
     view = [r for r in rows if r['View'] > 0]
     noview = len(rows) - len(view)
     # The first frames of a map are loading work (precache, first-touch VRAM uploads,
-    # lightmap builds), not steady-state rendering - reported apart.
-    settle_ids = set()
+    # lightmap builds), not steady-state rendering - reported apart. So is everything
+    # before the first map: the boot, and the console it draws.
+    settle_ids = {r['frame'] for r in view if maps and r['frame'] < maps[0][0]}
     for f, _ in maps:
         first = [r['frame'] for r in view if r['frame'] >= f][:30]
         settle_ids.update(first)
@@ -138,12 +140,12 @@ def report_budget(rows, maps):
     # Where the time goes: over-budget steady frames vs the average steady frame.
     d, o, t = classify(steady)
     bad = d + o
-    cols = ['ee', 'View', 'World', 'TexChains', 'LmChains', 'LmChain', 'BspWalk', 'MarkLeaves',
-            'Entities', 'EntGeom', 'EntShadow', 'EntBrush', 'EntShade', 'Particles', 'AlphaSurfs',
-            'TurbSurfs', 'Sky', 'Ui', 'Overlay', 'Sound', 'SndMix', 'Music', 'Server', 'ClParse', 'ClScene',
+    cols = ['ee', 'View', 'World', 'Vis', 'TexChains', 'LmChains', 'Entities', 'EntCull', 'EntShade',
+            'EntGeom', 'EntShadow', 'EntBrush', 'Particles', 'TurbSurfs', 'Sky', 'Ui', 'Overlay',
+            'Server', 'ClParse', 'ClScene', 'ClParticles', 'SndMix', 'Sound', 'Music', 'FsIo',
             'GsWait', 'DmaSend', 'DmaFlush', 'rest',
-            'tris', 'batches', 'entities', 'particles', 'dlights', 'lmDynamic', 'lmStyle',
-            'vramUploads', 'vramOomSyncs', 'chainKB', 'chainDrains', 'surfs', 'nodes']
+            'tris', 'batches', 'particles', 'vramUploads', 'vramOomSyncs', 'vramResident',
+            'chainKB', 'chainKicks', 'chainDrains']
     print(f"\nOver-budget steady frames ({len(bad)}) vs all steady frames, means:")
     print(f"  {'column':<13}{'all':>9}{'over':>9}{'delta':>9}")
     for c in [c for c in cols if c in steady[0]]:
@@ -178,6 +180,7 @@ def report_budget(rows, maps):
               f"  Sv {statistics.mean(r.get('Server', 0) for r in s):5.0f}"
               f"  Parse {statistics.mean(r.get('ClParse', 0) for r in s):5.0f}"
               f"  Scene {statistics.mean(r.get('ClScene', 0) for r in s):5.0f}"
+              f"  PartSim {statistics.mean(r.get('ClParticles', 0) for r in s):5.0f}"
               f"  rest {statistics.mean(r['rest'] for r in s):5.0f}"
               f"  tris {statistics.mean(r['tris'] for r in s):5.0f}")
 
@@ -186,13 +189,13 @@ def report_budget(rows, maps):
         print(f"  {r['map']:<8} #{r['frame']:5d} Frame {r['Frame']:6d} ee {r['ee']:6d} View {r['View']:5d}"
               f" World {r['World']:5d} Ent {r['Entities']:5d} Part {r['Particles']:4d} Ui {r['Ui']:4d}"
               f" Mix {r.get('SndMix', 0):5d} Sv {r.get('Server', 0):5d} Parse {r.get('ClParse', 0):5d}"
-              f" Scene {r.get('ClScene', 0):5d} rest {r['rest']:5d} vramUp {r['vramUploads']} oom {r['vramOomSyncs']}"
-              f" lmDyn {r['lmDynamic']} dl {r['dlights']}")
+              f" Scene {r.get('ClScene', 0):5d} PartSim {r.get('ClParticles', 0):5d} Fs {r.get('FsIo', 0):5d}"
+              f" rest {r['rest']:5d} particles {r['particles']} vramUp {r['vramUploads']} oom {r['vramOomSyncs']}")
 
 def report_opens(rows, opens):
     # Takes the rows as logged, not shifted: FLOG#open names the row charged with the read,
-    # and a load in CL_ReadPackets/SV_Frame is charged to it with the ClParse and FsIo it
-    # caused, while the time itself stretches the Frame of the row after. So show both.
+    # and a load in CL_ReadFromServer/Host_ServerFrame is charged to it with the ClParse and
+    # FsIo it caused, while the time itself stretches the Frame of the row after. So show both.
     if not opens:
         return
     by = {r['frame']: r for r in rows}
