@@ -51,6 +51,19 @@ paths:
   id's float trades that collision fix away, and the EE rounds toward zero where id's x87
   carried extra precision, so it needs a gameplay check, not just a capture. The map pass below
   measures what the server costs on every level.
+- **e4m7, the worst level, split (2026-10-10, scratch builds, god and notarget, 300 frames at the
+  spawn and 300 at the teleporter exit):** the server took 47% of the EE and held the game at
+  29.8 fps, and 14.4 of its 15.7 ms a frame were collision. The largest part is
+  `SV_CheckWaterTransition`, a point test per monster per frame (55 a frame at 148 µs each, 8.2
+  ms); then QuakeC's traces and point tests (3.5 ms), the player's `SV_SetIdealPitch` traces
+  inside `SV_SendClientMessages` (about 2 ms) and the rest of the engine's traces. QuakeC's own
+  work was 0.5 ms. A point test walks about 30 hull nodes at 14 soft-float calls each: 822,000
+  calls a second, 96% of them in `SV_HullPointContents` and `SV_RecursiveHullCheck`. Built with
+  id's float `DotProduct` in its three places, a point test took 9.3 µs and a trace 21 (16
+  times less), the server fell to 11% of the EE, and e4m7 ran at 59 fps in both windows, with
+  ~1,000 soft-float calls a frame left. What float gives up is the gameplay question above.
+- **GCC moved `SV_Physics`'s `svtime = sv.time` into the entity loop:** a `__truncdfsf2` per
+  entity, 340 calls a frame at e4m7, where the clocks work meant one a frame.
 - **Every level, live (2026-10-09, `q1-mapperf.*`):** the map cycle's perf pass over the
   registered data, 38 levels and 190 viewpoints, 30,441 steady frames in 10.8 minutes. 32 levels
   never dropped a steady frame, and every episode 1 and deathmatch level stayed under 15 ms of EE
@@ -219,6 +232,22 @@ What a frame log can't show is which code pays for `double`: it runs as libgcc c
 - `addr2line -f -i` on each return address minus 8 (the `jal` and its delay slot) gives the
   call site; group by the outermost function and divide by the frame-log row count.
   `CalcSurfaceExtents` shows up large but runs only at map load.
+- **To count a window rather than the whole run**, also wrap `Con_Printf` (format into a buffer,
+  pass it on as `"%s"`), and have it start and stop the counting on a marker the script
+  `echo`es after the level has settled.
+
+## Splitting the server's time (scratch only)
+
+- Wrap `PR_ExecuteProgram`, `SV_Move`, `SV_PointContents`, `SV_TruePointContents`,
+  `SV_RunClients`, `SV_Physics` and `SV_SendClientMessages`, timing each with `mfc0 $9`, and
+  book the traces and point tests made while QuakeC runs apart from the engine's (a depth count
+  in the `PR_ExecuteProgram` wrapper; time only its outermost call). Windows as above.
+- `--wrap` misses calls made inside the defining file: world.c's `SV_TouchLinks` runs QuakeC
+  and `SV_TestEntityPosition` traces. Link a scratch copy of world.c that calls the wrappers
+  there; the same copy with `DoublePrecisionDotProduct` turned into `DotProduct` is the
+  float A/B.
+- Compare builds per call and per game second, not per frame: a build held to 30 fps does twice
+  the QuakeC thinks a frame, while the per-frame work (the water checks) stays the same.
 
 ## Proving an EE/VU0 asm rewrite on target (~6 s)
 
