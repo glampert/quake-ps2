@@ -44,13 +44,13 @@ paths:
   lists the sites) left ~200. Steady-frame EE work: mean 3.90 → 3.46 ms (-11%), p95 7.58 →
   6.33, p99 9.39 → 7.97, max 12.36 → 11.18 ms; `ClParticles` 257 → 63 µs, `EntBrush` 448 →
   327, `SndMix` 472 → 433 (`CL_DecayLights` runs inside it).
-- **Open: the server's collision.** On a live e1m1 the counter found ~9,100 soft-float calls a
-  frame, 7,400 of them in `SV_HullPointContents` and `SV_RecursiveHullCheck` (`world.c`): the
-  `DoublePrecisionDotProduct` QuakeSpasm uses against stuck-in-wall bugs, run per hull node of
-  every trace and point test. No demo capture sees it (a demo runs no server). Going back to
-  id's float trades that collision fix away, and the EE rounds toward zero where id's x87
-  carried extra precision, so it needs a gameplay check, not just a capture. The map pass below
-  measures what the server costs on every level.
+- **The server's collision was double (until 2026-10-10).** On a live e1m1 the counter found
+  ~9,100 soft-float calls a frame, 7,400 of them in `SV_HullPointContents` and
+  `SV_RecursiveHullCheck` (`world.c`): the `DoublePrecisionDotProduct` QuakeSpasm uses against
+  stuck-in-wall bugs, run per hull node of every trace and point test. No demo capture sees it
+  (a demo runs no server). It is back to id's float now (engine-c.md); the EE rounds toward
+  zero where id's x87 carried extra precision, so a stuck spot found in play gets fixed where
+  it is.
 - **e4m7, the worst level, split (2026-10-10, scratch builds, god and notarget, 300 frames at the
   spawn and 300 at the teleporter exit):** the server took 47% of the EE and held the game at
   29.8 fps, and 14.4 of its 15.7 ms a frame were collision. The largest part is
@@ -61,9 +61,13 @@ paths:
   calls a second, 96% of them in `SV_HullPointContents` and `SV_RecursiveHullCheck`. Built with
   id's float `DotProduct` in its three places, a point test took 9.3 µs and a trace 21 (16
   times less), the server fell to 11% of the EE, and e4m7 ran at 59 fps in both windows, with
-  ~1,000 soft-float calls a frame left. What float gives up is the gameplay question above.
+  ~1,000 soft-float calls a frame left.
 - **GCC moved `SV_Physics`'s `svtime = sv.time` into the entity loop:** a `__truncdfsf2` per
-  entity, 340 calls a frame at e4m7, where the clocks work meant one a frame.
+  entity, 340 calls a frame at e4m7, where the clocks work meant one a frame. It keeps the
+  double in a register across the loop's calls and redoes the conversion, which it costs as
+  one instruction, at each use. `volatile` on `svtime` fixed it. The other once-a-frame clock
+  reads (`CL_RunParticles`, `CL_DecayLights`, `R_PushDlights`, `CL_ReadFromServer`, view.cpp)
+  convert once, before their loops (checked in the disassembly, 2026-10-10).
 - **Every level, live (2026-10-09, `q1-mapperf.*`):** the map cycle's perf pass over the
   registered data, 38 levels and 190 viewpoints, 30,441 steady frames in 10.8 minutes. 32 levels
   never dropped a steady frame, and every episode 1 and deathmatch level stayed under 15 ms of EE
@@ -75,6 +79,13 @@ paths:
   still under notarget (awake ones cost more). The one outlier on the rendering side is e2m3's
   viewpoint 2, the teleporter exit at (1144 1776 -61): 7,200 triangles, View 5.8 ms, EE p95 24.5
   ms. Nothing was opened mid-level.
+- **Every level with float collision (2026-10-10, `q1-mapfloat.*` against `q1-mapperf.*`, the
+  same 34,235 rows):** dropped steady frames 396 → 25, EE work mean 6.17 → 3.20 ms, p95 12.6 →
+  5.6, p99 17.5 → 7.2. `Server` mean 3.94 → 0.97 ms (-75%), p95 9.95 → 1.60; View, World and
+  tris within 0.5%. 37 levels never drop a frame, and their slowest frame is 10.1 ms (e3m5).
+  e4m7's p50 went from 14.3 to 3.3 ms, e2m2's from 12.9 to 3.3. The 25 drops left are all
+  e2m3's viewpoint 2, now a rendering problem: View 17-18 ms (World 6.5) in its worst frames,
+  facing the most of that area's geometry.
 - The rest of this section is the Quake II port's *(Q2)*. Reference
   `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms, max 11.6 ms (debug), 0 dropped
   frames.

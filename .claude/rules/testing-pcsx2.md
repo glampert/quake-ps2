@@ -98,12 +98,20 @@ The rest are scripted runs:
   1.06 releases ship the same pak0; add `pak1.pak` and `music` for the full game) and its own
   `autoexec.cfg`, then `PCSX2 -batch -logfile <log> -elf <dir>/quake.elf`: `host:` is the ELF's
   directory. With no `config.cfg` there, the game reads the memory card's, and nothing writes
-  one unless the run quits. The nine shareware maps took ~2 minutes, clean, on
+  one unless the run quits. **A run that quits writes the card's config**, so an archived cvar
+  one scratch run sets reaches the next: a walk test's `host_maxfps 20` held the following perf
+  pass to 20 fps (2026-10-10). Restore the card before each run, not only at the end. The nine shareware maps took ~2 minutes, clean, on
   2026-10-08, and the full registered data's 38 took 5.5 minutes, clean, on 2026-10-09; the
   numbers are in [memory-budget.md](memory-budget.md).
 - **Perf run** (profile builds): `ps2_perftest 1` in `autoexec.cfg` plays the demos, and
   `ps2_testmaps 2` tours every level; the recipes are in [performance.md](performance.md). Both
   quit at the end, which writes `config.cfg`.
+- **Movement check across builds** (for physics and collision changes): a script that, on a few
+  maps after `god 1` and `notarget 1`, holds `+forward`, `+moveright`, `+back` and `+jump` for set
+  `wait` counts with a `viewpos` after each, run on the old and the new ELF. Put `host_maxfps 20`
+  in both: a build that runs faster integrates the moves in smaller steps and ends somewhere
+  else, collision or not. The float collision change (2026-10-10) ended in the same places on
+  e1m1 and e4m7 and within 5 units on e2m2.
 - **Config write**: `quit` runs `Host_Shutdown`, which writes `id1/config.cfg` through
   `host:`. Then PCSX2 boots into the PS2 BIOS menu; stop it there.
 - **Stop every PCSX2 you launch once its log is read.** A run stays open after the game halts,

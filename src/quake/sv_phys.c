@@ -1173,7 +1173,7 @@ void SV_Physics (void)
 	int	i;
 	int	entity_cap; // For sv_freezenonclients 
 	edict_t	*ent;
-	float	svtime; // [PS2_QUAKE]: sv.time as a float, for the nextthink test below
+	volatile float	svtime; // [PS2_QUAKE]: sv.time as a float, for the nextthink test below
 
 // let the progs know that a new frame has started
 	pr_global_struct->self = EDICT_TO_PROG(sv.edicts);
@@ -1188,7 +1188,8 @@ void SV_Physics (void)
 //
 	ent = sv.edicts;
 	// [PS2_QUAKE]: nextthink is float. Compared with the double sv.time, the test was a soft-float
-	// call per entity per frame; it only picks the lerp interval sent to the client.
+	// call per entity per frame; it only picks the lerp interval sent to the client. volatile, or GCC
+	// keeps sv.time across the loop's calls and converts it again for every entity.
 	svtime = sv.time;
 
 	if (sv_freezenonclients.value)

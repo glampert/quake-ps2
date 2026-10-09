@@ -535,7 +535,7 @@ int SV_HullPointContents (hull_t *hull, int num, vec3_t p)
 		if (plane->type < 3)
 			d = p[plane->type] - plane->dist;
 		else
-			d = DoublePrecisionDotProduct (plane->normal, p) - plane->dist;
+			d = DotProduct (plane->normal, p) - plane->dist; // [PS2_QUAKE]: id's float; see SV_RecursiveHullCheck
 		if (d < 0)
 			num = node->children[1];
 		else
@@ -646,8 +646,12 @@ qboolean SV_RecursiveHullCheck (hull_t *hull, int num, float p1f, float p2f, vec
 	}
 	else
 	{
-		t1 = DoublePrecisionDotProduct (plane->normal, p1) - plane->dist;
-		t2 = DoublePrecisionDotProduct (plane->normal, p2) - plane->dist;
+		// [PS2_QUAKE]: back to id's float dot products. QuakeSpasm's DoublePrecisionDotProduct (against
+		// players sticking in walls) is 14 soft-float calls a node on the EE, and a point test walks
+		// about 30: at e4m7 collision was 14.4 of the server's 15.7 ms a frame and held the game at
+		// 30 fps; in float it ran at 59. A stuck spot that turns up gets fixed where it is.
+		t1 = DotProduct (plane->normal, p1) - plane->dist;
+		t2 = DotProduct (plane->normal, p2) - plane->dist;
 	}
 
 #if 1

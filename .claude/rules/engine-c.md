@@ -76,10 +76,17 @@ counts from boot, and as a float it would lose frame precision within hours. Wha
 comparing float times against them once per item, each a soft-float call, so those loops read
 the clock into a float once: `CL_RunParticles` (each particle's `die`), `CL_DecayLights`,
 `R_PushDlights` and `CL_ReadFromServer`'s dlight count, and `SV_Physics`'s `nextthink` test,
-which only picks the lerp interval sent to the client. `SV_RunThink` and `SV_Physics_Pusher`
-still compare in double: they decide when QuakeC thinks run, and float could move one by a
-frame. `world.c`'s collision keeps QuakeSpasm's `DoublePrecisionDotProduct` (see
-performance.md for what it costs).
+which only picks the lerp interval sent to the client (its `svtime` is `volatile`: GCC otherwise
+keeps `sv.time` across the loop's calls and converts it again for every entity). `SV_RunThink`
+and `SV_Physics_Pusher` still compare in double: they decide when QuakeC thinks run, and float
+could move one by a frame.
+
+For collision: `world.c`'s `SV_HullPointContents` and `SV_RecursiveHullCheck` are back to id's
+float `DotProduct`, where QuakeSpasm uses `DoublePrecisionDotProduct` against players sticking in
+walls. On the EE the double version was 14 soft-float calls a hull node, and it held e4m7 to 30
+fps (performance.md has the numbers). A stuck spot that turns up gets fixed where it is, not by
+going back to double. A scripted walk (forward into walls, strafe, back, jump) at a fixed 20 fps
+ended in the same places on e1m1 and e4m7 in both versions, and within 5 units on e2m2.
 
 For the effects' random numbers: `common.h` adds `COM_FxRand`, MSVC's `rand()` inline (a
 32-bit LCG returning 15 bits, the range the effects were written for), with its state in
