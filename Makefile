@@ -451,9 +451,9 @@ $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
 # Host tools: each is a single self-contained .cpp compiled straight to a binary.
 tools: $(TOOLS_BINS)
 
-$(TOOLS_CXX_BINS): $(BUILD_DIR)/tools/%: $(HOST_TOOLS_PATH)/%.cpp
-	@mkdir -p $(dir $@)
-	$(HOST_CXX) $(HOST_CXXFLAGS) $< -o $@
+$(TOOLS_CXX_BINS):
+	cmake -S src/tools/host -B build/tools -DCMAKE_BUILD_TYPE=RelWithDebInfo
+	cmake --build build/tools --config RelWithDebInfo
 
 # musenc shares the ADPCM decoder with the game, so it plays back exactly what it measured.
 $(BUILD_DIR)/tools/musenc: $(SRC_DIR)/ps2/audio/spu_adpcm.h
