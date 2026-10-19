@@ -7,3 +7,4 @@
 [submodule "src/tools/miniz"]
 	path = src/tools/miniz
 	url = https://github.com/richgel999/miniz.git
+	ignore = untracked
