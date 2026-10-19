@@ -37,6 +37,12 @@ none of id's maps sets it, so it stays a future exercise for custom maps.
 - `$PS2DEV` = `~/ps2dev`, `$PS2SDK` = `~/ps2dev/ps2sdk` (EE headers in `ee/include`). The
   SDK's C sources, for checking what a library really does, are under
   `~/ps2dev/src/ps2dev/build/ps2sdk/ee/<lib>/src/`. gsKit is at `~/ps2dev/gsKit`.
+- Updating it: `cd ~/ps2dev/src/ps2dev && PATH="$(brew --prefix gnu-sed)/libexec/gnubin:$PATH" ./build-all.sh`
+  (`./build-all.sh 3 4 5` reruns only those steps: 1 toolchain, 2 ps2sdk, 3 ports,
+  4 ps2-packer, 5 ps2client). ps2sdk-ports needs Homebrew's `pkgconf`, and its install runs
+  `sed -i` on symlinked `.pc` files, which BSD sed refuses. Then `make clean`: make tracks
+  neither the SDK's libraries nor its headers. Last rebuilt 2026-10-19: ps2sdk `329e2bb`
+  (CI's pin), newlib `8881dc4`.
 - Submodules: `src/tools/vclpp` (VCL preprocessor, with its own nested `external/parse-utils`),
   `src/tools/vu-checker` (`check_vu_code.py`), `src/tools/miniz`. The build uses the pinned
   vclpp it builds into `build/tools/vclpp`, never one on `PATH`.
@@ -66,8 +72,12 @@ changed a setting. Commit a changed default on purpose, not as fallout from a te
   The symbols are in `quake_unstripped.elf` next to each stripped ELF.
 - The host tools (`src/tools/host`) are a CMake project, which `make` configures into
   `build/tools/cmake/` and builds on every run. CMake tracks their dependencies, so the
-  Makefile doesn't. CI (`.github/workflows/tools.yml`) builds only these tools, with GCC,
-  Apple clang and MSVC, and keeps the Windows executables as an artifact.
+  Makefile doesn't.
+- CI: `.github/workflows/ps2.yml` runs `make` and `make release` on Linux, in the ps2dev
+  `ps2sdk` image pinned by digest, for every change but docs. It keeps no ELF, since releases
+  are packaged from local builds. `tools.yml` builds the host tools alone, with GCC, Apple
+  clang and MSVC, and keeps the Windows executables as an artifact. See
+  [.claude/rules/ci.md](.claude/rules/ci.md).
 - `PS2_QUAKE_DEBUG`, `PS2_QUAKE_ASSERTS` and `PS2_QUAKE_PROFILE` are always defined to 0 or 1.
   Test them with `#if`, never `#ifdef` (`-Wundef` is on).
 - make does not track flag changes. After editing `CONFIG_DEFS` or other flags,
@@ -129,3 +139,4 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | audsrv's traps and the sound feeder, CD music format and pipeline decisions, costs |
 | [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, `host_cmd.c`, `menu.c` | save design, card format, icon, config.cfg policy, card image testing |
 | [vclpp-submodule.md](.claude/rules/vclpp-submodule.md) | `src/tools/vclpp` | vclpp/parse-utils conventions, verification recipes, CI, MASP mode, tyra |
+| [ci.md](.claude/rules/ci.md) | `.github` | the two workflows, the pinned ps2sdk image and moving it, checking a Linux build without Docker, runner traps |

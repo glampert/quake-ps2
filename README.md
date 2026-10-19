@@ -128,6 +128,12 @@ Both configs strip the ELF that runs and keep the symbols next to it in `quake_u
 `make compiledb` regenerates `compile_commands.json` for clangd, and `make clean` removes all
 build output.
 
+[CI](.github/workflows/ps2.yml) runs `make` and `make release` on Linux for every push and pull
+request that changes more than the documentation, inside the ps2dev project's
+[`ps2sdk` container image](https://github.com/ps2dev/ps2sdk/pkgs/container/ps2sdk), pinned to
+one build of it. It checks that both configs compile and link, and keeps no ELF: releases are
+packaged from local builds, as described below.
+
 The host tools in [src/tools/host/](src/tools/host/) (`unpak`, `imgdump`, `musenc`, `pakzip`, into
 `build/tools/`) are a CMake project, [CMakeLists.txt](src/tools/host/CMakeLists.txt). `make`
 configures it once into `build/tools/cmake/`, then runs its build every time, which does nothing
@@ -140,10 +146,10 @@ cmake --build build/tools --config Release
 ```
 
 That leaves the `.exe` files in `build/tools/Release/`, with the C/C++ runtime linked statically, so
-they run without the Visual C++ Redistributable. [CI](.github/workflows/tools.yml) builds the tools
-on Linux (GCC), macOS (Apple clang) and Windows (MSVC) whenever they change, and keeps the Windows
-executables as an artifact, `host-tools-windows-x64`, on each run's page under the repository's
-Actions tab, for 90 days. Downloading it needs a GitHub sign-in.
+they run without the Visual C++ Redistributable. A second [CI](.github/workflows/tools.yml) workflow
+builds the tools alone on Linux (GCC), macOS (Apple clang) and Windows (MSVC) whenever they change,
+and keeps the Windows executables as an artifact, `host-tools-windows-x64`, on each run's page under
+the repository's Actions tab, for 90 days. Downloading it needs a GitHub sign-in.
 
 [make_github_release.sh](src/tools/scripts/make_github_release.sh) `[-f] [-u] [version]` cuts a
 release: a clean build of both configs, each config's `quake.elf` packaged with `LICENSE`,

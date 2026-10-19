@@ -14,7 +14,8 @@ paths:
   to it.
 - The host tools (`src/tools/host`) are held to the same set, minus `-Wdouble-promotion` and
   plus `-Wpedantic`, by their CMakeLists.txt, and MSVC to `/W4`, all as errors. `make tools`
-  only checks Apple clang. GCC and MSVC are checked in CI (`.github/workflows/tools.yml`).
+  only checks Apple clang. CI checks GCC on glibc and MSVC (`.github/workflows/tools.yml`),
+  and the image's GCC on musl too, since `ps2.yml` runs `make` (see [ci.md](ci.md)).
   For GCC-only warnings before pushing, the EE compiler in its LP64 ABI stands in for a host
   GCC: `mips64r5900el-ps2-elf-g++ -mabi=64 -std=gnu++20 -O3 <flags> -c -o /dev/null x.cpp`.
   Without `-mabi=64` it is a 32-bit target, where `uint32_t` is `long` and `size_t` is 32 bits,
@@ -23,7 +24,8 @@ paths:
   and the `scanf` family `warn_unused_result`. Neither macOS's libc nor newlib does, so an
   unchecked `fread` passes `make tools` and fails Linux CI (found in quake2-ps2's unpak,
   2026-10-18). To check locally, redeclare them with `__attribute__((warn_unused_result))` in a
-  header passed by `-include`.
+  header passed by `-include`. Start it with `#pragma GCC system_header`, or the tools' own
+  `-Wredundant-decls` rejects the redeclarations.
 - Reach the engine through `ps2/common.h`, not by including engine headers directly. It
   renames QuakeSpasm's BSP `texinfo_t` to `q1_texinfo_t` for C++, because libdraw's
   `draw_buffers.h` defines its own `texinfo_t`; the renderer works from `mtexinfo_t` anyway.
