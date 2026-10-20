@@ -54,6 +54,12 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   draws the notice over the engine's frame and passes `deferPresent=false` whatever
   `ps2_gs_latency` says, since the card access that follows draws nothing until it is done
   (`save/card_notice.h`). With the plaque up the notice is drawn on the loading screen instead.
+  Before the renderer exists (the boot reads config.cfg off the card in `VID_Init`), the splash
+  draws it: `splash::ShowImage` uploads the notice, composed on the EE as RGBA, to a fixed VRAM
+  spot past the plaque's and draws it at twice its size; the environment's alpha test (`NOTEQUAL
+  0`) leaves out its see-through texels, so the splash's textures are RGBA now, the plaque's
+  pixels unchanged (checked against its texels, 2026-10-20). `gs::Init` calls `splash::Retire`
+  before laying out VRAM, after which the splash draws nothing.
 - **Framebuffer 0 is on screen from `gs::Init` until the first present** (the first frame is
   drawn into frame 1), showing whatever VRAM holds there. The boot splash draws the QUAKE plaque
   into exactly the default layout of frame 0 (640 wide, the standard's full height, 16-bit, at

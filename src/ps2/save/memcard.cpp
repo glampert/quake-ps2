@@ -103,6 +103,11 @@ public:
         return ((sizeBytes + kClusterBytes - 1u) / kClusterBytes) * kClusterBytes + kClusterBytes;
     }
 
+    u32 Generation() const override
+    {
+        return m_generation;
+    }
+
     bool EnsureSaveDir() override
     {
         if (m_saveDirReady)
@@ -332,22 +337,26 @@ private:
             }
             m_listingValid = false; // Another card: nothing known about the old one holds.
             m_saveDirReady = false;
+            ++m_generation;
         }
 
         if (result <= -10 || type == sceMcTypeNoCard)
         {
             m_listingValid = false;
             m_saveDirReady = false;
+            ++m_generation;
             return m_state = State::NoCard;
         }
         if (type != sceMcTypePS2)
         {
+            ++m_generation;
             return m_state = State::NotPs2Card;
         }
         if (result == sceMcResNoFormat)
         {
             m_listingValid = false;
             m_saveDirReady = false;
+            ++m_generation;
             return m_state = State::Unformatted;
         }
 
@@ -404,6 +413,7 @@ private:
     }
 
     State m_state         = State::NoCard;
+    u32   m_generation    = 0; // See Generation(): Refresh moves it on.
     int   m_freeClusters  = 0;
     bool  m_driverTried   = false;
     bool  m_driverStarted = false;

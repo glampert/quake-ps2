@@ -396,6 +396,11 @@ the card is done the music fades back in from where it stopped.
 | **Saving** | `id1/config.cfg`, plus the card's copy when saves go to the card | the card's copy only, never the game data's drive |
 | **Loading** | `id1/config.cfg` first, the card's if there is none | the card's first, then `id1/config.cfg` |
 
+The card's copy gets the same notice ("Data is being loaded from the Memory Card...") as it is
+read at boot, drawn over the QUAKE plaque since the renderer hasn't started yet, and as it is
+written. The card is read once a run, and an unchanged config isn't written again, so leaving the
+options menu without changing anything doesn't touch the card.
+
 The repository tracks `id1/config.cfg` as the default settings. The game writes it deterministically,
 so a run that changes no setting writes it back byte for byte, and `git status` shows when one did.
 

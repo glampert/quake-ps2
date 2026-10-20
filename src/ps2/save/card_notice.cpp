@@ -8,12 +8,16 @@
 #include "ps2/save/card_notice.h"
 #include "ps2/save/memcard.h"
 #include "ps2/audio/cd_audio.h"
+#include "ps2/builtin/builtin.h"
 #include "ps2/engine_hooks.h"
 #include "ps2/input/rumble.h"
 #include "ps2/renderer/loading_screen.h"
+#include "ps2/renderer/render_system.h"
+#include "ps2/renderer/splash_screen.h"
 #include "ps2/system/sys.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace ps2::save {
 namespace {
@@ -79,19 +83,220 @@ static_assert(kBoxLeft >= 0, "The notice's lines are too long for the menu canva
 constexpr int kBoxTopOverGame        = (200 - kBoxHeight) / 2;
 constexpr int kBoxTopOnLoadingScreen = 120;
 
+// Where the notice went up: what EndCardNotice has to take it off.
+enum class Where : u8
+{
+    Nowhere,       // Nothing could be drawn: inside a frame, or between gs::Init and SCR_Init.
+    Game,          // Over the game's frame.
+    LoadingScreen, // On the loading screen.
+    Splash,        // Over the boot splash.
+};
+
 static bool       s_shown     = false;
 static CardAccess s_access    = CardAccess::Saving;
+static Where      s_where     = Where::Nowhere;
 static int        s_shownMsec = 0; // ps2::sys::Milliseconds when it went up.
 
-// A frame with the notice in it, on screen before this returns: the loading screen's while the
-// plaque is up, the game's otherwise, which GL_EndRendering draws the notice over and shows at
-// once.
-void ShowFrame()
+const char * const * Lines()
 {
-    if (!ps2::loading::Redraw())
+    return (s_access == CardAccess::Saving) ? kSavingLines : kLoadingLines;
+}
+
+// ------------------------------------------------------------------------------------------------
+// The notice as one image, for the boot splash
+// ------------------------------------------------------------------------------------------------
+//
+// The boot reads config.cfg off the card in VID_Init, before the renderer exists, so the splash
+// draws the notice, and all it draws is textures. The image is put together here as
+// DrawCardNotice puts the notice on the menu canvas, one texel to a canvas pixel: the box from
+// gfx/box_*.lmp, laid out as M_DrawTextBox lays it, and the lines in gfx.wad's conchars, through
+// the built-in palette. Texels the pieces leave see-through stay at alpha 0, which the splash
+// leaves out, so its plaque shows through them as the game would through the box's.
+
+// Copies an 8-bit picture into the image at (x, y), clipped to it, leaving out the index
+// `transparent`.
+void BlitIndexed(u32 * const image, const u8 * const pixels, const int width, const int height, const int stride,
+                 const int x, const int y, const int transparent)
+{
+    for (int row = 0; row < height; ++row)
     {
-        SCR_UpdateScreen();
+        for (int col = 0; col < width; ++col)
+        {
+            const int imageX = x + col;
+            const int imageY = y + row;
+            const int index  = pixels[(row * stride) + col];
+            if (index != transparent && imageX >= 0 && imageX < kBoxWidth && imageY >= 0 && imageY < kBoxHeight)
+            {
+                image[(imageY * kBoxWidth) + imageX] = global_palette[index];
+            }
+        }
     }
+}
+
+// The box's pieces, gfx/box_<name>.lmp, each read once out of the game data: an LMP's width and
+// height, then its texels, 255 see-through.
+enum BoxPiece : int
+{
+    kTopLeft,
+    kMiddleLeft,
+    kBottomLeft,
+    kTopMiddle,
+    kMiddle,
+    kMiddle2,
+    kBottomMiddle,
+    kTopRight,
+    kMiddleRight,
+    kBottomRight,
+    kNumBoxPieces,
+};
+
+constexpr const char * kBoxPieceNames[kNumBoxPieces] = { "tl", "ml", "bl", "tm", "mm", "mm2", "bm", "tr", "mr", "br" };
+
+struct LoadedPiece
+{
+    byte * file   = nullptr; // COM_LoadMallocFile's block; the texels start 8 bytes in.
+    int    width  = 0;
+    int    height = 0;
+};
+
+// False if the piece isn't there, or isn't an LMP that fits the box.
+bool LoadBoxPiece(const BoxPiece piece, LoadedPiece & out)
+{
+    char path[MAX_QPATH];
+    q_snprintf(path, sizeof(path), "gfx/box_%s.lmp", kBoxPieceNames[piece]);
+
+    out.file = COM_LoadMallocFile(path, nullptr);
+    if (out.file == nullptr)
+    {
+        return false;
+    }
+
+    const int * const header = static_cast<const int *>(static_cast<const void *>(out.file));
+    out.width  = LittleLong(header[0]);
+    out.height = LittleLong(header[1]);
+    return out.width > 0 && out.height > 0 && out.width <= kBoxWidth && out.height <= kBoxHeight &&
+           (8 + (out.width * out.height)) <= com_filesize;
+}
+
+void BlitBoxPiece(u32 * const image, const LoadedPiece & piece, const int x, const int y)
+{
+    BlitIndexed(image, piece.file + 8, piece.width, piece.height, piece.width, x, y, 255);
+}
+
+// M_DrawTextBox's layout, at (0, 0): the left column, the middle two characters at a time (its
+// second row on is box_mm2, as M_DrawTextBox has it), then the right column.
+void BlitBox(u32 * const image, const LoadedPiece (&pieces)[kNumBoxPieces])
+{
+    const int bottom = (kNumLines + 1) * kGlyph;
+
+    BlitBoxPiece(image, pieces[kTopLeft], 0, 0);
+    BlitBoxPiece(image, pieces[kBottomLeft], 0, bottom);
+    for (int line = 0; line < kNumLines; ++line)
+    {
+        BlitBoxPiece(image, pieces[kMiddleLeft], 0, (line + 1) * kGlyph);
+    }
+
+    int x = kGlyph;
+    for (int chars = kBoxChars; chars > 0; chars -= 2, x += 2 * kGlyph)
+    {
+        BlitBoxPiece(image, pieces[kTopMiddle], x, 0);
+        BlitBoxPiece(image, pieces[kBottomMiddle], x, bottom);
+        for (int line = 0; line < kNumLines; ++line)
+        {
+            BlitBoxPiece(image, pieces[(line == 0) ? kMiddle : kMiddle2], x, (line + 1) * kGlyph);
+        }
+    }
+
+    BlitBoxPiece(image, pieces[kTopRight], x, 0);
+    BlitBoxPiece(image, pieces[kBottomRight], x, bottom);
+    for (int line = 0; line < kNumLines; ++line)
+    {
+        BlitBoxPiece(image, pieces[kMiddleRight], x, (line + 1) * kGlyph);
+    }
+}
+
+// The image, kBoxWidth x kBoxHeight RGBA texels in a malloc block; null if a piece of it is
+// missing.
+u32 * ComposeNoticeImage()
+{
+    const u8 * const conchars = static_cast<const u8 *>(W_GetLumpName("conchars"));
+    u32 * image = static_cast<u32 *>(std::calloc(static_cast<size_t>(kBoxWidth * kBoxHeight), sizeof(u32)));
+
+    LoadedPiece pieces[kNumBoxPieces];
+    bool loaded = (conchars != nullptr && image != nullptr);
+    for (int i = 0; loaded && i < kNumBoxPieces; ++i)
+    {
+        loaded = LoadBoxPiece(static_cast<BoxPiece>(i), pieces[i]);
+    }
+    if (loaded)
+    {
+        BlitBox(image, pieces);
+    }
+    for (const LoadedPiece & piece : pieces)
+    {
+        std::free(piece.file);
+    }
+
+    if (!loaded)
+    {
+        std::free(image);
+        return nullptr;
+    }
+
+    // The lines, centred as DrawCardNotice centres them on the canvas, the box's corner there at
+    // kBoxLeft; conchars are 16 to a row, 8x8 each, 0 see-through, the gold ones 128 on.
+    const char * const * const lines = Lines();
+    for (int i = 0; i < kNumLines; ++i)
+    {
+        const int lineX = ((320 - (TextLength(lines[i]) * kGlyph)) / 2) - kBoxLeft;
+        for (int c = 0; lines[i][c] != '\0'; ++c)
+        {
+            const int glyph = static_cast<unsigned char>(lines[i][c]) + ((i < kFirstWhiteLine) ? 128 : 0);
+            const u8 * const pixels = conchars + ((glyph >> 4) * kGlyph * 128) + ((glyph & 15) * kGlyph);
+            BlitIndexed(image, pixels, kGlyph, kGlyph, 128, lineX + (c * kGlyph), (i + 1) * kGlyph, 0);
+        }
+    }
+    return image;
+}
+
+bool ShowOnSplash()
+{
+    u32 * const image = ComposeNoticeImage();
+    const bool shown = (image != nullptr) && ps2::splash::ShowImage(image, kBoxWidth, kBoxHeight);
+    std::free(image);
+    return shown;
+}
+
+// ------------------------------------------------------------------------------------------------
+
+// Puts a frame with the notice in it on screen before returning, wherever the game has got to:
+//  - with the loading plaque up, the loading screen's frame, the notice under the plaque;
+//  - inside a frame, none: one frame can't be drawn inside another;
+//  - before SCR_Init, the boot splash, the notice over it: VID_Init reads config.cfg before the
+//    renderer exists (between gs::Init and SCR_Init, nothing can be drawn at all);
+//  - otherwise the game's frame, which GL_EndRendering draws the notice over and shows at once.
+Where ShowFrame()
+{
+    if (ps2::loading::Redraw())
+    {
+        return Where::LoadingScreen;
+    }
+    if (ps2::rs::IsFrameOpen())
+    {
+        return Where::Nowhere;
+    }
+    if (!scr_initialized)
+    {
+        return ShowOnSplash() ? Where::Splash : Where::Nowhere;
+    }
+
+    // Host_Shutdown keeps Con_Printf from drawing while it writes config.cfg on the way out, with
+    // what stands the screen still under the loading plaque. The notice draws anyway.
+    const qboolean screenDisabled = scr_disabled_for_loading;
+    scr_disabled_for_loading = false;
+    SCR_UpdateScreen();
+    scr_disabled_for_loading = screenDisabled;
+    return Where::Game;
 }
 
 } // namespace
@@ -122,7 +327,7 @@ bool BeginCardNotice(const CardAccess access)
     ps2::input::StopRumble();
 
     S_ExtraUpdate();
-    ShowFrame();
+    s_where     = ShowFrame();
     s_shownMsec = ps2::sys::Milliseconds();
 
     ps2::audio::HoldMusic();
@@ -136,8 +341,9 @@ void EndCardNotice()
         return;
     }
 
+    // A notice nobody could see needn't stay up to be read.
     const int shownMsec = ps2::sys::Milliseconds() - s_shownMsec;
-    if (shownMsec < kMinShownMsec)
+    if (s_where != Where::Nowhere && shownMsec < kMinShownMsec)
     {
         Sys_Sleep(static_cast<unsigned long>(kMinShownMsec - shownMsec));
     }
@@ -145,8 +351,12 @@ void EndCardNotice()
 
     s_shown = false;
 
-    // Off the loading screen at once. Over the game, the next frame is drawn without it.
-    ps2::loading::Redraw();
+    // Off the loading screen or the splash at once. Over the game, the next frame is drawn
+    // without it.
+    if (!ps2::loading::Redraw() && s_where == Where::Splash)
+    {
+        ps2::splash::HideImage();
+    }
     ps2::audio::ReleaseMusic();
 }
 
@@ -166,7 +376,7 @@ void DrawCardNotice(const bool onLoadingScreen)
     const int top = onLoadingScreen ? kBoxTopOnLoadingScreen : kBoxTopOverGame;
     M_DrawTextBox(kBoxLeft, top, kBoxChars, kNumLines);
 
-    const char * const * const lines = (s_access == CardAccess::Saving) ? kSavingLines : kLoadingLines;
+    const char * const * const lines = Lines();
     for (int i = 0; i < kNumLines; ++i)
     {
         const int x = (320 - (TextLength(lines[i]) * kGlyph)) / 2;

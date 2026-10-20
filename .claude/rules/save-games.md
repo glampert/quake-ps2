@@ -75,8 +75,24 @@ facts behind them:
   `Host_Loadgame_f` returns with it up, until its timeout (150 s here) over the running game, and
   here a card pulled after the menu listed the slots is enough. It skips `SCR_EndLoadingPlaque`'s
   `Con_ClearNotify`, so the reason stays on the screen.
-- **Not covered:** the card's `config.cfg` (written on leaving the options menu when it changed,
-  and on quit) and the menus' slot listing (`M_ScanSaves`) touch the card with no notice.
+- **config.cfg too (the user's request, 2026-10-20):** the card's copy is written under the notice
+  (leaving the options menu, quit, `game`) and read under it. The boot's read happens in
+  `VID_Init`, before the renderer exists, so the notice is drawn over the boot splash
+  (`splash::ShowImage`): the box and lines composed on the EE into one RGBA texture from
+  `gfx/box_*.lmp` and gfx.wad's conchars through the built-in palette, drawn at twice its size,
+  centred, its see-through texels left out so the plaque shows through them. Between `gs::Init`
+  and `SCR_Init` nothing can be drawn at all (the notice is then `Where::Nowhere`, and isn't held
+  to its minimum), and nothing reads the card there. Whether the card has a config to read is
+  found from its directory first, without the notice: a card the game never wrote to would show
+  "Data is being loaded" at every boot, for its second, with nothing to load.
+- **The main menu's Quit used to write config.cfg from inside a frame:** QuakeSpasm's "Quit now!"
+  runs `Host_Quit_f` from `M_Draw`, inside `SCR_UpdateScreen`, and a notice can't draw a frame
+  inside another (`rs::BeginFrame` asserts). It now queues `quit` for the top of the next frame,
+  as `test_quit.cpp` already did. The notice still refuses to draw inside a frame. On the way
+  out `Host_Shutdown` sets `scr_disabled_for_loading` to keep `Con_Printf` from drawing; the
+  notice lifts it for its one frame.
+- **Not covered:** the menus' slot listing (`M_ScanSaves`, twenty headers read when the Save or
+  Load menu opens) touches the card with no notice.
 - **Checked in PCSX2 (debug, e1m1 with track 6 playing, 2026-10-20):** console saves had the
   notice up 1.30-1.43 s (about 0.61 s of it the music's hold, then the game written and stored);
   a console load and the load menu's (through `M_Load_Key`) were held to the 1 s minimum, the
@@ -84,6 +100,14 @@ facts behind them:
   and came down matched, so it stayed on screen throughout. With no card (`Slot1_Enable =
   false`) neither a save nor the menu's load put the notice up or held the music, and the failed
   load's plaque came down with "No memory card in MEMORY CARD slot 1." on the screen.
+- **config.cfg, checked the same way (2026-10-20):** booted with no host `config.cfg`, the card's
+  was read under the notice on the splash, once (`IN_Init` and quake.rc's exec took the copy),
+  and the frame-0 shot matched an independent rebuild of the splash and the box from the pak to
+  the pixel, plaque included (11,264 plaque pixels, 64,512 in the box). A card without the
+  game's folder (a copy of `Mcd002.ps2` as slot 1) booted with no notice and the bare splash.
+  Leaving the options menu wrote the card's copy under the notice, over the options menu, with
+  the music held; leaving it again unchanged touched nothing; and the main menu's quit after a
+  change wrote it under the notice, over the console, on its way out.
 
 ## Measured (PCSX2, debug, 2026-10-08)
 
@@ -116,6 +140,14 @@ The engine still builds the text (`Key_WriteBindings`, `Cvar_WriteVariables`, in
 - **Write:** `<gamedir>/config.cfg` only when running from `host:` (**never** to `mass:` or
   `pfs0:`), plus `mc0:/Q1PS2/config.cfg` whenever saves go to the card. The card write is
   skipped when unchanged.
+- **The card's copy (`CardConfig`, 2026-10-20):** what the card's config.cfg holds is kept in RAM
+  (about 3 KB): read off the card by the boot's first read, and updated by every write. The boot's
+  later reads and any later `exec config.cfg` are answered from it, and a config equal to it isn't
+  written, nor the card even looked at: each would put the card notice up for nothing (the old
+  check read the card's copy back on every options exit). A probe that finds another card, or
+  none, makes it stale (`Device::Generation`), and then a write reads the card's file to compare
+  first, as before. A card swapped with no probe since and no setting changed keeps its own
+  config.
 - **The text is deterministic**, which is what lets the repo track `id1/config.cfg`: binds in
   key-number order, then the archived cvars in their name-sorted list, each as the string it was
   set to, then `vid_restart`. A config in gives the same bytes out, from the debug and the
@@ -127,7 +159,7 @@ The engine still builds the text (`Key_WriteBindings`, `Cvar_WriteVariables`, in
 - **Read:** emulator = the host file first, the card as fallback. Console = **the card first**,
   then the game data's `id1/config.cfg`. `exec config.cfg` and the early reads
   (`ReadConfigCvars`, for `ps2_fb_16bit` at `VID_Init` and `in_keyboard` at `IN_Init`) follow
-  the same order. On a console that starts the card driver during `VID_Init`, ahead of the pad's;
+  the same order, and only the first touches the card (see the card's copy above). On a console that starts the card driver during `VID_Init`, ahead of the pad's;
   `iop_boot.cpp` keeps SIO2MAN to one copy (`StartMemoryCardDriver`, `StartPadDriver`), and the
   pad still comes up locked in analog mode with its motors.
 - An archived cvar that a run never registers is dropped from the file (id's behaviour): a

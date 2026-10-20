@@ -177,6 +177,7 @@ void PS2_SaveDeviceToggle(void);
 // QuakeSpasm writes config.cfg into <gamedir> and reads it back from the search path. On a
 // console the player's settings belong on the memory card instead, not the USB stick or hard
 // disk the game is on; under the emulator the host file stays first (src/ps2/save/save_api.cpp).
+// The card's copy is read and written under the memory card notice, as saves are.
 
 // The stream Host_WriteConfiguration writes the binds and cvars to, and its close, which stores
 // the text where it goes. Null if it can't be written, with the reason on the console.
@@ -194,6 +195,10 @@ const char * PS2_ConfigLoadHunk(void);
 // r_part.c's live particles, simulated by CL_RunParticles and drawn by the backend's
 // R_DrawParticles. QuakeSpasm had this static to r_part.c.
 extern particle_t * active_particles;
+
+// gl_screen.c's "ready to draw", set by SCR_Init: before it, the memory card notice draws over
+// the boot splash instead. screen.h doesn't declare it.
+extern qboolean scr_initialized;
 
 // menu.c's message box, built from the gfx/box_*.lmp pieces on the menu canvas, which the memory
 // card notice is drawn in. 'x' and 'y' are its top-left corner, border included; 'width' and

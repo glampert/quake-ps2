@@ -9,6 +9,10 @@
  *  share one heap block, freed once the GIF has read them, and VRAM is used at fixed spots
  *  libgraph's allocator never hears of, so gs::Init lays out its own from the start of VRAM.
  *
+ *  ShowImage draws another picture over it the same way, at another fixed spot: the memory card
+ *  notice, while the boot reads config.cfg off the card before the renderer exists. HideImage
+ *  draws the splash again.
+ *
  *  Brought over from the Quake II port, where the splash is the id logo.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -22,6 +26,7 @@
 #include "ps2/system/sys.h"
 
 #include <cstdio>
+#include <cstring>
 #include <dma.h>
 #include <graph.h>
 #include <gs_psm.h>
@@ -37,21 +42,17 @@ constexpr int kFramePsm      = GS_PSM_16;
 constexpr int kFrameVramAddr = 0;
 
 // VRAM word addresses past the tallest such framebuffer, 640x512 at 16 bits, which takes 80 pages
-// of 2048 words: the plaque's texels, and the z-buffer the environment asks for, never tested or
-// written.
+// of 2048 words: the plaque's texels, the z-buffer the environment asks for, never tested or
+// written, and ShowImage's texels, which take up to 10 pages (320x64 at 32 bits).
 constexpr int kVramPageWords   = 2048;
 constexpr int kTextureVramAddr = 80 * kVramPageWords;
 constexpr int kZBufferVramAddr = 85 * kVramPageWords; // past the five 64x32 pages of the plaque's 144 rows
+constexpr int kImageVramAddr   = 96 * kVramPageWords;
+constexpr int kImageMaxWidth   = 320;
+constexpr int kImageMaxHeight  = 64;
 
-// The extent the GS addresses the plaque's texture through: powers of two past its 32x144 texels,
-// in a buffer the 64 texels a PSMCT32 TBW counts in wide. Region clamping keeps the taps inside the
-// plaque, so nothing past it is ever sampled.
-constexpr int kTextureWidthLog2   = 5;
-constexpr int kTextureHeightLog2  = 8;
-constexpr int kTextureBufferWidth = 64;
-
-// The plaque at twice its size, 64x288, as the menus draw it at scr_menuscale 2, and point sampled
-// as they draw it: at a whole multiple, each texel is a 2x2 block.
+// Pictures are drawn at twice their size, as the menus draw them at scr_menuscale 2 (the plaque
+// is 64x288), and point sampled as they draw them: at a whole multiple, each texel is a 2x2 block.
 constexpr int kScale = 2;
 
 // Palette index 255 is Quake's see-through one. Here it is the black of the background (the
@@ -79,6 +80,7 @@ constexpr int kPacketQwords      = kEnvironmentQwords + kUploadQwords + kDrawQwo
 constexpr int kDmaWaitPolls = 1 << 22;
 
 static bool            s_shown         = false;
+static bool            s_retired       = false; // gs::Init owns VRAM: nothing more is drawn here.
 static int             s_shownHeight   = 0;
 static video::Standard s_shownStandard = video::Standard::Ntsc;
 
@@ -107,19 +109,42 @@ bool SendAndWait(qword_t * const data, const int qwords, const bool chain)
     return dma_channel_wait(DMA_CHANNEL_GIF, kDmaWaitPolls) == 0;
 }
 
-} // namespace
-
-void Show()
+// The power of two a texture's side is addressed through, as TEX0 takes it: the log2 of the
+// smallest one at least `size`.
+int ExtentLog2(const int size)
 {
-    const int startMsec = sys::Milliseconds();
+    int log2 = 0;
+    while ((1 << log2) < size)
+    {
+        ++log2;
+    }
+    return log2;
+}
 
-    // No config has been read yet, so this is the console's own standard (see video_mode.h).
-    const video::Standard standard = video::Selected();
-    const int frameHeight = video::VisibleLines(standard);
+void FillPlaque(u32 * const texels)
+{
+    const int numTexels = qplaque_width * qplaque_height;
+    for (int i = 0; i < numTexels; ++i)
+    {
+        const int index = qplaque_data[i];
+        texels[i] = (index == kTransparentIndex) ? 0u : ScaleColor(global_palette[index]);
+    }
+}
 
-    const int plaqueWidth  = qplaque_width;
-    const int plaqueHeight = qplaque_height;
-    const int numTexels    = plaqueWidth * plaqueHeight;
+// Draws a picture at kScale times its size with its top-left corner at (x, y), over a black clear
+// of the screen when `clear` is set, in three GIF transfers: the drawing environment (and the
+// clear), the texels' upload to `vramAddr` as an RGBA32 texture, and the sprite. `fill` writes the
+// `width` x `height` texels. Those with alpha 0 are left out by the environment's alpha test (the
+// plaque has none). The GS addresses the texture through the powers of two past its size, in a
+// buffer as wide as the 64 texels a PSMCT32 TBW counts in, and region clamping keeps the taps
+// inside the picture, so nothing past it is ever sampled. False if there is no memory for it or
+// the GIF didn't take the transfers.
+template<typename FillTexels>
+bool DrawPicture(const int width, const int height, const int vramAddr, const int x, const int y, const bool clear,
+                 const FillTexels & fill)
+{
+    const int numTexels   = width * height;
+    const int bufferWidth = (width + 63) & ~63;
 
     // The packets first, then the texels, all in one cache-line aligned block.
     const size_t packetBytes = static_cast<size_t>(kPacketQwords) * sizeof(qword_t);
@@ -127,36 +152,22 @@ void Show()
     void * const block = heap::TryAllocAligned(heap::MemAlign(64), blockBytes, heap::MemTag::Renderer);
     if (block == nullptr)
     {
-        std::printf("Splash: no memory for it, skipped.\n");
-        return;
+        std::printf("Splash: no memory for a %dx%d picture, skipped.\n", width, height);
+        return false;
     }
 
     qword_t * const packet = static_cast<qword_t *>(block);
     u32 * const texels = static_cast<u32 *>(static_cast<void *>(static_cast<u8 *>(block) + packetBytes));
-    for (int i = 0; i < numTexels; ++i)
-    {
-        const int index = qplaque_data[i];
-        texels[i] = (index == kTransparentIndex) ? 0u : ScaleColor(global_palette[index]);
-    }
+    fill(texels);
 
     // The upload's chain REFs the texels where they are, and a chain send writes back only the
     // chain's own tags (see ps2-platform.md).
     SyncDCache(texels, texels + numTexels);
 
-    dma_channel_initialize(DMA_CHANNEL_GIF, nullptr, 0);
-
-    // gs::Init's display calls, with the output off until the plaque is drawn: the framebuffer
-    // holds whatever was last in that VRAM.
-    graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
-    graph_disable_output();
-    graph_set_screen(0, 0, kFrameWidth, frameHeight);
-    graph_set_bgcolor(0, 0, 0);
-    graph_set_framebuffer_filtered(kFrameVramAddr, kFrameWidth, kFramePsm, 0, 0);
-
     framebuffer_t frame = {};
     frame.address = kFrameVramAddr;
     frame.width   = kFrameWidth;
-    frame.height  = static_cast<unsigned int>(frameHeight);
+    frame.height  = static_cast<unsigned int>(s_shownHeight);
     frame.psm     = kFramePsm;
     frame.mask    = 0;
 
@@ -169,21 +180,24 @@ void Show()
 
     gs::GifWriter environment(packet, kEnvironmentQwords);
     environment.SetupEnvironment(0, frame, zbuffer);
-    environment.Clear(0, 0.0f, 0.0f, static_cast<float>(kFrameWidth), static_cast<float>(frameHeight), 0, 0, 0);
+    if (clear)
+    {
+        environment.Clear(0, 0.0f, 0.0f, static_cast<float>(kFrameWidth), static_cast<float>(s_shownHeight), 0, 0,
+                          0);
+    }
     environment.EndGifPacket();
 
     gs::GifWriter upload(packet + kEnvironmentQwords, kUploadQwords);
-    upload.TextureTransfer(texels, plaqueWidth, plaqueHeight, GS_PSM_32, vram::Address(kTextureVramAddr),
-                           kTextureBufferWidth);
+    upload.TextureTransfer(texels, width, height, GS_PSM_32, vram::Address(vramAddr), bufferWidth);
     upload.TextureFlush();
 
     texbuffer_t texture = {};
-    texture.address         = kTextureVramAddr;
-    texture.width           = kTextureBufferWidth;
+    texture.address         = static_cast<unsigned int>(vramAddr);
+    texture.width           = static_cast<unsigned int>(bufferWidth);
     texture.psm             = GS_PSM_32;
-    texture.info.width      = kTextureWidthLog2;
-    texture.info.height     = kTextureHeightLog2;
-    texture.info.components = TEXTURE_COMPONENTS_RGB;
+    texture.info.width      = static_cast<unsigned char>(ExtentLog2(width));
+    texture.info.height     = static_cast<unsigned char>(ExtentLog2(height));
+    texture.info.components = TEXTURE_COMPONENTS_RGBA;
     texture.info.function   = TEXTURE_FUNCTION_DECAL;
 
     clutbuffer_t clut = {};
@@ -203,29 +217,24 @@ void Show()
     wrap.horizontal = WRAP_REGION_CLAMP;
     wrap.vertical   = WRAP_REGION_CLAMP;
     wrap.minu       = 0;
-    wrap.maxu       = plaqueWidth - 1;
+    wrap.maxu       = width - 1;
     wrap.minv       = 0;
-    wrap.maxv       = plaqueHeight - 1;
-
-    const int drawWidth  = plaqueWidth * kScale;
-    const int drawHeight = plaqueHeight * kScale;
-    const int drawX      = (kFrameWidth - drawWidth) / 2;
-    const int drawY      = (frameHeight - drawHeight) / 2;
+    wrap.maxv       = height - 1;
 
     // libdraw's sprite takes its far corner as the last pixel it covers, not the one past it (its
-    // END_OFFSET), so the corner is pulled in by one: drawWidth x drawHeight pixels, the texels
-    // spread over them evenly, each one kScale x kScale.
+    // END_OFFSET), so the corner is pulled in by one: the picture's pixels at kScale times, the
+    // texels spread over them evenly, each one kScale x kScale.
     texrect_t rect = {};
-    rect.v0.x    = static_cast<float>(drawX);
-    rect.v0.y    = static_cast<float>(drawY);
+    rect.v0.x    = static_cast<float>(x);
+    rect.v0.y    = static_cast<float>(y);
     rect.v0.z    = 0u;
     rect.t0.u    = 0.0f;
     rect.t0.v    = 0.0f;
-    rect.v1.x    = static_cast<float>(drawX + drawWidth - 1);
-    rect.v1.y    = static_cast<float>(drawY + drawHeight - 1);
+    rect.v1.x    = static_cast<float>(x + (width * kScale) - 1);
+    rect.v1.y    = static_cast<float>(y + (height * kScale) - 1);
     rect.v1.z    = 0u;
-    rect.t1.u    = static_cast<float>(plaqueWidth);
-    rect.t1.v    = static_cast<float>(plaqueHeight);
+    rect.t1.u    = static_cast<float>(width);
+    rect.t1.v    = static_cast<float>(height);
     rect.color.r = 0x80;
     rect.color.g = 0x80;
     rect.color.b = 0x80;
@@ -248,15 +257,51 @@ void Show()
     {
         // The block stays allocated: a transfer that never finished may yet read it.
         std::printf("Splash: the GIF didn't take its transfers, skipped.\n");
+        return false;
+    }
+
+    heap::Free(block, blockBytes, heap::MemTag::Renderer);
+    return true;
+}
+
+// The plaque, centred on a black screen.
+bool DrawPlaque()
+{
+    const int x = (kFrameWidth - (qplaque_width * kScale)) / 2;
+    const int y = (s_shownHeight - (qplaque_height * kScale)) / 2;
+    return DrawPicture(qplaque_width, qplaque_height, kTextureVramAddr, x, y, /*clear=*/true, FillPlaque);
+}
+
+} // namespace
+
+void Show()
+{
+    const int startMsec = sys::Milliseconds();
+
+    // No config has been read yet, so this is the console's own standard (see video_mode.h).
+    const video::Standard standard = video::Selected();
+    const int frameHeight = video::VisibleLines(standard);
+    s_shownHeight   = frameHeight;
+    s_shownStandard = standard;
+
+    dma_channel_initialize(DMA_CHANNEL_GIF, nullptr, 0);
+
+    // gs::Init's display calls, with the output off until the plaque is drawn: the framebuffer
+    // holds whatever was last in that VRAM.
+    graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
+    graph_disable_output();
+    graph_set_screen(0, 0, kFrameWidth, frameHeight);
+    graph_set_bgcolor(0, 0, 0);
+    graph_set_framebuffer_filtered(kFrameVramAddr, kFrameWidth, kFramePsm, 0, 0);
+
+    if (!DrawPlaque())
+    {
         return;
     }
 
     graph_enable_output();
-    heap::Free(block, blockBytes, heap::MemTag::Renderer);
 
-    s_shown         = true;
-    s_shownHeight   = frameHeight;
-    s_shownStandard = standard;
+    s_shown = true;
     std::printf("Splash: the QUAKE plaque is up (%s, %dx%d) after %d ms.\n", video::Name(standard), kFrameWidth,
                 frameHeight, sys::Milliseconds() - startMsec);
 }
@@ -265,6 +310,34 @@ bool IsShownIn(const int vramAddress, const int width, const int height, const i
 {
     return s_shown && vramAddress == kFrameVramAddr && width == kFrameWidth && height == s_shownHeight &&
            psm == kFramePsm && standard == s_shownStandard;
+}
+
+bool ShowImage(const u32 * const texels, const int width, const int height)
+{
+    if (!s_shown || s_retired || width > kImageMaxWidth || height > kImageMaxHeight ||
+        (width * kScale) > kFrameWidth || (height * kScale) > s_shownHeight)
+    {
+        return false;
+    }
+
+    const int x = (kFrameWidth - (width * kScale)) / 2;
+    const int y = (s_shownHeight - (height * kScale)) / 2;
+    return DrawPicture(width, height, kImageVramAddr, x, y, /*clear=*/false, [=](u32 * const out) {
+        std::memcpy(out, texels, static_cast<size_t>(width * height) * sizeof(u32));
+    });
+}
+
+void HideImage()
+{
+    if (s_shown && !s_retired)
+    {
+        DrawPlaque();
+    }
+}
+
+void Retire()
+{
+    s_retired = true;
 }
 
 } // namespace ps2::splash

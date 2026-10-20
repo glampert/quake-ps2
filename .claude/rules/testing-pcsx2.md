@@ -183,6 +183,16 @@ The rest are scripted runs:
   back in`. Back up the card first. A screenshot meant to show a failed load's notify lines must
   come within `con_notifytime` (3 s) of them: 200 frames of `wait` is too late. The results of
   2026-10-20 are in [save-games.md](save-games.md).
+  - **config.cfg's notice:** the scratch-directory recipe without a `config.cfg` makes the boot
+    read the card's (under the emulator the host file wins). Its notice is on the splash, which
+    `screenshot` can't reach from inside `VID_Init` (no renderer yet): skip the scratch shots
+    unless the notice is over the game or the loading screen, leave the splash's notice up (no
+    `HideImage`), and take the shot right after `SCR_Init` in `Host_Init`, which reads frame 0
+    while the config's layout is the default one. For the writes, a scratch command that calls
+    `M_Menu_Options_f()` and `M_Options_Key(K_ESCAPE)` leaves the options menu as the pad does
+    (`M_Options_Key` is extern in menu.c); change an archived cvar (`volume 0.6`) to have
+    something to write, and `menu_quit` takes the main menu's quit path. A run that quits writes
+    the card's config: back it up first.
 - **The debug page** (Options → Debug Options, or `menu_debug`): a script can't press the pad,
   but `menu_debug`, `w10` and a `screenshot` show it, and its rows are commands and cvars to run
   directly. The cursor blinks between conchars 12 and 13 four times a second, so a shot catches

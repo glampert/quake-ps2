@@ -15,7 +15,7 @@
  *  never the USB stick or hard disk the game data is on, whose own config.cfg only stands in
  *  when the card has none.
  *
- *  A save written to the card or read off it does so under the card notice (card_notice.h).
+ *  Saves and config.cfg go to the card and come off it under the card notice (card_notice.h).
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -168,20 +168,135 @@ void WriteHostConfig(const char * text, const u32 sizeBytes)
     }
 }
 
-// The card's copy. Not worth bothering the player over - this runs on leaving the options menu
-// and on quitting - so a card that isn't there or has no room just means the console says so.
-void WriteCardConfig(const char * text, const u32 sizeBytes)
+// `sizeBytes` of text in a malloc block, with a 0 after it; null if out of memory.
+char * DuplicateText(const char * text, const u32 sizeBytes)
+{
+    char * const copy = static_cast<char *>(std::malloc(sizeBytes + 1u));
+    if (copy != nullptr)
+    {
+        std::memcpy(copy, text, sizeBytes);
+        copy[sizeBytes] = '\0';
+    }
+    return copy;
+}
+
+// What the card's config.cfg holds, as far as this run knows. The card is read for it once, by
+// the boot's first read (VID_Init's, for the cvars the GS comes up with), and the copy follows
+// every write. The boot's later reads (IN_Init's, then quake.rc's "exec config.cfg"), any later
+// "exec config.cfg", and a config written unchanged, as on leaving the options menu with nothing
+// changed, are all answered from it: each would otherwise go to the card under the card notice
+// for nothing. A probe that finds another card in the slot, or none, makes it stale
+// (Device::Generation).
+enum class CardConfig : u8
+{
+    Unknown, // Not read or written yet, or written and failed.
+    Absent,  // The card has none, or none this game would have written (empty, or far too big).
+    Present, // The card holds s_cardConfigText.
+};
+
+static CardConfig s_cardConfig           = CardConfig::Unknown;
+static char *     s_cardConfigText       = nullptr; // malloc: s_cardConfigBytes, then a 0
+static u32        s_cardConfigBytes      = 0;
+static u32        s_cardConfigGeneration = 0;
+
+// Whether the copy describes the card in the slot, as of the last probe.
+bool CardConfigCurrent()
+{
+    return s_cardConfig != CardConfig::Unknown && s_cardConfigGeneration == GetMemoryCardDevice().Generation();
+}
+
+// Records what the card holds now: `text` (taken over: a block from DuplicateText), or nothing
+// for Absent and Unknown. A text that couldn't be copied leaves it unknown.
+void KeepCardConfig(const CardConfig state, char * const text, const u32 sizeBytes)
+{
+    std::free(s_cardConfigText);
+    s_cardConfig           = (state == CardConfig::Present && text == nullptr) ? CardConfig::Unknown : state;
+    s_cardConfigText       = text;
+    s_cardConfigBytes      = (text != nullptr) ? sizeBytes : 0u;
+    s_cardConfigGeneration = GetMemoryCardDevice().Generation();
+}
+
+// Reads the card's config.cfg into the copy, under the card notice. A card that isn't there, or
+// can't be read, leaves the copy unknown.
+void ReadCardConfigIntoCopy()
+{
+    // Whether there is one to read is found out first, from the directory, without the notice:
+    // a card the game has never written to would otherwise show "Data is being loaded" at every
+    // boot, for its second, with nothing to load.
+    Device & card = GetMemoryCardDevice();
+    u32 sizeBytes = 0;
+    if (!card.Probe())
+    {
+        return;
+    }
+    if (!card.FileSize(kConfigFile, sizeBytes) || sizeBytes == 0 || sizeBytes > kMaxConfigBytes)
+    {
+        KeepCardConfig(CardConfig::Absent, nullptr, 0);
+        return;
+    }
+
+    if (!BeginCardNotice(CardAccess::Loading))
+    {
+        return; // Gone since the probe just now.
+    }
+
+    char * const text = static_cast<char *>(std::malloc(sizeBytes + 1u));
+    const FileHandle handle = (text != nullptr) ? card.Open(kConfigFile, OpenMode::Read) : FileHandle::Invalid;
+    const bool read = (handle != FileHandle::Invalid) && card.Read(handle, text, sizeBytes);
+    if (handle != FileHandle::Invalid)
+    {
+        card.Close(handle);
+    }
+    EndCardNotice();
+
+    if (!read)
+    {
+        std::free(text);
+        Con_Printf("Couldn't read config.cfg from the memory card.\n");
+        return;
+    }
+
+    text[sizeBytes] = '\0';
+    KeepCardConfig(CardConfig::Present, text, sizeBytes);
+    Con_Printf("config.cfg read from %s.\n", card.Describe(kConfigFile));
+}
+
+// The card's config.cfg, `outSizeBytes` long with a 0 after it - the copy's, owned here - or
+// null if it has none or can't be read.
+const char * CardConfigText(u32 & outSizeBytes)
+{
+    if (!CardConfigCurrent())
+    {
+        ReadCardConfigIntoCopy();
+    }
+    outSizeBytes = s_cardConfigBytes;
+    return (s_cardConfig == CardConfig::Present) ? s_cardConfigText : nullptr;
+}
+
+// The same, in a malloc block of the caller's, which may write into it.
+char * CardConfigMalloc()
+{
+    u32 sizeBytes = 0;
+    const char * const text = CardConfigText(sizeBytes);
+    return (text != nullptr) ? DuplicateText(text, sizeBytes) : nullptr;
+}
+
+// WriteCardConfig's write, under the card notice.
+void StoreCardConfig(const char * text, const u32 sizeBytes)
 {
     Device & card = GetMemoryCardDevice();
-    if (!card.Probe() || !card.EnsureSaveDir())
+    if (!card.EnsureSaveDir())
     {
         Con_Printf("config.cfg not saved to the memory card.\n");
         return;
     }
 
-    if (FileMatches(card, kConfigFile, text, sizeBytes))
+    // With the copy stale (another card) or never taken (the emulator reads the host file), the
+    // card may hold these very bytes: no write then.
+    if (!CardConfigCurrent() && FileMatches(card, kConfigFile, text, sizeBytes))
     {
-        return; // The card has it already: no write.
+        KeepCardConfig(CardConfig::Present, DuplicateText(text, sizeBytes), sizeBytes);
+        return;
     }
 
     u32 oldSizeBytes = 0;
@@ -195,59 +310,33 @@ void WriteCardConfig(const char * text, const u32 sizeBytes)
     if (!WriteWholeFile(card, kConfigFile, text, sizeBytes))
     {
         card.Delete(kConfigFile); // Half a config would only be read back as one.
+        KeepCardConfig(CardConfig::Unknown, nullptr, 0);
         Con_Printf("Couldn't save config.cfg to the memory card.\n");
         return;
     }
+    KeepCardConfig(CardConfig::Present, DuplicateText(text, sizeBytes), sizeBytes);
     Con_Printf("config.cfg saved to %s.\n", card.Describe(kConfigFile));
 }
 
-// The card's config.cfg in a block from `allocate`, with a 0 after it. Null if there is none.
-template<typename AllocateFn>
-char * ReadCardConfig(AllocateFn allocate)
+// The card's copy. Not worth bothering the player over - this runs on leaving the options menu
+// and on quitting - so a card that isn't there or has no room just means the console says so. A
+// config the card holds already isn't written, nor even looked for: the card is only touched,
+// under the card notice, for one it doesn't have.
+void WriteCardConfig(const char * text, const u32 sizeBytes)
 {
-    Device & card = GetMemoryCardDevice();
-    u32 sizeBytes = 0;
-    if (!card.Probe() || !card.FileSize(kConfigFile, sizeBytes) || sizeBytes == 0 || sizeBytes > kMaxConfigBytes)
+    if (CardConfigCurrent() && s_cardConfig == CardConfig::Present && s_cardConfigBytes == sizeBytes &&
+        std::memcmp(s_cardConfigText, text, sizeBytes) == 0)
     {
-        return nullptr;
+        return;
     }
 
-    char * const text = allocate(sizeBytes + 1u);
-    if (text == nullptr)
+    if (!BeginCardNotice(CardAccess::Saving))
     {
-        return nullptr;
+        Con_Printf("config.cfg not saved to the memory card.\n");
+        return;
     }
-
-    const FileHandle handle = card.Open(kConfigFile, OpenMode::Read);
-    const bool read = (handle != FileHandle::Invalid) && card.Read(handle, text, sizeBytes);
-    if (handle != FileHandle::Invalid)
-    {
-        card.Close(handle);
-    }
-
-    if (!read)
-    {
-        Con_Printf("Couldn't read config.cfg from the memory card.\n");
-        return nullptr; // The caller gives the block back.
-    }
-
-    text[sizeBytes] = '\0';
-    Con_Printf("config.cfg read from %s.\n", card.Describe(kConfigFile));
-    return text;
-}
-
-char * ReadCardConfigMalloc()
-{
-    char * block = nullptr;
-    char * const text = ReadCardConfig([&block](const u32 sizeBytes) {
-        block = static_cast<char *>(std::malloc(sizeBytes));
-        return block;
-    });
-    if (text == nullptr)
-    {
-        std::free(block); // A failed read leaves the block behind.
-    }
-    return text;
+    StoreCardConfig(text, sizeBytes);
+    EndCardNotice();
 }
 
 // The game data's config.cfg - the host file, or one on a console's USB stick or hard disk -
@@ -343,16 +432,16 @@ void ReadConfigCvars(const char ** vars, const int numVars)
     // Under the emulator the host file comes first: it is the one edited by hand while
     // developing. On a console the card's does: it is the player's own, and the game data's only
     // stands in for one the card doesn't have. Whatever ps2_savedevice says: this runs before
-    // config.cfg has set it.
+    // config.cfg has set it. The card is read the first time only (see CardConfig).
     char * text = nullptr;
     if (HostFilesAvailable())
     {
         text = ReadGameDataConfigMalloc();
-        text = (text != nullptr) ? text : ReadCardConfigMalloc();
+        text = (text != nullptr) ? text : CardConfigMalloc();
     }
     else
     {
-        text = ReadCardConfigMalloc();
+        text = CardConfigMalloc();
         text = (text != nullptr) ? text : ReadGameDataConfigMalloc();
     }
 
@@ -561,18 +650,18 @@ void PS2_ConfigCloseWrite(FILE * f)
 
 const char * PS2_ConfigLoadHunk(void)
 {
-    // A card read that fails gives its hunk block back: Cmd_Exec_f only frees to its low mark
-    // when it gets a config to run.
+    // The card's copy (see CardConfig): read off the card by the boot's first read, and answered
+    // from memory after that.
     const auto fromCard = []() -> const char * {
-        const int mark = Hunk_LowMark();
-        const char * const text = ReadCardConfig([](const u32 sizeBytes) {
-            return static_cast<char *>(Hunk_AllocName(static_cast<int>(sizeBytes), "config.cfg"));
-        });
+        u32 sizeBytes = 0;
+        const char * const text = CardConfigText(sizeBytes);
         if (text == nullptr)
         {
-            Hunk_FreeToLowMark(mark);
+            return nullptr;
         }
-        return text;
+        char * const block = static_cast<char *>(Hunk_AllocName(static_cast<int>(sizeBytes + 1u), "config.cfg"));
+        std::memcpy(block, text, sizeBytes + 1u);
+        return block;
     };
     const auto fromGameData = []() {
         return static_cast<const char *>(static_cast<const void *>(COM_LoadHunkFile(kConfigFile, nullptr)));

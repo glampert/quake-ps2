@@ -111,6 +111,10 @@ public:
     virtual u32 FreeBytes() const = 0;
     virtual u32 FileCostBytes(u32 sizeBytes) const = 0;
 
+    // Moves on whenever a Probe finds the device may not hold what it did: another card in the
+    // slot, or none. What was learned about its files before is stale once it has.
+    virtual u32 Generation() const = 0;
+
     // Creates the save directory (and whatever else it needs) if it isn't there yet.
     virtual bool EnsureSaveDir() = 0;
 

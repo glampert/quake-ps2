@@ -1281,8 +1281,7 @@ void M_Options_Key (int k)
 	case K_ESCAPE:
 	case K_BBUTTON:
 		// [PS2_QUAKE]: keep the settings now. QuakeSpasm only writes config.cfg on quit, and a
-		// console is usually just switched off; on the memory card an unchanged config costs
-		// only the read that finds it so.
+		// console is usually just switched off; an unchanged config doesn't touch the memory card.
 		Host_WriteConfiguration ();
 		M_Menu_Main_f ();
 		break;
@@ -2654,7 +2653,11 @@ void M_Draw (void)
 		{ /* QuakeSpasm customization: */
 			/* Quit now! S.A. */
 			key_dest = key_console;
-			Host_Quit_f ();
+			// [PS2_QUAKE]: at the top of the next frame, as the tests quit (test_quit.cpp), not from
+			// inside this one: the config.cfg written on the way out may put the memory card notice
+			// up, and that draws a frame of its own.
+			Cbuf_AddText ("quit\n");
+			break;
 		}
 		M_Quit_Draw ();
 		break;

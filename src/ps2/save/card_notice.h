@@ -17,10 +17,12 @@
  *        up for a second, so a quick read can still be read, and the music fades back in.
  *
  *        Over the game the notice sits on the faded view, as the engine's own dialogs do; with the
- *        loading plaque up, on the loading screen, under the plaque. Card saves put it up before
- *        the engine writes the game out (PS2_SaveOpenWrite to PS2_SaveCloseWrite), and loads before
- *        the card is read (PS2_SaveLoadText, or the load menu ahead of its plaque,
- *        PS2_SaveLoadStarting); saves kept as host files under the emulator
+ *        loading plaque up, on the loading screen, under the plaque; before the renderer exists,
+ *        over the boot splash, which is where the boot's read of config.cfg finds it. Card saves
+ *        put it up before the engine writes the game out (PS2_SaveOpenWrite to
+ *        PS2_SaveCloseWrite), loads before the card is read (PS2_SaveLoadText, or the load menu
+ *        ahead of its plaque, PS2_SaveLoadStarting), and the card's config.cfg as it is read and
+ *        written (save_api.cpp); saves kept as host files under the emulator
  *        (ps2_savedevice "host") don't.
  *
  * This source code is released under the GNU GPL v2 license.

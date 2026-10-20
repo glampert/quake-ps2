@@ -12,6 +12,8 @@
 
 #include "ps2/system/video_mode.h"
 
+#include <tamtypes.h>
+
 namespace ps2::splash {
 
 // Brings the GS up just enough for the plaque, draws it and leaves it on screen. It sets the GS up
@@ -26,5 +28,18 @@ void Show();
 // framebuffer. One laid out any other way would show the splash's texels read the wrong way, so
 // it starts black instead.
 bool IsShownIn(int vramAddress, int width, int height, int psm, video::Standard standard);
+
+// Draws an image over the splash, at twice its size and centred, as the menus would draw it: the
+// memory card notice while the boot reads config.cfg off the card, which VID_Init does before
+// the renderer exists (save/card_notice.h). `texels` are `width` x `height` RGBA, those with alpha
+// 0 left out. False, drawing nothing, if the splash isn't up or gs::Init has taken over.
+bool ShowImage(const u32 * texels, int width, int height);
+
+// Takes the image down again: the splash as Show drew it. Nothing happens once gs::Init has
+// taken over.
+void HideImage();
+
+// gs::Init calls it as it lays out VRAM, which the splash's drawing would trample from then on.
+void Retire();
 
 } // namespace ps2::splash
