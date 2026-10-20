@@ -382,6 +382,13 @@ e1m1 save takes 11 KB), and a save is written in full before the one it replaces
 interrupted save never loses the previous one. Under PCSX2, `ps2_savedevice` picks between plain
 `.sav` files in `id1/` (`host`, the default there) and the card (`mc`).
 
+While a save is written to the card, or read back off it, the game shows the notice PS2 games show
+([card_notice.h](src/ps2/save/card_notice.h)): "Data is being saved to the Memory Card in slot 1.
+Do not remove the Memory Card or reset/switch off the console.", in Quake's own message box. On a
+console the game stands still for a second or more while the card is busy, so the notice goes up
+before the card is touched, the music fades out under it rather than stopping mid-note, and once
+the card is done the music fades back in from where it stopped.
+
 `config.cfg`, the binds and settings, is written on quit and when leaving the options menu:
 
 | | Game data on `host:` (PCSX2) | Game data on the HDD or USB (console) |

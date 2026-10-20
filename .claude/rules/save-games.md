@@ -46,6 +46,45 @@ facts behind them:
 - Loading inflates the whole text into one malloc block (QuakeSpasm frees it), straight into
   the output with `TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF`: no dictionary of its own.
 
+## The memory card notice (`card_notice.cpp`)
+
+- **The user's request (2026-10-20):** while a save goes to the card or comes back off it, the
+  notice PS2 games show: "Data is being saved to the Memory Card in slot 1. Do not remove the
+  Memory Card or reset/switch off the console." ("loaded from" for a load), with the music faded
+  to silence before the card is touched. It is Quake's message box (`M_DrawTextBox`, the quit
+  box's), gold for what is happening and white for the warning, centred over the faded game, or
+  under the plaque on the loading screen.
+- **Order:** probe the card (none, or unformatted: no notice, and the access fails with the reason
+  as before); stop the rumble; draw a frame with the notice and show it at once; fade the music out
+  (`audio::HoldMusic`); then the card. Afterwards the notice stays until it has been up a second
+  (`kMinShownMsec`), so a quick read can still be read, and the music fades back in. The notice
+  goes up before the fade, not after: the other way round the game would sit frozen for half a
+  second with nothing to say why.
+- **Where:** a save puts it up in `PS2_SaveOpenWrite` and takes it down in `PS2_SaveCloseWrite`,
+  after `StoreSlot`. Not in the close alone: the engine writing the game out between the two (the
+  `fprintf`s, deflated as they go) holds the mixer up for over 400 ms in a debug build, and the
+  music stopped dead there, before any fade (PCSX2, 2026-10-20). Nothing between open and close
+  can `Host_Error`, so the close always comes. A console `load` puts it up in `PS2_SaveLoadText`,
+  around `RestoreSlot`. The load menu has to start sooner: `M_Load_Key` raises the loading plaque,
+  whose `S_StopAllSounds` would cut the music off, before `load` runs. So it calls
+  `PS2_SaveLoadStarting` first, and `PS2_SaveLoadText` finds the notice up, on the loading screen,
+  and takes it down once the card is read.
+- Saves on host files (`ps2_savedevice host`) get neither the notice nor the fade: they stay
+  QuakeSpasm's.
+- **A failed load takes the load menu's plaque down** (`EndPlaqueOfFailedLoad`). QuakeSpasm's
+  `Host_Loadgame_f` returns with it up, until its timeout (150 s here) over the running game, and
+  here a card pulled after the menu listed the slots is enough. It skips `SCR_EndLoadingPlaque`'s
+  `Con_ClearNotify`, so the reason stays on the screen.
+- **Not covered:** the card's `config.cfg` (written on leaving the options menu when it changed,
+  and on quit) and the menus' slot listing (`M_ScanSaves`) touch the card with no notice.
+- **Checked in PCSX2 (debug, e1m1 with track 6 playing, 2026-10-20):** console saves had the
+  notice up 1.30-1.43 s (about 0.61 s of it the music's hold, then the game written and stored);
+  a console load and the load menu's (through `M_Load_Key`) were held to the 1 s minimum, the
+  menu's on the loading screen once its plaque was up; screenshots taken as the notice went up
+  and came down matched, so it stayed on screen throughout. With no card (`Slot1_Enable =
+  false`) neither a save nor the menu's load put the notice up or held the music, and the failed
+  load's plaque came down with "No memory card in MEMORY CARD slot 1." on the screen.
+
 ## Measured (PCSX2, debug, 2026-10-08)
 
 e1m1's save: 83,433 bytes of text → 11,350 bytes on the card (7.4x). The first card save of a

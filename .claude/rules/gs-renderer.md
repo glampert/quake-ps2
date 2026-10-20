@@ -50,6 +50,10 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   (`DrawLoadingScreen` in vid.cpp), so each is on screen before the call returns. They skip
   `GL_BeginRendering`'s profiler rollover and the overlays, and nothing is drawn while a frame is
   open (`rs::IsFrameOpen`): a file read from inside a frame leaves the screen as it is.
+- **Frames drawn while the memory card notice is up are shown at once** too: `GL_EndRendering`
+  draws the notice over the engine's frame and passes `deferPresent=false` whatever
+  `ps2_gs_latency` says, since the card access that follows draws nothing until it is done
+  (`save/card_notice.h`). With the plaque up the notice is drawn on the loading screen instead.
 - **Framebuffer 0 is on screen from `gs::Init` until the first present** (the first frame is
   drawn into frame 1), showing whatever VRAM holds there. The boot splash draws the QUAKE plaque
   into exactly the default layout of frame 0 (640 wide, the standard's full height, 16-bit, at

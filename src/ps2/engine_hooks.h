@@ -4,8 +4,8 @@
  *        stand-ins for the few OpenGL calls made outside the renderer (the status bar's alpha
  *        and scissor, the view blend, the screenshot readback), the loading screen, the
  *        compressed packs, the debug page, the PS2's additions to the default config, where save
- *        games and config.cfg are kept, and the engine state the backend reads that QuakeSpasm
- *        keeps to one file. Every engine line that uses this is tagged [PS2_QUAKE].
+ *        games and config.cfg are kept, and the engine state and functions the backend uses that
+ *        QuakeSpasm keeps to one file. Every engine line that uses this is tagged [PS2_QUAKE].
  *        NOTE: Shared header between C and C++.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -142,16 +142,23 @@ const char * PS2_DefaultConfig(void);
 // `path` is always the <gamedir>/<name>.sav QuakeSpasm built.
 
 // The stream Host_Savegame_f writes a save to, having said where it goes. Null if it can't be
-// written, with the reason on the console.
+// written, with the reason on the console. For the memory card, the card notice is up and the
+// music faded out before it returns (src/ps2/save/card_notice.h).
 FILE * PS2_SaveOpenWrite(const char * path);
 
 // Closes that stream, which stores the save where it goes; `comment` is the line the menus list
-// it by. False if it didn't make it, with the reason on the console.
+// it by. False if it didn't make it, with the reason on the console. Takes the card notice down.
 qboolean PS2_SaveCloseWrite(FILE * f, const char * comment);
 
 // The save as text in a malloc block, as COM_LoadMallocFile_TextMode_OSPath returns it, having
-// said where it is loading from. Null if there is none or it can't be read.
+// said where it is loading from. Null if there is none or it can't be read; then the load menu's
+// loading plaque, if it is up, comes down too.
 char * PS2_SaveLoadText(const char * path);
+
+// The load menu is about to raise the loading plaque, which stops every sound at once, and then
+// run "load". From the memory card, the card notice goes up and the music fades out now, and the
+// load takes the notice down once the card has been read (src/ps2/save/card_notice.h).
+void PS2_SaveLoadStarting(void);
 
 // The comment line of a save, for the load and save menus. False if the slot is empty or can't
 // be read.
@@ -181,12 +188,18 @@ void PS2_ConfigCloseWrite(FILE * f);
 const char * PS2_ConfigLoadHunk(void);
 
 // ------------------------------------------------------------------------------------------------
-// Engine state the backend reads
+// Engine state and functions the backend uses
 // ------------------------------------------------------------------------------------------------
 
 // r_part.c's live particles, simulated by CL_RunParticles and drawn by the backend's
 // R_DrawParticles. QuakeSpasm had this static to r_part.c.
 extern particle_t * active_particles;
+
+// menu.c's message box, built from the gfx/box_*.lmp pieces on the menu canvas, which the memory
+// card notice is drawn in. 'x' and 'y' are its top-left corner, border included; 'width' and
+// 'lines' its inside, in 8-pixel characters, the width drawn two at a time. menu.h doesn't
+// declare it.
+void M_DrawTextBox(int x, int y, int width, int lines);
 
 #ifdef __cplusplus
 } // extern "C"

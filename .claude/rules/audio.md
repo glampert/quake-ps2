@@ -91,6 +91,37 @@ over from the Quake II port unchanged; the facts marked *(Q2)* were measured the
   `music_loop 1` while a once-only track plays reopens it when it ends. Not kept:
   `music_jump` (tracker orders) and the `cd` command (no disc). Added: `bgm_extmusic` acts at
   once. "Couldn't find a cdrip for track N" prints once per track, not on every map.
+- **Holding the music through a stall (`cd_audio.h`, for the memory card notice):** a card save or
+  load stops the game drawing and mixing for a second or more, and the music used to stop dead
+  there. `HoldMusic` fades out what is already queued in `s_rawsamples` in place, ahead of the
+  mixer (about 330 ms of it: the pump keeps the ring 7680 frames ahead), so nothing decoded is
+  dropped and `ReleaseMusic` picks up where the fade ended. The fade is 500 ms, or as long as
+  what is queued if that is longer: past the queued frames the pump decodes on, the ramp laid
+  over what it stores, and stores nothing past the fade's end. HoldMusic then paints the mix
+  itself (`S_ExtraUpdate`, every 5 ms) until `soundtime` is 50 ms past the end (audsrv's queue is
+  43 ms deep), so the card isn't touched until the fade has been heard out. With
+  `snd_noextraupdate 1` nothing paints: it gives up a second late, and the music is cut as
+  before. `ReleaseMusic` arms a 1 s fade-in, laid on the first frames stored after it; closing
+  the track drops it, so a load's new track starts at full volume. Sound effects aren't faded:
+  they play on through the fade, then stop when the feeder runs out of painted audio, as at any
+  stall.
+- **What the mixer has painted ahead (`_snd_mixahead`, 0.1 s) is all that covers the main
+  thread before the fade begins.** In PCSX2 the card probe and the notice's frame took 98 ms
+  together (about 200 on the session's first card access, which starts MCMAN and MCSERV), and
+  the save text written out before the notice took over 400 ms: each time the music ran out of
+  painted audio before its fade. So the notice goes up before the engine writes the save, and
+  `BeginCardNotice` tops the mix up (`S_ExtraUpdate`) before the probe and before the frame.
+  HoldMusic's wait is the fade, the 50 ms and that lead, so a wait of about 550 ms for a 500 ms
+  fade means the lead had run out: 532-551 ms before the top-ups, 608-622 ms after them, over two
+  saves and a load (58-72 ms left; PCSX2, debug, e1m1 with track 6, 2026-10-20). One stall the
+  top-ups can't split remains: the first card access of a session starts the driver inside the
+  probe, about 190 ms. Through the menus that happens when the Save or Load menu lists the slots,
+  so only a console `save` as the session's first card access meets it.
+- **The fade's gain** is Q14, applied as `((v >> 8) * g) >> 6`: a ring sample is 16 bits times
+  up to 256 (`kUnityGain`), so the product stays under 2^29. A host harness (UBSan with
+  `-fsanitize=integer`) checked 180 cases, full-scale samples of both signs and fades laid in one
+  pass or two, across the ring's wrap: within the gain's 1/16384 (2 LSB at full scale),
+  monotonic, ending 1/8192 from silence.
 - **WAV fallback (the user's request, for whoever skips `make music`):** per game directory,
   `trackNN.adp`, then `trackNN.wav`, then `Track%02d.wav` (as `make music` accepts; FAT and
   macOS hosts ignore case anyway); every name in one directory before the next, so a mod's

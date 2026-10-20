@@ -25,4 +25,8 @@ void InitRumble(GamePad & pad);
 // after the pad's Update().
 void UpdateRumble();
 
+// Stops the motors now and drops the effects playing, for a stall no frame will run through to
+// stop them: a memory card save (save/card_notice.h). UpdateRumble starts afresh after it.
+void StopRumble();
+
 } // namespace ps2::input

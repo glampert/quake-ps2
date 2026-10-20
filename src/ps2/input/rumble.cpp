@@ -252,12 +252,7 @@ void UpdateRumble()
 {
     if (!RumbleWanted())
     {
-        s_primed = false;
-        s_mixer.Stop(); // Drops the effects too, so none resumes later.
-        if (s_pad != nullptr)
-        {
-            s_pad->SetMotors(false, 0);
-        }
+        StopRumble();
         return;
     }
 
@@ -276,6 +271,16 @@ void UpdateRumble()
 
     const u32 nowMs = NowMs();
     s_pad->SetMotors(s_mixer.SmallOn(nowMs), s_mixer.LargeSpeed(nowMs));
+}
+
+void StopRumble()
+{
+    s_primed = false;
+    s_mixer.Stop(); // Drops the effects too, so none resumes later.
+    if (s_pad != nullptr)
+    {
+        s_pad->SetMotors(false, 0);
+    }
 }
 
 } // namespace ps2::input

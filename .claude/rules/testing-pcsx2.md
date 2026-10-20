@@ -169,6 +169,20 @@ The rest are scripted runs:
 - **Perf run** (profile builds): `ps2_perftest 1` in `autoexec.cfg` plays the demos, and
   `ps2_testmaps 2` tours every level; the recipes are in [performance.md](performance.md). Both
   quit at the end, which writes `config.cfg`, unless `ps2_test_quit` is 0.
+- **The memory card notice** (`save/card_notice.h`): `save` and `load` run from a script, but a
+  `screenshot` after either catches the frame after the notice. A scratch build with
+  `Cmd_ExecuteString("screenshot", src_command);` after `ShowFrame()` in `BeginCardNotice` and
+  before `s_shown = false` in `EndCardNotice` catches it as it goes up and as it comes down (the
+  TGA write stalls the mixer ~0.4 s first, so time the hold on a build without it). The load
+  menu's path (`M_Load_Key`, which puts the notice up before its plaque) wants a key press: a
+  scratch command that calls `M_Menu_Load_f()`, sets `load_cursor` and calls `M_Load_Key(K_ENTER)`
+  drives it (all three are extern in menu.c), with `loadable[load_cursor] = 1` to try a slot the
+  card doesn't have. `M_Load_Key` appends its `load` to the command buffer, behind the rest of the
+  script, so have the scratch command append whatever must run after the load. `developer 1`
+  prints `Music: held, faded out over ...`, `Card notice: down after ... ms` and `Music: fading
+  back in`. Back up the card first. A screenshot meant to show a failed load's notify lines must
+  come within `con_notifytime` (3 s) of them: 200 frames of `wait` is too late. The results of
+  2026-10-20 are in [save-games.md](save-games.md).
 - **The debug page** (Options → Debug Options, or `menu_debug`): a script can't press the pad,
   but `menu_debug`, `w10` and a `screenshot` show it, and its rows are commands and cvars to run
   directly. The cursor blinks between conchars 12 and 13 four times a second, so a shot catches

@@ -149,7 +149,10 @@ For saves and settings (`save-games.md`): `host_cmd.c`'s `Host_Savegame_f` and
 `host.c`'s `Host_WriteConfiguration` and `cmd.c`'s `Cmd_Exec_f` (for `config.cfg` only) through
 `PS2_Config*`; `M_Options_Key` writes the config on leaving the options menu; and the Options
 page's Save Device row (`OPT_PS2SAVEDEVICE`, ahead of `OPT_PS2DEBUG`) shows and steps
-`ps2_savedevice` through `PS2_SaveDeviceName`/`PS2_SaveDeviceToggle`.
+`ps2_savedevice` through `PS2_SaveDeviceName`/`PS2_SaveDeviceToggle`. `M_Load_Key` calls
+`PS2_SaveLoadStarting` before it raises the loading plaque: the memory card notice and the music's
+fade-out have to come first, as the plaque's `S_StopAllSounds` would cut the music off. The notice
+is drawn in `menu.c`'s `M_DrawTextBox`, which `engine_hooks.h` declares (menu.h doesn't).
 
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the

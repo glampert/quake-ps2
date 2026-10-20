@@ -84,6 +84,16 @@ const char * CurrentFile()
     return s_fileName;
 }
 
+bool Redraw()
+{
+    if (!s_active)
+    {
+        return false;
+    }
+    Draw();
+    return true;
+}
+
 } // namespace ps2::loading
 
 // ------------------------------------------------------------------------------------------------

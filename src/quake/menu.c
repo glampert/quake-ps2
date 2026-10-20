@@ -529,6 +529,10 @@ void M_Load_Key (int k)
 		m_state = m_none;
 		key_dest = key_game;
 
+	// [PS2_QUAKE]: from the memory card, its notice up and the music faded out first: the
+	// plaque stops every sound at once, and the load reads the card under it.
+		PS2_SaveLoadStarting ();
+
 	// Host_Loadgame_f can't bring up the loading plaque because too much
 	// stack space has been used, so do it now
 		SCR_BeginLoadingPlaque ();

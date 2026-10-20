@@ -24,6 +24,7 @@
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/view.h"
 #include "ps2/tests/draw_cube.h"
+#include "ps2/save/card_notice.h"
 #include "ps2/save/save_system.h"
 #include "ps2/tests/map_cycle.h"
 #include "ps2/tests/perf_run.h"
@@ -435,11 +436,20 @@ void GL_EndRendering()
     ps2::test::DrawRotatingCube();
 #endif // PS2_QUAKE_DEBUG
 
+    // The memory card notice, over everything the engine drew. A frame with it is shown before
+    // this returns, whatever ps2_gs_latency says: the card access that follows draws nothing
+    // until it is done, so no later frame would put this one on screen (save/card_notice.h).
+    const bool cardNotice = ps2::save::CardNoticeShown();
+    if (cardNotice)
+    {
+        ps2::save::DrawCardNotice(/*onLoadingScreen=*/false);
+    }
+
     // The backend's own debug overlays, on top of everything. Each is cvar gated and returns at
     // once when off.
     ps2::overlay::Draw();
 
-    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency.value != 0.0f);
+    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency.value != 0.0f && !cardNotice);
 }
 
 // QuakeSpasm's shader gamma pass, applied as the last step of every frame; nothing to do
@@ -453,11 +463,11 @@ void GLSLGamma_GammaCorrect() {}
 // ------------------------------------------------------------------------------------------------
 
 // The plaque, as SCR_DrawLoading draws it, and the status bar along the bottom: a line of console
-// text on a dark band, a few pixels up so a TV's overscan leaves it. The client draws nothing while
-// the plaque is up, so no later frame would put this one on screen: it is shown before returning,
-// whatever ps2_gs_latency says. Neither the view nor the status bar goes in, as the client's state
-// is being torn down and rebuilt under them; behind the plaque is the console background's copper
-// brown.
+// text on a dark band, a few pixels up so a TV's overscan leaves it; and the memory card notice
+// while it is up. The client draws nothing while the plaque is up, so no later frame would put
+// this one on screen: it is shown before returning, whatever ps2_gs_latency says. Neither the view
+// nor the status bar goes in, as the client's state is being torn down and rebuilt under them;
+// behind the plaque is the console background's copper brown.
 bool ps2::loading::DrawLoadingScreen(const char * status)
 {
     if (ps2::rs::IsFrameOpen())
@@ -494,6 +504,12 @@ bool ps2::loading::DrawLoadingScreen(const char * status)
     for (int i = 0; i < numChars; ++i)
     {
         Draw_Character(textX + (i * kGlyphSize), barY, static_cast<unsigned char>(status[i]));
+    }
+
+    // The memory card notice, under the plaque, while the load menu's load reads the card.
+    if (ps2::save::CardNoticeShown())
+    {
+        ps2::save::DrawCardNotice(/*onLoadingScreen=*/true);
     }
 
     ps2::rs::EndFrame(/*deferPresent=*/false);

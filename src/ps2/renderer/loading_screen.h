@@ -29,6 +29,10 @@ void NoteRead(int bytes);
 // The file NoteFile named last, for the load trace's lines; "?" before any.
 const char * CurrentFile();
 
+// Draws the loading screen again at once, if the plaque is up: the memory card notice going up
+// or coming down on it (save/card_notice.h). False, drawing nothing, while the plaque is down.
+bool Redraw();
+
 // In vid.cpp, with the frame bracket: draws one loading screen frame with 'status' on the bar
 // and shows it before returning. False, drawing nothing, while a frame is open: a file read
 // from inside one (an evicted model reloaded as it is drawn) leaves the screen as it is.

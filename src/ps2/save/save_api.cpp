@@ -15,12 +15,15 @@
  *  never the USB stick or hard disk the game data is on, whose own config.cfg only stands in
  *  when the card has none.
  *
+ *  A save written to the card or read off it does so under the card notice (card_notice.h).
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/save/save_system.h"
 #include "ps2/save/slot_archive.h"
 #include "ps2/save/memcard.h"
+#include "ps2/save/card_notice.h"
 #include "ps2/engine_hooks.h"
 
 #include <cstdlib>
@@ -102,6 +105,44 @@ bool SlotFromPath(const char * path, char (&outSlot)[kMaxSlotNameLen + 1])
     std::memcpy(outSlot, name, length);
     outSlot[length] = '\0';
     return true;
+}
+
+// PS2_SaveLoadText's card half: the slot read under the card notice - up already when the load
+// menu put it up (PS2_SaveLoadStarting) - and inflated back to text.
+char * LoadSlotText(const char * path)
+{
+    char slot[kMaxSlotNameLen + 1];
+    Blob save;
+    bool restored = false;
+    if (SlotFromPath(path, slot))
+    {
+        Con_Printf("Loading game from the memory card, slot '%s'...\n", slot);
+        restored = BeginCardNotice(CardAccess::Loading) && RestoreSlot(GetMemoryCardDevice(), slot, save);
+    }
+    EndCardNotice();
+
+    if (!restored)
+    {
+        return nullptr;
+    }
+
+    char * const text = InflateBlobToText(save);
+    BlobFree(save);
+    return text;
+}
+
+// A load that fails leaves the load menu's loading plaque up - QuakeSpasm's Host_Loadgame_f
+// returns without taking it down - until its timeout, over a game still running. On a console
+// that only takes a card pulled since the menu listed the slots. This is what
+// SCR_EndLoadingPlaque does, but without its Con_ClearNotify, so the lines saying why stay on
+// the screen.
+void EndPlaqueOfFailedLoad()
+{
+    if (scr_disabled_for_loading)
+    {
+        scr_disabled_for_loading = false;
+        PS2_LoadingScreenEnd();
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -348,6 +389,7 @@ FILE * PS2_SaveOpenWrite(const char * path)
         ClosePackStream(s_writeStream);
         BlobFree(s_writeBlob);
         s_writeStream = nullptr;
+        EndCardNotice();
     }
 
     if (!SlotFromPath(path, s_writeSlot))
@@ -355,8 +397,19 @@ FILE * PS2_SaveOpenWrite(const char * path)
         return nullptr;
     }
 
+    // The card notice goes up, and the music fades out, before the engine writes the game out:
+    // that alone holds the mixer up for a few hundred milliseconds, and the card for longer.
     Con_Printf("Saving game to the memory card, slot '%s'...\n", s_writeSlot);
+    if (!BeginCardNotice(CardAccess::Saving))
+    {
+        return nullptr;
+    }
+
     s_writeStream = OpenPackStream(s_writeBlob);
+    if (s_writeStream == nullptr)
+    {
+        EndCardNotice(); // No close is coming to take it down.
+    }
     return s_writeStream;
 }
 
@@ -370,6 +423,7 @@ qboolean PS2_SaveCloseWrite(FILE * f, const char * comment)
     s_writeStream = nullptr;
     const bool stored = ClosePackStream(f) && StoreSlot(GetMemoryCardDevice(), s_writeSlot, comment, s_writeBlob);
     BlobFree(s_writeBlob);
+    EndCardNotice();
     return stored ? 1 : 0;
 }
 
@@ -377,28 +431,31 @@ char * PS2_SaveLoadText(const char * path)
 {
     ClearError();
 
+    char * text = nullptr;
     if (!SavesToCard())
     {
         Con_Printf("Loading game from %s...\n", path);
-        return static_cast<char *>(static_cast<void *>(COM_LoadMallocFile_TextMode_OSPath(path, nullptr)));
+        text = static_cast<char *>(static_cast<void *>(COM_LoadMallocFile_TextMode_OSPath(path, nullptr)));
     }
-
-    char slot[kMaxSlotNameLen + 1];
-    if (!SlotFromPath(path, slot))
+    else
     {
-        return nullptr;
+        text = LoadSlotText(path);
     }
-    Con_Printf("Loading game from the memory card, slot '%s'...\n", slot);
 
-    Blob save;
-    if (!RestoreSlot(GetMemoryCardDevice(), slot, save))
+    if (text == nullptr)
     {
-        return nullptr;
+        EndPlaqueOfFailedLoad();
     }
-
-    char * const text = InflateBlobToText(save);
-    BlobFree(save);
     return text;
+}
+
+void PS2_SaveLoadStarting(void)
+{
+    if (SavesToCard())
+    {
+        ClearError();
+        BeginCardNotice(CardAccess::Loading); // A card that can't be read fails the load itself.
+    }
 }
 
 qboolean PS2_SaveReadComment(const char * path, char * comment, const int size)
