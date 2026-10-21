@@ -430,6 +430,7 @@ void M_ScanSaves (void)
 	char	name[MAX_OSPATH];
 	char	comment[MAX_OSPATH]; // [PS2_QUAKE]: in place of the FILE and version the reading took
 
+	PS2_SaveScanBegin (); // [PS2_QUAKE]: one memory card notice for all the slots read below
 	for (i = 0; i < MAX_SAVEGAMES; i++)
 	{
 		strcpy (m_filenames[i], "--- UNUSED SLOT ---");
@@ -449,6 +450,7 @@ void M_ScanSaves (void)
 		}
 		loadable[i] = true;
 	}
+	PS2_SaveScanEnd (); // [PS2_QUAKE]
 }
 
 void M_Menu_Load_f (void)

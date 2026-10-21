@@ -192,7 +192,14 @@ The rest are scripted runs:
     `M_Menu_Options_f()` and `M_Options_Key(K_ESCAPE)` leaves the options menu as the pad does
     (`M_Options_Key` is extern in menu.c); change an archived cvar (`volume 0.6`) to have
     something to write, and `menu_quit` takes the main menu's quit path. A run that quits writes
-    the card's config: back it up first.
+    the card's config: back it up first. So does leaving the options menu, which under the
+    emulator also writes the scratch directory's own `config.cfg`: delete it before the next boot
+    test, or the boot reads it and never goes to the card.
+  - **Every path at once, with the debug asserts on** (memcard.cpp stops at card I/O outside the
+    notice): `ps2_saveinfo`, `menu_save` then `togglemenu`, `save`, `load`, an options exit, the
+    load menu (the scratch command), `menu_quit`, after a boot that reads the card's config. A
+    `screenshot` run from inside a command (the scratch shots inside the scan) retokenizes, so
+    that command's `Cmd_Argv` is gone afterwards: read the arguments first.
 - **The debug page** (Options → Debug Options, or `menu_debug`): a script can't press the pad,
   but `menu_debug`, `w10` and a `screenshot` show it, and its rows are commands and cvars to run
   directly. The cursor blinks between conchars 12 and 13 four times a second, so a shot catches

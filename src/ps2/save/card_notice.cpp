@@ -86,7 +86,8 @@ constexpr int kBoxTopOnLoadingScreen = 120;
 // Where the notice went up: what EndCardNotice has to take it off.
 enum class Where : u8
 {
-    Nowhere,       // Nothing could be drawn: inside a frame, or between gs::Init and SCR_Init.
+    Nowhere,       // Nothing could be drawn (inside a frame, between gs::Init and SCR_Init): it
+                   // doesn't go up, and the card is left alone.
     Game,          // Over the game's frame.
     LoadingScreen, // On the loading screen.
     Splash,        // Over the boot splash.
@@ -270,20 +271,21 @@ bool ShowOnSplash()
 // ------------------------------------------------------------------------------------------------
 
 // Puts a frame with the notice in it on screen before returning, wherever the game has got to:
+//  - inside a frame, none: one frame can't be drawn inside another (the loading screen's
+//    included, which would draw nothing and say so only to its own caller);
 //  - with the loading plaque up, the loading screen's frame, the notice under the plaque;
-//  - inside a frame, none: one frame can't be drawn inside another;
 //  - before SCR_Init, the boot splash, the notice over it: VID_Init reads config.cfg before the
 //    renderer exists (between gs::Init and SCR_Init, nothing can be drawn at all);
 //  - otherwise the game's frame, which GL_EndRendering draws the notice over and shows at once.
 Where ShowFrame()
 {
-    if (ps2::loading::Redraw())
-    {
-        return Where::LoadingScreen;
-    }
     if (ps2::rs::IsFrameOpen())
     {
         return Where::Nowhere;
+    }
+    if (ps2::loading::Redraw())
+    {
+        return Where::LoadingScreen;
     }
     if (!scr_initialized)
     {
@@ -327,7 +329,16 @@ bool BeginCardNotice(const CardAccess access)
     ps2::input::StopRumble();
 
     S_ExtraUpdate();
-    s_where     = ShowFrame();
+    s_where = ShowFrame();
+    if (s_where == Where::Nowhere)
+    {
+        // The card is never read or written with nobody told. No path gets here now: the boot's
+        // config.cfg read between gs::Init and SCR_Init only would, after a failed first read,
+        // and quake.rc's "exec config.cfg" reads it again where the notice can be drawn.
+        s_shown = false;
+        Con_DPrintf("Card notice: nothing can be drawn here, so the card is left alone.\n");
+        return false;
+    }
     s_shownMsec = ps2::sys::Milliseconds();
 
     ps2::audio::HoldMusic();
@@ -341,9 +352,8 @@ void EndCardNotice()
         return;
     }
 
-    // A notice nobody could see needn't stay up to be read.
     const int shownMsec = ps2::sys::Milliseconds() - s_shownMsec;
-    if (s_where != Where::Nowhere && shownMsec < kMinShownMsec)
+    if (shownMsec < kMinShownMsec)
     {
         Sys_Sleep(static_cast<unsigned long>(kMinShownMsec - shownMsec));
     }

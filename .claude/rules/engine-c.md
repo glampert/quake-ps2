@@ -153,7 +153,8 @@ page's Save Device row (`OPT_PS2SAVEDEVICE`, ahead of `OPT_PS2DEBUG`) shows and 
 `PS2_SaveLoadStarting` before it raises the loading plaque: the memory card notice and the music's
 fade-out have to come first, as the plaque's `S_StopAllSounds` would cut the music off. The notice
 is drawn in `menu.c`'s `M_DrawTextBox`, which `engine_hooks.h` declares (menu.h doesn't), as it
-does `gl_screen.c`'s `scr_initialized`. `M_Draw`'s "Quit now!" queues `quit` for the next frame
+does `gl_screen.c`'s `scr_initialized`. `M_ScanSaves` brackets its loop with
+`PS2_SaveScanBegin`/`PS2_SaveScanEnd`, one notice for the twenty slots it reads. `M_Draw`'s "Quit now!" queues `quit` for the next frame
 instead of calling `Host_Quit_f` from inside this one: the config.cfg written on the way out can
 put the notice up, which draws a frame of its own.
 

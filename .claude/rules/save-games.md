@@ -54,6 +54,13 @@ facts behind them:
   to silence before the card is touched. It is Quake's message box (`M_DrawTextBox`, the quit
   box's), gold for what is happening and white for the warning, centred over the faded game, or
   under the plaque on the loading screen.
+- **Every read and write of the card's data goes under it (the user's rule, 2026-10-21):** saves,
+  loads, the menus' slot scan, `ps2_saveinfo`, config.cfg's reads and writes, the icon files.
+  `memcard.cpp` asserts it at each method that touches the data (`EnsureSaveDir`, `List`,
+  `FileSize`, `Open`, `Read`, `Write`, `Close`, `Delete`: "Memory card data accessed outside the
+  card notice!"), so a debug build stops at any new path that forgets. Only `Probe` (`mcGetInfo`:
+  whether a card is in, and formatted; the first one also starts MCMAN and MCSERV) goes without
+  it, as it decides whether there is a card to put the notice up for.
 - **Order:** probe the card (none, or unformatted: no notice, and the access fails with the reason
   as before); stop the rumble; draw a frame with the notice and show it at once; fade the music out
   (`audio::HoldMusic`); then the card. Afterwards the notice stays until it has been up a second
@@ -81,18 +88,22 @@ facts behind them:
   (`splash::ShowImage`): the box and lines composed on the EE into one RGBA texture from
   `gfx/box_*.lmp` and gfx.wad's conchars through the built-in palette, drawn at twice its size,
   centred, its see-through texels left out so the plaque shows through them. Between `gs::Init`
-  and `SCR_Init` nothing can be drawn at all (the notice is then `Where::Nowhere`, and isn't held
-  to its minimum), and nothing reads the card there. Whether the card has a config to read is
-  found from its directory first, without the notice: a card the game never wrote to would show
-  "Data is being loaded" at every boot, for its second, with nothing to load.
+  and `SCR_Init` nothing can be drawn at all, and neither inside a frame: there `BeginCardNotice`
+  refuses (`Where::Nowhere`) and the card is left alone, so card I/O always has the notice on the
+  screen. No path does that now; after a failed first read, `IN_Init`'s would, and quake.rc's
+  `exec config.cfg` reads the card again where the notice can be drawn. The directory read that
+  finds whether there is a config goes under the notice too, so a card the game never wrote to
+  shows it at boot for its second, with nothing to load.
+- **The menus' slot scan:** `M_ScanSaves` reads twenty slots' headers as the load and save menus
+  open, under one notice put up by `PS2_SaveScanBegin` and taken down by `PS2_SaveScanEnd`, around
+  its loop (twenty notices would take twenty seconds). A slot read outside a scan puts up one of
+  its own (`PS2_SaveReadComment`).
 - **The main menu's Quit used to write config.cfg from inside a frame:** QuakeSpasm's "Quit now!"
   runs `Host_Quit_f` from `M_Draw`, inside `SCR_UpdateScreen`, and a notice can't draw a frame
   inside another (`rs::BeginFrame` asserts). It now queues `quit` for the top of the next frame,
   as `test_quit.cpp` already did. The notice still refuses to draw inside a frame. On the way
   out `Host_Shutdown` sets `scr_disabled_for_loading` to keep `Con_Printf` from drawing; the
   notice lifts it for its one frame.
-- **Not covered:** the menus' slot listing (`M_ScanSaves`, twenty headers read when the Save or
-  Load menu opens) touches the card with no notice.
 - **Checked in PCSX2 (debug, e1m1 with track 6 playing, 2026-10-20):** console saves had the
   notice up 1.30-1.43 s (about 0.61 s of it the music's hold, then the game written and stored);
   a console load and the load menu's (through `M_Load_Key`) were held to the 1 s minimum, the

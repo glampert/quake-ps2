@@ -382,12 +382,13 @@ e1m1 save takes 11 KB), and a save is written in full before the one it replaces
 interrupted save never loses the previous one. Under PCSX2, `ps2_savedevice` picks between plain
 `.sav` files in `id1/` (`host`, the default there) and the card (`mc`).
 
-While a save is written to the card, or read back off it, the game shows the notice PS2 games show
+Whenever the game reads the card or writes to it (a save, a load, the save menus listing their
+slots, the settings), it shows the notice PS2 games show
 ([card_notice.h](src/ps2/save/card_notice.h)): "Data is being saved to the Memory Card in slot 1.
-Do not remove the Memory Card or reset/switch off the console.", in Quake's own message box. On a
-console the game stands still for a second or more while the card is busy, so the notice goes up
-before the card is touched, the music fades out under it rather than stopping mid-note, and once
-the card is done the music fades back in from where it stopped.
+Do not remove the Memory Card or reset/switch off the console." ("loaded from" for a read), in
+Quake's own message box. On a console the game stands still for a second or more while the card
+is busy, so the notice goes up before the card is touched, the music fades out under it rather
+than stopping mid-note, and once the card is done the music fades back in from where it stopped.
 
 `config.cfg`, the binds and settings, is written on quit and when leaving the options menu:
 
@@ -396,10 +397,9 @@ the card is done the music fades back in from where it stopped.
 | **Saving** | `id1/config.cfg`, plus the card's copy when saves go to the card | the card's copy only, never the game data's drive |
 | **Loading** | `id1/config.cfg` first, the card's if there is none | the card's first, then `id1/config.cfg` |
 
-The card's copy gets the same notice ("Data is being loaded from the Memory Card...") as it is
-read at boot, drawn over the QUAKE plaque since the renderer hasn't started yet, and as it is
-written. The card is read once a run, and an unchanged config isn't written again, so leaving the
-options menu without changing anything doesn't touch the card.
+The card's copy is read at boot, under the notice drawn over the QUAKE plaque since the renderer
+hasn't started yet. The card is read for it once a run, and an unchanged config isn't written
+again, so leaving the options menu without changing anything doesn't touch the card.
 
 The repository tracks `id1/config.cfg` as the default settings. The game writes it deterministically,
 so a run that changes no setting writes it back byte for byte, and `git status` shows when one did.

@@ -21,6 +21,7 @@
  * ================================================================================================ */
 
 #include "ps2/save/memcard.h"
+#include "ps2/save/card_notice.h"
 #include "ps2/save/mc_icon.h"
 #include "ps2/system/iop_boot.h"
 
@@ -49,6 +50,15 @@ constexpr int kOpenCreate = sceMcFileCreateFile; // 0x0200
 
 alignas(64) static u8 s_mcReadWriteBuffer[kBounceBytes];
 static sceMcTblGetDir s_dirTable[kMaxDirEntries]; // sceMcTblGetDir is 64-byte aligned by declaration.
+
+// Every read and write of the card's data goes on under the card notice (card_notice.h), the
+// music faded out and the player told not to pull the card. Only a Probe of its state - whether
+// a card is in, and formatted - goes without it: that decides whether there is a card to put the
+// notice up for. Checked at every method that touches the data, cached or not.
+void AssertUnderNotice()
+{
+    PS2_AssertMsg(CardNoticeShown(), "Memory card data accessed outside the card notice!");
+}
 
 // Waits for the libmc call just issued and returns its result.
 int Sync()
@@ -110,6 +120,8 @@ public:
 
     bool EnsureSaveDir() override
     {
+        AssertUnderNotice();
+
         if (m_saveDirReady)
         {
             return true;
@@ -145,6 +157,8 @@ public:
 
     int List(DirEntry * outEntries, const int maxEntries) override
     {
+        AssertUnderNotice();
+
         if (!RefreshListing())
         {
             return -1;
@@ -157,6 +171,8 @@ public:
 
     bool FileSize(const char * name, u32 & outSizeBytes) override
     {
+        AssertUnderNotice();
+
         if (!RefreshListing())
         {
             return false;
@@ -177,6 +193,8 @@ public:
 
     FileHandle Open(const char * name, const OpenMode mode) override
     {
+        AssertUnderNotice();
+
         PS2_AssertMsg(m_fd < 0, "MemoryCardDevice: Only one file can be opened at a time!");
 
         const bool forWriting = (mode == OpenMode::Write);
@@ -206,6 +224,8 @@ public:
 
     bool Read(const FileHandle handle, void * dest, const u32 sizeBytes) override
     {
+        AssertUnderNotice();
+
         if (handle != kOpenHandle || m_fd < 0)
         {
             return false;
@@ -230,6 +250,8 @@ public:
 
     bool Write(const FileHandle handle, const void * src, const u32 sizeBytes) override
     {
+        AssertUnderNotice();
+
         if (handle != kOpenHandle || m_fd < 0 || !m_fdWriting)
         {
             return false;
@@ -257,6 +279,8 @@ public:
 
     bool Close(const FileHandle handle) override
     {
+        AssertUnderNotice();
+
         if (handle != kOpenHandle || m_fd < 0)
         {
             return false;
@@ -270,6 +294,8 @@ public:
 
     bool Delete(const char * name) override
     {
+        AssertUnderNotice();
+
         mcDelete(kPort, kSlot, PathOf(name));
         const int result = Sync();
         m_listingValid = false;

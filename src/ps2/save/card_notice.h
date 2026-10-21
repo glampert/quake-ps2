@@ -36,10 +36,12 @@ enum class CardAccess
     Loading,
 };
 
-// Puts the notice up and the music out ahead of a card access: true once both are done. A card
-// that can't be used (none in the slot, unformatted, ...) gets no notice: false, with the reason
-// given by SetError. True at once if the notice is up already: the load menu puts it up ahead of
-// its loading plaque, and the load finds it there.
+// Puts the notice up and the music out ahead of a card access: true once both are done, and the
+// card's data may be read and written until EndCardNotice (memcard.cpp asserts it). A card that
+// can't be used (none in the slot, unformatted, ...) gets no notice: false, with the reason given
+// by SetError. False too where nothing can be drawn (inside a frame, or between gs::Init and
+// SCR_Init): the card is never touched with nobody told. True at once if the notice is up
+// already: the load menu puts it up ahead of its loading plaque, and the load finds it there.
 bool BeginCardNotice(CardAccess access);
 
 // Takes the notice down, once it has been up long enough to read, and lets the music fade back

@@ -161,8 +161,14 @@ char * PS2_SaveLoadText(const char * path);
 void PS2_SaveLoadStarting(void);
 
 // The comment line of a save, for the load and save menus. False if the slot is empty or can't
-// be read.
+// be read. Off the memory card it is read under the card notice: M_ScanSaves's, or its own.
 qboolean PS2_SaveReadComment(const char * path, char * comment, int size);
+
+// M_ScanSaves reads the twenty slots' comments in a row as the load and save menus open. From the
+// memory card that goes under one card notice, put up before the first and taken down after the
+// last (src/ps2/save/card_notice.h).
+void PS2_SaveScanBegin(void);
+void PS2_SaveScanEnd(void);
 
 // The options menu's Save Device row: where saves go now ("host files" or "memory card"), and a
 // step to the other. Only a run from host: has a choice (ps2_savedevice); on a console saves

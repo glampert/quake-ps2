@@ -55,6 +55,9 @@ static Blob s_writeBlob;
 static int  s_probedFrame = -1;
 static bool s_probeOk     = false;
 
+// M_ScanSaves's card notice is up, put up by PS2_SaveScanBegin for its twenty slots.
+static bool s_scanNotice = false;
+
 bool ProbeCardOncePerFrame()
 {
     if (host_framecount != s_probedFrame)
@@ -216,28 +219,23 @@ void KeepCardConfig(const CardConfig state, char * const text, const u32 sizeByt
     s_cardConfigGeneration = GetMemoryCardDevice().Generation();
 }
 
-// Reads the card's config.cfg into the copy, under the card notice. A card that isn't there, or
-// can't be read, leaves the copy unknown.
+// Reads the card's config.cfg into the copy, under the card notice: the directory too, to find
+// whether there is one, as every read of the card's data goes under it. A card that isn't there,
+// or can't be read, leaves the copy unknown.
 void ReadCardConfigIntoCopy()
 {
-    // Whether there is one to read is found out first, from the directory, without the notice:
-    // a card the game has never written to would otherwise show "Data is being loaded" at every
-    // boot, for its second, with nothing to load.
-    Device & card = GetMemoryCardDevice();
-    u32 sizeBytes = 0;
-    if (!card.Probe())
+    if (!BeginCardNotice(CardAccess::Loading))
     {
-        return;
-    }
-    if (!card.FileSize(kConfigFile, sizeBytes) || sizeBytes == 0 || sizeBytes > kMaxConfigBytes)
-    {
-        KeepCardConfig(CardConfig::Absent, nullptr, 0);
         return;
     }
 
-    if (!BeginCardNotice(CardAccess::Loading))
+    Device & card = GetMemoryCardDevice();
+    u32 sizeBytes = 0;
+    if (!card.FileSize(kConfigFile, sizeBytes) || sizeBytes == 0 || sizeBytes > kMaxConfigBytes)
     {
-        return; // Gone since the probe just now.
+        EndCardNotice();
+        KeepCardConfig(CardConfig::Absent, nullptr, 0);
+        return;
     }
 
     char * const text = static_cast<char *>(std::malloc(sizeBytes + 1u));
@@ -399,8 +397,9 @@ void SaveInfoCommand()
         return;
     }
 
+    // The listing is a read of the card, under the card notice like any other.
     Device & card = GetMemoryCardDevice();
-    const bool ready = card.Probe();
+    const bool ready = BeginCardNotice(CardAccess::Loading);
     Con_Printf("Save device: %s\n", card.StatusText());
     if (!ready)
     {
@@ -409,6 +408,8 @@ void SaveInfoCommand()
 
     DirEntry files[64];
     const int count = card.List(files, ps2::ArrayLength(files));
+    EndCardNotice();
+
     if (count < 0)
     {
         Con_Printf("  (can't list the save directory)\n");
@@ -581,13 +582,41 @@ qboolean PS2_SaveReadComment(const char * path, char * comment, const int size)
         return 0;
     }
 
+    // Under the card notice: M_ScanSaves's, which covers the twenty slots, or one of its own.
+    const bool ownNotice = !CardNoticeShown();
+    if (ownNotice && !BeginCardNotice(CardAccess::Loading))
+    {
+        return 0;
+    }
     const SlotInfo info = ReadSlotInfo(GetMemoryCardDevice(), slot);
+    if (ownNotice)
+    {
+        EndCardNotice();
+    }
+
     if (info.state != SlotState::Valid)
     {
         return 0;
     }
     q_strlcpy(comment, info.comment, static_cast<size_t>(size));
     return 1;
+}
+
+void PS2_SaveScanBegin(void)
+{
+    // A card that isn't there says so once, from the probe the slots' reads then share
+    // (ProbeCardOncePerFrame), and gets no notice. Nor does one under a notice already.
+    s_scanNotice = SavesToCard() && !CardNoticeShown() && ProbeCardOncePerFrame() &&
+                   BeginCardNotice(CardAccess::Loading);
+}
+
+void PS2_SaveScanEnd(void)
+{
+    if (s_scanNotice)
+    {
+        s_scanNotice = false;
+        EndCardNotice();
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
