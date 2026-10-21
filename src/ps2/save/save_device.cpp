@@ -45,6 +45,18 @@ u32 Crc32(const u32 crc, const void * data, const size_t sizeBytes)
     return static_cast<u32>(mz_crc32(crc, static_cast<const unsigned char *>(data), sizeBytes));
 }
 
+const char * DeviceName(const DeviceKind kind)
+{
+    switch (kind)
+    {
+    case DeviceKind::MemoryCard: return "memory card";
+    case DeviceKind::HostFiles:  return "host files";
+    case DeviceKind::UsbDrive:   return "USB drive";
+    case DeviceKind::HardDisk:   return "hard disk";
+    }
+    return "memory card";
+}
+
 // ------------------------------------------------------------------------------------------------
 // Whole-file helpers
 // ------------------------------------------------------------------------------------------------

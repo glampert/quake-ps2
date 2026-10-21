@@ -21,7 +21,7 @@
  * ================================================================================================ */
 
 #include "ps2/save/memcard.h"
-#include "ps2/save/card_notice.h"
+#include "ps2/save/save_notice.h"
 #include "ps2/save/mc_icon.h"
 #include "ps2/system/iop_boot.h"
 
@@ -51,13 +51,13 @@ constexpr int kOpenCreate = sceMcFileCreateFile; // 0x0200
 alignas(64) static u8 s_mcReadWriteBuffer[kBounceBytes];
 static sceMcTblGetDir s_dirTable[kMaxDirEntries]; // sceMcTblGetDir is 64-byte aligned by declaration.
 
-// Every read and write of the card's data goes on under the card notice (card_notice.h), the
+// Every read and write of the card's data goes on under the save notice (save_notice.h), the
 // music faded out and the player told not to pull the card. Only a Probe of its state - whether
 // a card is in, and formatted - goes without it: that decides whether there is a card to put the
 // notice up for. Checked at every method that touches the data, cached or not.
 void AssertUnderNotice()
 {
-    PS2_AssertMsg(CardNoticeShown(), "Memory card data accessed outside the card notice!");
+    PS2_AssertMsg(SaveNoticeShown(), "Memory card data accessed outside the save notice!");
 }
 
 // Waits for the libmc call just issued and returns its result.
@@ -72,6 +72,11 @@ int Sync()
 class MemoryCardDevice final : public Device
 {
 public:
+    DeviceKind Kind() const override
+    {
+        return DeviceKind::MemoryCard;
+    }
+
     bool Probe() override
     {
         const State state = Refresh();

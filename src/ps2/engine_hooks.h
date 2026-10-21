@@ -168,42 +168,48 @@ const char * PS2_DefaultConfig(void);
 // ------------------------------------------------------------------------------------------------
 //
 // QuakeSpasm keeps a save as <gamedir>/<name>.sav and reads and writes it through stdio. These
-// take its place at the three spots that do: on a console the saves live on the memory card
-// (src/ps2/save/), and running from host: they stay host files unless ps2_savedevice says "mc".
-// `path` is always the <gamedir>/<name>.sav QuakeSpasm built.
+// take its place at the three spots that do: every save goes to the device ps2_savedevice picks,
+// the memory card or the drive the game booted from (src/ps2/save/), as the same compressed
+// archives, under the save notice (src/ps2/save/save_notice.h). `path` is always the
+// <gamedir>/<name>.sav QuakeSpasm built, which names the slot.
 
-// The stream Host_Savegame_f writes a save to, having said where it goes. Null if it can't be
-// written, with the reason on the console. For the memory card, the card notice is up and the
-// music faded out before it returns (src/ps2/save/card_notice.h).
+// The stream Host_Savegame_f writes a save to, having said where it goes, with the save notice up
+// and the music faded out. Null if it can't be written: then a message box has said why, and the
+// player has dismissed it.
 FILE * PS2_SaveOpenWrite(const char * path);
 
 // Closes that stream, which stores the save where it goes; `comment` is the line the menus list
-// it by. False if it didn't make it, with the reason on the console. Takes the card notice down.
+// it by. False if it didn't make it, said in a message box as above. Takes the notice down.
 qboolean PS2_SaveCloseWrite(FILE * f, const char * comment);
 
 // The save as text in a malloc block, as COM_LoadMallocFile_TextMode_OSPath returns it, having
 // said where it is loading from. Null if there is none or it can't be read; then the load menu's
-// loading plaque, if it is up, comes down too.
+// loading plaque, if it is up, comes down, and a message box says why.
 char * PS2_SaveLoadText(const char * path);
 
 // The load menu is about to raise the loading plaque, which stops every sound at once, and then
-// run "load". From the memory card, the card notice goes up and the music fades out now, and the
-// load takes the notice down once the card has been read (src/ps2/save/card_notice.h).
+// run "load". The save notice goes up and the music fades out now, and the load takes the notice
+// down once the device has been read.
 void PS2_SaveLoadStarting(void);
 
 // The comment line of a save, for the load and save menus. False if the slot is empty or can't
-// be read. Off the memory card it is read under the card notice: M_ScanSaves's, or its own.
+// be read. Read under the save notice: M_ScanSaves's, or its own.
 qboolean PS2_SaveReadComment(const char * path, char * comment, int size);
 
-// M_ScanSaves reads the twenty slots' comments in a row as the load and save menus open. From the
-// memory card that goes under one card notice, put up before the first and taken down after the
-// last (src/ps2/save/card_notice.h).
+// M_ScanSaves reads the twenty slots' comments in a row as the load and save menus open, under
+// one save notice, put up before the first and taken down after the last. The first looks at the
+// save device afresh, and finds whether it can be used at all.
 void PS2_SaveScanBegin(void);
 void PS2_SaveScanEnd(void);
 
-// The options menu's Save Device row: where saves go now ("host files" or "memory card"), and a
-// step to the other. Only a run from host: has a choice (ps2_savedevice); on a console saves
-// always go to the card, and the step does nothing.
+// Whether the last scan found the save device unusable (no memory card in the slot, ...), and the
+// box the load and save menus then draw over their slots: why, and how to save to the other
+// device instead. A slot picked meanwhile only looks at the device again.
+qboolean PS2_SaveMenuProblem(void);
+void PS2_SaveMenuDrawProblem(void);
+
+// The options menu's Save Device row: where saves go now ("memory card", "USB drive", "hard disk"
+// or "host files"), and a step to the other: the card, or the drive the game booted from.
 const char * PS2_SaveDeviceName(void);
 void PS2_SaveDeviceToggle(void);
 
@@ -211,10 +217,11 @@ void PS2_SaveDeviceToggle(void);
 // config.cfg (host.c, cmd.c)
 // ------------------------------------------------------------------------------------------------
 //
-// QuakeSpasm writes config.cfg into <gamedir> and reads it back from the search path. On a
-// console the player's settings belong on the memory card instead, not the USB stick or hard
-// disk the game is on; under the emulator the host file stays first (src/ps2/save/save_api.cpp).
-// The card's copy is read and written under the memory card notice, as saves are.
+// QuakeSpasm writes config.cfg into <gamedir> and reads it back from the search path. Here it
+// lives with the saves: on the memory card, or in <gamedir> on the boot drive when saves go there;
+// under the emulator the host file stays first, and always written (src/ps2/save/save_api.cpp).
+// The save device's copy is written under the save notice, as saves are, and the card's read
+// under it.
 
 // The stream Host_WriteConfiguration writes the binds and cvars to, and its close, which stores
 // the text where it goes. Null if it can't be written, with the reason on the console.
@@ -233,18 +240,18 @@ const char * PS2_ConfigLoadHunk(void);
 // R_DrawParticles. QuakeSpasm had this static to r_part.c.
 extern particle_t * active_particles;
 
-// gl_screen.c's "ready to draw", set by SCR_Init: before it, the memory card notice draws over
-// the boot splash instead. screen.h doesn't declare it.
+// gl_screen.c's "ready to draw", set by SCR_Init: before it, the save notice draws over the boot
+// splash instead. screen.h doesn't declare it.
 extern qboolean scr_initialized;
 
 // gl_screen.c's "drawing SCR_ModalMessage's question", for the one frame it draws before it waits
 // for the answer: GL_EndRendering shows that frame at once. screen.h doesn't declare it.
 extern qboolean scr_drawdialog;
 
-// menu.c's message box, built from the gfx/box_*.lmp pieces on the menu canvas, which the memory
-// card notice is drawn in. 'x' and 'y' are its top-left corner, border included; 'width' and
-// 'lines' its inside, in 8-pixel characters, the width drawn two at a time. menu.h doesn't
-// declare it.
+// menu.c's message box, built from the gfx/box_*.lmp pieces on the menu canvas, which the save
+// notice and the save menus' word on their device are drawn in. 'x' and 'y' are its top-left
+// corner, border included; 'width' and 'lines' its inside, in 8-pixel characters, the width drawn
+// two at a time. menu.h doesn't declare it.
 void M_DrawTextBox(int x, int y, int width, int lines);
 
 #ifdef __cplusplus

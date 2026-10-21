@@ -26,7 +26,7 @@
  *        reads happen elsewhere.
  *
  *        The backend can also hold the music through a stall, fading it out first and back in
- *        after (cd_audio.h): the memory card notice does, around a save or a load.
+ *        after (cd_audio.h): the save notice does, around a save or a load.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

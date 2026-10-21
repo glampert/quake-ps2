@@ -171,21 +171,25 @@ and `M_UnbindCommand` skip every other key, the bind grab takes only a pad butto
 read "stick look" and "d-pad look". The binds `config.cfg` keeps still name the keys as keys.c
 does (`ABUTTON`); only the page shows `Cross`. `SCR_ModalMessage`'s two questions (New Game over a
 running game, Reset config) say "Cross: yes   Circle: no" for the keyboard's "(y/n)", and
-`gl_screen.c`'s `SCR_DrawNotifyString` draws them in a message box, as the memory card notice is.
+`gl_screen.c`'s `SCR_DrawNotifyString` draws them in a message box, as the save notice is, no
+wider than the 320-unit canvas: the save code's failure boxes go through it too.
 
 For saves and settings (`save-games.md`): `host_cmd.c`'s `Host_Savegame_f` and
 `Host_Loadgame_f`, and `menu.c`'s `M_ScanSaves`, read and write through the `PS2_Save*` hooks;
 `host.c`'s `Host_WriteConfiguration` and `cmd.c`'s `Cmd_Exec_f` (for `config.cfg` only) through
 `PS2_Config*`; `M_Options_Key` writes the config on leaving the options menu; and the Options
 page's Save Device row (`OPT_PS2SAVEDEVICE`, ahead of `OPT_PS2DEBUG`) shows and steps
-`ps2_savedevice` through `PS2_SaveDeviceName`/`PS2_SaveDeviceToggle`. `M_Load_Key` calls
-`PS2_SaveLoadStarting` before it raises the loading plaque: the memory card notice and the music's
-fade-out have to come first, as the plaque's `S_StopAllSounds` would cut the music off. The notice
-is drawn in `menu.c`'s `M_DrawTextBox`, which `engine_hooks.h` declares (menu.h doesn't), as it
-does `gl_screen.c`'s `scr_initialized`. `M_ScanSaves` brackets its loop with
-`PS2_SaveScanBegin`/`PS2_SaveScanEnd`, one notice for the twenty slots it reads. `M_Draw`'s "Quit now!" queues `quit` for the next frame
-instead of calling `Host_Quit_f` from inside this one: the config.cfg written on the way out can
-put the notice up, which draws a frame of its own.
+`ps2_savedevice` through `PS2_SaveDeviceName`/`PS2_SaveDeviceToggle`. `M_Save_Draw` and
+`M_Load_Draw` end with `PS2_SaveMenuDrawProblem` (the box saying why the save device can't be
+used), and `M_Save_Key`/`M_Load_Key` scan again (`M_ScanSaves`) instead of taking a slot while
+`PS2_SaveMenuProblem` says so. `M_Load_Key` calls `PS2_SaveLoadStarting` before it raises the
+loading plaque: the save notice and the music's fade-out have to come first, as the plaque's
+`S_StopAllSounds` would cut the music off. The notice is drawn in `menu.c`'s `M_DrawTextBox`,
+which `engine_hooks.h` declares (menu.h doesn't), as it does `gl_screen.c`'s `scr_initialized`.
+`M_ScanSaves` brackets its loop with `PS2_SaveScanBegin`/`PS2_SaveScanEnd`, one notice for the
+twenty slots it reads. `M_Draw`'s "Quit now!" queues `quit` for the next frame instead of calling
+`Host_Quit_f` from inside this one: the config.cfg written on the way out can put the notice up,
+which draws a frame of its own.
 
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the

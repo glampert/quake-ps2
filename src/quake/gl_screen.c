@@ -886,9 +886,10 @@ void SCR_DrawNotifyString (void)
 
 	y = 200 * 0.35; //johnfitz -- stretched overlays
 
-	// [PS2_QUAKE]: in a message box, as the memory card notice is, rather than on the faded
-	// screen alone: as wide as the longest line (at most 40, as below) with a space either side,
-	// and even, as M_DrawTextBox draws it. A newline at the very end makes no line.
+	// [PS2_QUAKE]: in a message box, as the save notice is, rather than on the faded screen alone:
+	// as wide as the longest line (at most 40, as below) with a space either side, and even, as
+	// M_DrawTextBox draws it, but no wider than the 320-unit canvas, 38 inside its border. A
+	// newline at the very end makes no line.
 	for (lines = 1, longest = 0, l = 0; *start; start++)
 	{
 		if (*start == '\n')
@@ -901,6 +902,8 @@ void SCR_DrawNotifyString (void)
 			longest = l;
 	}
 	longest = (longest + 3) & ~1;
+	if (longest > 38)
+		longest = 38;
 	M_DrawTextBox (160 - 4 * (longest + 2), y - 8, longest, lines);
 	start = scr_notifystring;
 

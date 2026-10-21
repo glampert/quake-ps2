@@ -445,7 +445,7 @@ void M_ScanSaves (void)
 	char	name[MAX_OSPATH];
 	char	comment[MAX_OSPATH]; // [PS2_QUAKE]: in place of the FILE and version the reading took
 
-	PS2_SaveScanBegin (); // [PS2_QUAKE]: one memory card notice for all the slots read below
+	PS2_SaveScanBegin (); // [PS2_QUAKE]: one save notice for all the slots read below
 	for (i = 0; i < MAX_SAVEGAMES; i++)
 	{
 		strcpy (m_filenames[i], "--- UNUSED SLOT ---");
@@ -509,6 +509,8 @@ void M_Load_Draw (void)
 
 // line cursor
 	M_DrawCharacter (8, 32 + load_cursor*8, 12+((int)(realtime*4)&1));
+
+	PS2_SaveMenuDrawProblem (); // [PS2_QUAKE]: why the save device can't be used, if it can't
 }
 
 
@@ -525,6 +527,8 @@ void M_Save_Draw (void)
 
 // line cursor
 	M_DrawCharacter (8, 32 + load_cursor*8, 12+((int)(realtime*4)&1));
+
+	PS2_SaveMenuDrawProblem (); // [PS2_QUAKE]: why the save device can't be used, if it can't
 }
 
 
@@ -541,6 +545,13 @@ void M_Load_Key (int k)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 		S_LocalSound ("misc/menu2.wav");
+		// [PS2_QUAKE]: with the save device found unusable, a pick looks at it again (a card put
+		// in since) rather than trying the slot
+		if (PS2_SaveMenuProblem ())
+		{
+			M_ScanSaves ();
+			return;
+		}
 		if (!loadable[load_cursor])
 			return;
 		m_state = m_none;
@@ -589,6 +600,13 @@ void M_Save_Key (int k)
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
+		// [PS2_QUAKE]: as M_Load_Key
+		if (PS2_SaveMenuProblem ())
+		{
+			S_LocalSound ("misc/menu2.wav");
+			M_ScanSaves ();
+			return;
+		}
 		m_state = m_none;
 		IN_Activate();
 		key_dest = key_game;
@@ -2691,8 +2709,8 @@ void M_Draw (void)
 			/* Quit now! S.A. */
 			key_dest = key_console;
 			// [PS2_QUAKE]: at the top of the next frame, as the tests quit (test_quit.cpp), not from
-			// inside this one: the config.cfg written on the way out may put the memory card notice
-			// up, and that draws a frame of its own.
+			// inside this one: the config.cfg written on the way out may put the save notice up,
+			// and that draws a frame of its own.
 			Cbuf_AddText ("quit\n");
 			break;
 		}

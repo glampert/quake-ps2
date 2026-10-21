@@ -91,7 +91,7 @@ over from the Quake II port unchanged; the facts marked *(Q2)* were measured the
   `music_loop 1` while a once-only track plays reopens it when it ends. Not kept:
   `music_jump` (tracker orders) and the `cd` command (no disc). Added: `bgm_extmusic` acts at
   once. "Couldn't find a cdrip for track N" prints once per track, not on every map.
-- **Holding the music through a stall (`cd_audio.h`, for the memory card notice):** a card save or
+- **Holding the music through a stall (`cd_audio.h`, for the save notice):** a card save or
   load stops the game drawing and mixing for a second or more, and the music used to stop dead
   there. `HoldMusic` fades out what is already queued in `s_rawsamples` in place, ahead of the
   mixer (about 330 ms of it: the pump keeps the ring 7680 frames ahead), so nothing decoded is
@@ -110,7 +110,7 @@ over from the Quake II port unchanged; the facts marked *(Q2)* were measured the
   together (about 200 on the session's first card access, which starts MCMAN and MCSERV), and
   the save text written out before the notice took over 400 ms: each time the music ran out of
   painted audio before its fade. So the notice goes up before the engine writes the save, and
-  `BeginCardNotice` tops the mix up (`S_ExtraUpdate`) before the probe and before the frame.
+  `BeginSaveNotice` tops the mix up (`S_ExtraUpdate`) before the probe and before the frame.
   HoldMusic's wait is the fade, the 50 ms and that lead, so a wait of about 550 ms for a 500 ms
   fade means the lead had run out: 532-551 ms before the top-ups, 608-622 ms after them, over two
   saves and a load (58-72 ms left; PCSX2, debug, e1m1 with track 6, 2026-10-20). One stall the

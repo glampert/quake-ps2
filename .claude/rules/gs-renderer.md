@@ -50,16 +50,16 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   (`DrawLoadingScreen` in vid.cpp), so each is on screen before the call returns. They skip
   `GL_BeginRendering`'s profiler rollover and the overlays, and nothing is drawn while a frame is
   open (`rs::IsFrameOpen`): a file read from inside a frame leaves the screen as it is.
-- **Frames drawn while the memory card notice is up are shown at once** too: `GL_EndRendering`
+- **Frames drawn while the save notice is up are shown at once** too: `GL_EndRendering`
   draws the notice over the engine's frame and passes `deferPresent=false` whatever
-  `ps2_gs_latency` says, since the card access that follows draws nothing until it is done
-  (`save/card_notice.h`). With the plaque up the notice is drawn on the loading screen instead.
-  Before the renderer exists (the boot reads config.cfg off the card in `VID_Init`), the splash
-  draws it: `splash::ShowImage` uploads the notice, composed on the EE as RGBA, to a fixed VRAM
-  spot past the plaque's and draws it at twice its size; the environment's alpha test (`NOTEQUAL
-  0`) leaves out its see-through texels, so the splash's textures are RGBA now, the plaque's
-  pixels unchanged (checked against its texels, 2026-10-20). `gs::Init` calls `splash::Retire`
-  before laying out VRAM, after which the splash draws nothing.
+  `ps2_gs_latency` says, since the save device's access that follows draws nothing until it is
+  done (`save/save_notice.h`). With the plaque up the notice is drawn on the loading screen
+  instead. Before the renderer exists (the boot reads config.cfg off the card in `VID_Init`), the
+  splash draws it: `splash::ShowImage` uploads the notice, composed on the EE as RGBA, to a fixed
+  VRAM spot past the plaque's and draws it at twice its size; the environment's alpha test
+  (`NOTEQUAL 0`) leaves out its see-through texels, so the splash's textures are RGBA now, the
+  plaque's pixels unchanged (checked against its texels, 2026-10-20). `gs::Init` calls
+  `splash::Retire` before laying out VRAM, after which the splash draws nothing.
 - **So is `SCR_ModalMessage`'s question** ("start a new game?", Reset config's): it draws one
   frame with `scr_drawdialog` set, then waits for the answer drawing nothing, so a frame left for
   the next to show stayed off screen and the game seemed to hang. `GL_EndRendering` passes

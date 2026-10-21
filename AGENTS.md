@@ -137,6 +137,6 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [engine-c.md](.claude/rules/engine-c.md) | QuakeSpasm's C | editing rules, build mode, seams, QuakeSpasm quirks |
 | [memory-budget.md](.claude/rules/memory-budget.md) | heap, renderer, zone.c, quakedef.h | the 32 MB picture, QuakeSpasm's limits, measured budgets |
 | [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | audsrv's traps and the sound feeder, CD music format and pipeline decisions, costs |
-| [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, `host_cmd.c`, `menu.c` | save design, card format, icon, config.cfg policy, card image testing |
+| [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, `host_cmd.c`, `menu.c` | save design and devices, archive format, the save notice, failure messages, icon, config.cfg policy, card and drive testing |
 | [vclpp-submodule.md](.claude/rules/vclpp-submodule.md) | `src/tools/vclpp` | vclpp/parse-utils conventions, verification recipes, CI, MASP mode, tyra |
 | [ci.md](.claude/rules/ci.md) | `.github` | the two workflows, the pinned ps2sdk image and moving it, checking a Linux build without Docker, runner traps |

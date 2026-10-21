@@ -1,12 +1,12 @@
 /* ================================================================================================
- * File: card_notice.cpp
- * Brief: The memory card notice. See card_notice.h.
+ * File: save_notice.cpp
+ * Brief: The save notice. See save_notice.h.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/save/card_notice.h"
-#include "ps2/save/memcard.h"
+#include "ps2/save/save_notice.h"
+#include "ps2/save/save_system.h"
 #include "ps2/audio/cd_audio.h"
 #include "ps2/builtin/builtin.h"
 #include "ps2/engine_hooks.h"
@@ -22,28 +22,34 @@
 namespace ps2::save {
 namespace {
 
-// However quick the card was, the notice stays up this long, so that it can be read.
+// However quick the device was, the notice stays up this long, so that it can be read.
 constexpr int kMinShownMsec = 1000;
 
 // What is happening, then what not to do meanwhile, which is printed white, as the quit box's
-// last line is. The box is as wide as the longest line.
+// last line is: the first line, the device, a gap and the warning. The box is as wide as the
+// longest line any device has, so it is the same box whatever it names.
 constexpr int kNumLines       = 5;
 constexpr int kFirstWhiteLine = 3;
 
-constexpr const char * kSavingLines[kNumLines] = {
-    "Data is being saved to the",
+constexpr const char * kSavingLine  = "Data is being saved to the";
+constexpr const char * kLoadingLine = "Data is being loaded from the";
+
+// By DeviceKind.
+constexpr int kNumKinds = 4;
+static_assert(static_cast<int>(DeviceKind::HardDisk) + 1 == kNumKinds, "A line for every DeviceKind.");
+
+constexpr const char * kDeviceLines[kNumKinds] = {
     "Memory Card in slot 1.",
-    "",
-    "Do not remove the Memory Card",
-    "or reset/switch off the console.",
+    "host filesystem.",
+    "USB drive.",
+    "hard disk drive.",
 };
 
-constexpr const char * kLoadingLines[kNumLines] = {
-    "Data is being loaded from the",
-    "Memory Card in slot 1.",
-    "",
-    "Do not remove the Memory Card",
-    "or reset/switch off the console.",
+constexpr const char * kWarningLines[kNumKinds][2] = {
+    { "Do not remove the Memory Card", "or reset/switch off the console." },
+    { "Do not reset or switch off",    "the console."                     },
+    { "Do not remove the USB drive",   "or reset/switch off the console." },
+    { "Do not reset or switch off",    "the console."                     },
 };
 
 constexpr int TextLength(const char * text)
@@ -56,12 +62,14 @@ constexpr int TextLength(const char * text)
     return length;
 }
 
-constexpr int LongestLine(const char * const (&lines)[kNumLines])
+constexpr int LongestLine()
 {
-    int longest = 0;
-    for (const char * line : lines)
+    int longest = std::max(TextLength(kSavingLine), TextLength(kLoadingLine));
+    for (int kind = 0; kind < kNumKinds; ++kind)
     {
-        longest = std::max(longest, TextLength(line));
+        longest = std::max(longest, TextLength(kDeviceLines[kind]));
+        longest = std::max(longest, TextLength(kWarningLines[kind][0]));
+        longest = std::max(longest, TextLength(kWarningLines[kind][1]));
     }
     return longest;
 }
@@ -70,7 +78,7 @@ constexpr int LongestLine(const char * const (&lines)[kNumLines])
 // characters, the longest line with a space either side, and even, since M_DrawTextBox draws its
 // middle two characters at a time; the border takes a character on every side.
 constexpr int kGlyph     = 8;
-constexpr int kLongest   = std::max(LongestLine(kSavingLines), LongestLine(kLoadingLines));
+constexpr int kLongest   = LongestLine();
 constexpr int kBoxChars  = (kLongest + 3) & ~1;
 constexpr int kBoxWidth  = (kBoxChars + 2) * kGlyph;
 constexpr int kBoxHeight = (kNumLines + 2) * kGlyph;
@@ -83,24 +91,33 @@ static_assert(kBoxLeft >= 0, "The notice's lines are too long for the menu canva
 constexpr int kBoxTopOverGame        = (200 - kBoxHeight) / 2;
 constexpr int kBoxTopOnLoadingScreen = 120;
 
-// Where the notice went up: what EndCardNotice has to take it off.
+// Where the notice went up: what EndSaveNotice has to take it off.
 enum class Where : u8
 {
     Nowhere,       // Nothing could be drawn (inside a frame, between gs::Init and SCR_Init): it
-                   // doesn't go up, and the card is left alone.
+                   // doesn't go up, and the device is left alone.
     Game,          // Over the game's frame.
     LoadingScreen, // On the loading screen.
     Splash,        // Over the boot splash.
 };
 
 static bool       s_shown     = false;
-static CardAccess s_access    = CardAccess::Saving;
+static SaveAccess s_access    = SaveAccess::Saving;
+static DeviceKind s_kind      = DeviceKind::MemoryCard;
 static Where      s_where     = Where::Nowhere;
 static int        s_shownMsec = 0; // ps2::sys::Milliseconds when it went up.
 
-const char * const * Lines()
+// The lines for the access and the device the notice is up for.
+struct Lines
 {
-    return (s_access == CardAccess::Saving) ? kSavingLines : kLoadingLines;
+    const char * line[kNumLines];
+};
+
+Lines NoticeLines()
+{
+    const int kind = static_cast<int>(s_kind);
+    return { { (s_access == SaveAccess::Saving) ? kSavingLine : kLoadingLine, kDeviceLines[kind], "",
+               kWarningLines[kind][0], kWarningLines[kind][1] } };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -109,7 +126,7 @@ const char * const * Lines()
 //
 // The boot reads config.cfg off the card in VID_Init, before the renderer exists, so the splash
 // draws the notice, and all it draws is textures. The image is put together here as
-// DrawCardNotice puts the notice on the menu canvas, one texel to a canvas pixel: the box from
+// DrawSaveNotice puts the notice on the menu canvas, one texel to a canvas pixel: the box from
 // gfx/box_*.lmp, laid out as M_DrawTextBox lays it, and the lines in gfx.wad's conchars, through
 // the built-in palette. Texels the pieces leave see-through stay at alpha 0, which the splash
 // leaves out, so its plaque shows through them as the game would through the box's.
@@ -244,9 +261,10 @@ u32 * ComposeNoticeImage()
         return nullptr;
     }
 
-    // The lines, centred as DrawCardNotice centres them on the canvas, the box's corner there at
+    // The lines, centred as DrawSaveNotice centres them on the canvas, the box's corner there at
     // kBoxLeft; conchars are 16 to a row, 8x8 each, 0 see-through, the gold ones 128 on.
-    const char * const * const lines = Lines();
+    const Lines notice = NoticeLines();
+    const char * const * const lines = notice.line;
     for (int i = 0; i < kNumLines; ++i)
     {
         const int lineX = ((320 - (TextLength(lines[i]) * kGlyph)) / 2) - kBoxLeft;
@@ -303,7 +321,7 @@ Where ShowFrame()
 
 } // namespace
 
-bool BeginCardNotice(const CardAccess access)
+bool BeginSaveNotice(Device & device, const SaveAccess access)
 {
     if (s_shown)
     {
@@ -311,32 +329,35 @@ bool BeginCardNotice(const CardAccess access)
     }
 
     // The probe and the frame below hold the main thread up for some tens of milliseconds each, a
-    // round trip to the card and the frame's vsyncs, while the sound feeder plays what the mixer
+    // round trip to the device and the frame's vsyncs, while the sound feeder plays what the mixer
     // painted ahead (_snd_mixahead, 0.1 s). Topped up before each, it lasts until the music's fade
     // begins; without that, it ran out first in PCSX2, and the music stopped dead.
     S_ExtraUpdate();
 
-    // No card, or one that can't be used, fails the access at once: no notice for that.
-    if (!GetMemoryCardDevice().Probe())
+    // A device that can't be used (no card in the slot, ...) fails the access at once: no notice
+    // for that.
+    if (!device.Probe())
     {
         return false;
     }
 
     s_shown  = true;
     s_access = access;
+    s_kind   = device.Kind();
 
-    // The game stands still from here until EndCardNotice, with no frame to stop a motor.
+    // The game stands still from here until EndSaveNotice, with no frame to stop a motor.
     ps2::input::StopRumble();
 
     S_ExtraUpdate();
     s_where = ShowFrame();
     if (s_where == Where::Nowhere)
     {
-        // The card is never read or written with nobody told. No path gets here now: the boot's
-        // config.cfg read between gs::Init and SCR_Init only would, after a failed first read,
-        // and quake.rc's "exec config.cfg" reads it again where the notice can be drawn.
+        // A device is never read or written with nobody told. No path gets here now: the boot's
+        // read of the card's config.cfg between gs::Init and SCR_Init only would, after a failed
+        // first read, and quake.rc's "exec config.cfg" reads it again where the notice can be
+        // drawn.
         s_shown = false;
-        Con_DPrintf("Card notice: nothing can be drawn here, so the card is left alone.\n");
+        Con_DPrintf("Save notice: nothing can be drawn here, so the %s is left alone.\n", DeviceName(s_kind));
         return false;
     }
     s_shownMsec = ps2::sys::Milliseconds();
@@ -345,7 +366,7 @@ bool BeginCardNotice(const CardAccess access)
     return true;
 }
 
-void EndCardNotice()
+void EndSaveNotice()
 {
     if (!s_shown)
     {
@@ -357,7 +378,7 @@ void EndCardNotice()
     {
         Sys_Sleep(static_cast<unsigned long>(kMinShownMsec - shownMsec));
     }
-    Con_DPrintf("Card notice: down after %d ms.\n", ps2::sys::Milliseconds() - s_shownMsec);
+    Con_DPrintf("Save notice: down after %d ms.\n", ps2::sys::Milliseconds() - s_shownMsec);
 
     s_shown = false;
 
@@ -370,12 +391,12 @@ void EndCardNotice()
     ps2::audio::ReleaseMusic();
 }
 
-bool CardNoticeShown()
+bool SaveNoticeShown()
 {
     return s_shown;
 }
 
-void DrawCardNotice(const bool onLoadingScreen)
+void DrawSaveNotice(const bool onLoadingScreen)
 {
     if (!onLoadingScreen)
     {
@@ -386,7 +407,8 @@ void DrawCardNotice(const bool onLoadingScreen)
     const int top = onLoadingScreen ? kBoxTopOnLoadingScreen : kBoxTopOverGame;
     M_DrawTextBox(kBoxLeft, top, kBoxChars, kNumLines);
 
-    const char * const * const lines = Lines();
+    const Lines notice = NoticeLines();
+    const char * const * const lines = notice.line;
     for (int i = 0; i < kNumLines; ++i)
     {
         const int x = (320 - (TextLength(lines[i]) * kGlyph)) / 2;

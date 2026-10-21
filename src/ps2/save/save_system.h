@@ -4,10 +4,10 @@
  * Brief: Internals shared by the save game backend (src/ps2/save/).
  *
  *  QuakeSpasm writes a save game as one text file, <gamedir>/<name>.sav, through stdio, and its
- *  load and save menus read each slot's comment line back the same way. Running from the
- *  emulator's host: filesystem, that is where saves stay by default (ps2_savedevice "host"),
- *  exactly as QuakeSpasm keeps them. On a console - and under the emulator with
- *  ps2_savedevice "mc" - they go to the memory card instead:
+ *  load and save menus read each slot's comment line back the same way. Here every save goes
+ *  through the same chain instead, to the device ps2_savedevice picks: the memory card ("mc", the
+ *  default), or the drive the game booted from - the emulator's host: filesystem ("host"), a USB
+ *  drive ("usb") or the hard disk ("hdd"):
  *
  *    engine (host_cmd.c, menu.c)
  *        |  PS2_SaveOpenWrite / PS2_SaveCloseWrite, PS2_SaveLoadText, PS2_SaveReadComment
@@ -18,13 +18,18 @@
  *    slot archive        a header (with the menu comment) and the deflated .sav, CRC-checked,
  *        |               in one of the slot's two files: written A/B, so a failed write never
  *        v               loses the save before it
- *    device              the memory card in MEMORY CARD slot 1 (libmc)
+ *    device              the memory card in MEMORY CARD slot 1 (libmc), or <gamedir>/save/ on
+ *                        the boot drive
+ *
+ *  Every access to a device's saved data goes under the save notice (save_notice.h).
  *
  *  packed_blob.cpp  - the deflating stdio stream, the blob it fills, and inflating it back
  *  slot_archive.cpp - the archive format, over any Device
  *  save_device.cpp  - error reporting and whole-file helpers the devices share
  *  memcard.cpp      - the memory card Device (libmc)
- *  mc_icon.cpp      - the icon.sys and 3D icon the PS2 browser shows for the save directory
+ *  drive.cpp        - the boot drive's Device (stdio, <gamedir>/save/)
+ *  mc_icon.cpp      - the icon.sys and 3D icon the PS2 browser shows for the card's directory
+ *  save_notice.cpp  - the notice on the screen while a device is busy
  *  save_api.cpp     - the PS2_Save* and PS2_Config* hooks (engine_hooks.h), the ps2_savedevice
  *                     cvar, and where config.cfg is kept
  *
@@ -43,8 +48,8 @@ namespace ps2::save {
 void Init();
 
 // What QuakeSpasm's CFG_ReadCvars does for the cvars read ahead of config.cfg running (the
-// framebuffer format, the USB keyboard), but from the config.cfg PS2_ConfigLoadHunk would pick:
-// the host file first under the emulator, the memory card's first on a console.
+// framebuffer format, the USB keyboard), but from the config.cfg PS2_ConfigLoadHunk would pick
+// (see save_api.cpp).
 void ReadConfigCvars(const char ** vars, int numVars);
 
 // Longest device file name, terminator included: the limit a memory card directory entry puts
@@ -75,6 +80,18 @@ inline void CopyName(char (&dest)[N], const char * src)
 // Device
 // ------------------------------------------------------------------------------------------------
 
+// What a Device is, for what the player is told: the save notice, the menus, the console.
+enum class DeviceKind : u8
+{
+    MemoryCard,
+    HostFiles, // the emulator's host: filesystem
+    UsbDrive,
+    HardDisk,
+};
+
+// "memory card", "host files", "USB drive", "hard disk": the options menu's Save Device row.
+const char * DeviceName(DeviceKind kind);
+
 // A file in the game's save directory on a device.
 struct DirEntry
 {
@@ -93,12 +110,14 @@ enum class OpenMode
     Write,
 };
 
-// Somewhere save slots (and config.cfg) can be kept. Names are bare file names inside the
-// device's save directory. One file is open at a time. The memory card is the one there is;
-// the slot archive is written against this interface rather than against it.
+// Somewhere save slots (and the card's config.cfg) can be kept. Names are bare file names inside
+// the device's save directory. One file is open at a time. The slot archive is written against
+// this interface, so a save is the same files on the memory card and on a drive.
 class Device
 {
 public:
+    virtual DeviceKind Kind() const = 0;
+
     // Checks the device can be used right now - the card is in, formatted, and so on - and
     // refreshes FreeBytes. On false, SetError has said why in words the player understands.
     virtual bool Probe() = 0;

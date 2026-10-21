@@ -29,7 +29,8 @@ the shareware episode or all four episodes of the registered game, with everythi
 - **Loading** the game data from a USB drive or the internal HDD on a console, and from PCSX2's
   host filesystem (`host:`) in the emulator, from id's paks or from compressed ones that halve what
   a level load reads.
-- **Saving** games and settings to the memory card.
+- **Saving** games and settings to the memory card, or to the USB drive or hard disk the game runs
+  from.
 - **The DualShock 2**, with both analog sticks and rumble. A USB keyboard works too, for the in-game console.
 - **Sound effects and the CD soundtrack**, the music streamed from ripped CD tracks.
 - **Everything on screen:** textured, lightmapped worlds with their fullbright texels, warping
@@ -307,8 +308,8 @@ those directly on the PS2's hardware, with no GL underneath.
 - **Video Options** (in the Options menu): NTSC or PAL, a 16- or 32-bit framebuffer (16-bit leaves
   more VRAM for textures), the texture filtering, dithering, the dynamic lights (lightmaps, vertex
   or glows), the models' shadows, the GS latency, and the FPS counter and debug overlays.
-  The first two apply after a restart. The Options page itself has the save device, host files
-  or the memory card, when running from `host:`.
+  The first two apply after a restart. The Options page itself has the save device: the memory
+  card, or the drive the game booted from (see [Save games](#save-games)).
 - **The boot splash** shows the QUAKE plaque from the menus, built into the ELF, from the first
   moment of the boot until the game draws its first frame. **The loading screen** shows the loading
   plaque with a status line naming the file being read.
@@ -400,30 +401,41 @@ of a deflated file 72 KB more. Debug builds also check the CRC of every file the
 
 ## Save games
 
-Games are saved to the memory card in slot 1 ([save/](src/ps2/save/)), in a `Q1PS2` folder the PS2's
-browser shows with a 3D quad damage icon. Each of the menus' 20 slots is one compressed file (an
-e1m1 save takes 11 KB), and a save is written in full before the one it replaces is deleted, so an
-interrupted save never loses the previous one. Under PCSX2, `ps2_savedevice` picks between plain
-`.sav` files in `id1/` (`host`, the default there) and the card (`mc`).
+Games are saved to the memory card in slot 1 by default ([save/](src/ps2/save/)), in a `Q1PS2` folder
+the PS2's browser shows with a 3D quad damage icon. The Options page's Save Device row
+(`ps2_savedevice`) can keep them on the drive the game booted from instead: the USB drive (`usb`),
+the hard disk (`hdd`), or under PCSX2 the host filesystem (`host`), in `id1/save/` there, as the
+Quake II port keeps them in `baseq2/save/`. Every device holds the same files: each of the menus'
+20 slots is one compressed file (an e1m1 save takes 11 KB), and a save is written in full before
+the one it replaces is deleted, so an interrupted save never loses the previous one. Loading reads
+the selected device only.
 
-Whenever the game reads the card or writes to it (a save, a load, the save menus listing their
-slots, the settings), it shows the notice PS2 games show
-([card_notice.h](src/ps2/save/card_notice.h)): "Data is being saved to the Memory Card in slot 1.
-Do not remove the Memory Card or reset/switch off the console." ("loaded from" for a read), in
-Quake's own message box. On a console the game stands still for a second or more while the card
-is busy, so the notice goes up before the card is touched, the music fades out under it rather
-than stopping mid-note, and once the card is done the music fades back in from where it stopped.
+Whenever the game reads or writes saved data (a save, a load, the save menus listing their slots,
+the settings), it shows the notice PS2 games show ([save_notice.h](src/ps2/save/save_notice.h)):
+"Data is being saved to the Memory Card in slot 1. Do not remove the Memory Card or reset/switch
+off the console." ("loaded from" for a read), naming the device in use, in Quake's own message box.
+On a console the game stands still for a second or more while the card is busy, so the notice goes
+up before the device is touched, the music fades out under it rather than stopping mid-note, and
+once the device is done the music fades back in from where it stopped.
 
-`config.cfg`, the binds and settings, is written on quit and when leaving the options menu:
+When the save device can't be used (no memory card in the slot, say), the load and save menus say
+so over their slots, with how to switch to the other device, and a save or a load that fails says
+why in a message box, dismissed with Cross.
+
+`config.cfg`, the binds and settings, lives with the saves. It is written on quit and when leaving
+the options menu:
 
 | | Game data on `host:` (PCSX2) | Game data on the HDD or USB (console) |
 |---|---|---|
-| **Saving** | `id1/config.cfg`, plus the card's copy when saves go to the card | the card's copy only, never the game data's drive |
-| **Loading** | `id1/config.cfg` first, the card's if there is none | the card's first, then `id1/config.cfg` |
+| **Saving** | `id1/config.cfg` always, plus the card's copy when saves go to the card | the save device's: the card's, or `id1/config.cfg` on the drive |
+| **Loading** | `id1/config.cfg` first, the card's if there is none | the drive's `id1/config.cfg` if it says saves go to the drive; otherwise the card's first, then the drive's |
 
-The card's copy is read at boot, under the notice drawn over the QUAKE plaque since the renderer
-hasn't started yet. The card is read for it once a run, and an unchanged config isn't written
-again, so leaving the options menu without changing anything doesn't touch the card.
+So a player who keeps everything on the USB drive or the hard disk never has the card touched at
+boot. Switching the save device from the drive back to the card rewrites the drive's
+`id1/config.cfg` once more, so that it no longer names the drive and the next boot reads the card.
+The card's copy is read at boot under the notice, drawn over the QUAKE plaque since the renderer
+hasn't started yet. An unchanged config isn't written again, so leaving the options menu without
+changing anything touches no device.
 
 The repository tracks `id1/config.cfg` as the default settings. The game writes it deterministically,
 so a run that changes no setting writes it back byte for byte, and `git status` shows when one did.
@@ -443,7 +455,7 @@ src/
     input/              IN_* seam, DualShock pad and rumble, USB keyboard
     math/               vector/matrix math for the renderer
     net/                the network driver table (loopback only)
-    save/               save games on the memory card
+    save/               save games on the memory card or the boot drive
     fs/                 compressed game packs (pakN.pkz) for QuakeSpasm's file system
     debug/              on-screen error printing, the log file, stack traces, EE exception handling
     menu/               the main menu's About page

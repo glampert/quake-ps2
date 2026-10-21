@@ -30,8 +30,8 @@ void Show();
 bool IsShownIn(int vramAddress, int width, int height, int psm, video::Standard standard);
 
 // Draws an image over the splash, at twice its size and centred, as the menus would draw it: the
-// memory card notice while the boot reads config.cfg off the card, which VID_Init does before
-// the renderer exists (save/card_notice.h). `texels` are `width` x `height` RGBA, those with alpha
+// save notice while the boot reads config.cfg off the card, which VID_Init does before the
+// renderer exists (save/save_notice.h). `texels` are `width` x `height` RGBA, those with alpha
 // 0 left out. False, drawing nothing, if the splash isn't up or gs::Init has taken over.
 bool ShowImage(const u32 * texels, int width, int height);
 

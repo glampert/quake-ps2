@@ -169,11 +169,12 @@ The rest are scripted runs:
 - **Perf run** (profile builds): `ps2_perftest 1` in `autoexec.cfg` plays the demos, and
   `ps2_testmaps 2` tours every level; the recipes are in [performance.md](performance.md). Both
   quit at the end, which writes `config.cfg`, unless `ps2_test_quit` is 0.
-- **The memory card notice** (`save/card_notice.h`): `save` and `load` run from a script, but a
+- **The save notice** (`save/save_notice.h`): `save` and `load` run from a script, but a
   `screenshot` after either catches the frame after the notice. A scratch build with
-  `Cmd_ExecuteString("screenshot", src_command);` after `ShowFrame()` in `BeginCardNotice` and
-  before `s_shown = false` in `EndCardNotice` catches it as it goes up and as it comes down (the
-  TGA write stalls the mixer ~0.4 s first, so time the hold on a build without it). The load
+  `Cmd_ExecuteString("screenshot", src_command);` after `ShowFrame()` in `BeginSaveNotice` (only
+  where it drew over the game or the loading screen: on the splash there is no renderer to read)
+  and before `s_shown = false` in `EndSaveNotice` catches it as it goes up and as it comes down
+  (the TGA write stalls the mixer ~0.4 s first, so time the hold on a build without it). The load
   menu's path (`M_Load_Key`, which puts the notice up before its plaque) wants a key press: a
   scratch command that calls `M_Menu_Load_f()`, sets `load_cursor` and calls `M_Load_Key(K_ENTER)`
   drives it (all three are extern in menu.c), with `loadable[load_cursor] = 1` to try a slot the
