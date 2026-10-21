@@ -33,7 +33,7 @@ constexpr Line kLines[] = {
     { "",                               false },
     { "An unofficial, fan-made port",   false },
     { "of id Software's Quake, built",  false },
-    { "on QuakeSpasm 0.97.0 with only", false },
+    { "on QuakeSpasm 0.97.0 with",      false },
     { "the free PS2DEV SDK.",           false },
     { "",                               false },
     { "PS2 port by Guilherme Lampert",  false },
