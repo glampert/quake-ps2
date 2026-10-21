@@ -51,8 +51,9 @@ constexpr int kImageVramAddr   = 96 * kVramPageWords;
 constexpr int kImageMaxWidth   = 320;
 constexpr int kImageMaxHeight  = 64;
 
-// Pictures are drawn at twice their size, as the menus draw them at scr_menuscale 2 (the plaque
-// is 64x288), and point sampled as they draw them: at a whole multiple, each texel is a 2x2 block.
+// Pictures are drawn at twice their size (the plaque is 64x288), and point sampled as the menus
+// draw them: at a whole multiple, each texel is a 2x2 block. The menus' own scale, scr_menuscale,
+// is 1.5 by default, where the texels can't all come out the same size.
 constexpr int kScale = 2;
 
 // Palette index 255 is Quake's see-through one. Here it is the black of the background (the

@@ -294,12 +294,15 @@ those directly on the PS2's hardware, with no GL underneath.
   as QuakeSpasm lights them, with their shadows (`r_shadows`) and the players' colours.
   [Sprites](src/ps2/renderer/sprite.cpp) face the camera in all of QuakeSpasm's orientations, and
   [particles](src/ps2/renderer/particles.cpp) are QuakeSpasm's round dots.
-- **2D** ([draw.cpp](src/ps2/renderer/draw.cpp)): the console, menus and status bar. The menus are
-  drawn at twice their size (`scr_menuscale`), filling the 640x448 screen as the original filled
-  320x200. The main menu leaves out Multiplayer, which the PS2 doesn't play, and has an About page
-  after Help/Ordering ([about_menu.cpp](src/ps2/menu/about_menu.cpp)): what the port is, its
-  version, its author and its GitHub page. No game data has an "About" in the menu's lettering, so
-  the ELF carries one, made from the menu pictures' own letters by
+- **2D** ([draw.cpp](src/ps2/renderer/draw.cpp)): the console, menus and status bar. Quake laid
+  them out for 320x200, and at QuakeSpasm's size of 1 they come out small on the 640x448 screen,
+  so here they are drawn at 1.5 times their size by default: `scr_menuscale`, `scr_conscale` and
+  `scr_sbarscale` are 1.5 (QuakeSpasm's 1), which Options' Scale slider sets together. The status
+  bar is half see-through (`scr_sbaralpha` 0.5, QuakeSpasm's 0.75). The main menu leaves out
+  Multiplayer, which the PS2 doesn't play, and has an About page after Help/Ordering
+  ([about_menu.cpp](src/ps2/menu/about_menu.cpp)): what the port is, its version, its author and
+  its GitHub page. No game data has an "About" in the menu's lettering, so the ELF carries one,
+  made from the menu pictures' own letters by
   [make_menu_about.py](src/tools/scripts/make_menu_about.py).
 - **Video Options** (in the Options menu): NTSC or PAL, a 16- or 32-bit framebuffer (16-bit leaves
   more VRAM for textures), the texture filtering, dithering, the dynamic lights (lightmaps, vertex

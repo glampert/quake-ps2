@@ -190,9 +190,10 @@ put the notice up, which draws a frame of its own.
 Some files with GL names hold engine logic and stay, with only their GL halves cut:
 `gl_model.c` (the server needs its BSP hulls and PVS), `gl_screen.c` (`SCR_UpdateScreen`, the
 loading plaque, and `screenshot`, TGA only, over `PS2_ReadPixels`; it also defaults
-`scr_menuscale` to 2 for the 640x448 screen, while `scr_sbarscale` keeps QuakeSpasm's 1, and
-gives the loading plaque 150 s before `SCR_UpdateScreen` prints "load failed." and draws again,
-where QuakeSpasm gives it 60: the plaque spans every frame of a load, and the Quake II port's
+`scr_menuscale`, `scr_conscale` and `scr_sbarscale` to 1.5 for the 640x448 screen, where
+QuakeSpasm has 1, and `scr_sbaralpha` to 0.5, where it has 0.75, and gives the loading plaque
+150 s before `SCR_UpdateScreen` prints "load failed." and draws again, where QuakeSpasm gives it
+60: the plaque spans every frame of a load, and the Quake II port's
 loads off USB on a console ran past two minutes), `gl_refrag.c`, `gl_rlight.c`, `r_part.c` (particle simulation) and `gl_fog.c` (its message
 parsing must run, or the stream desyncs). `gl_warp.c` is gone: its subdivision fed a warp
 computed per texel, and the PS2's, per vertex, wants a finer cut (brush.cpp makes it); the
