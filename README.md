@@ -342,8 +342,9 @@ The Options rows QuakeSpasm gives the mouse work the look stick instead:
 - **Look Speed** scales `joy_sensitivity_yaw` and `joy_sensitivity_pitch` together, 0.5 to 2; at 1
   they are QuakeSpasm's 240 and 130 degrees a second.
 - **Invert Look** is `joy_invert`.
-- **Stick Look** is `+mlook`, which switches the look stick on and off. It is on by default, and
-  `config.cfg` keeps a `-mlook` when it is turned off.
+- **Stick Look** is `+mlook`, mouse look for the stick. Off, the look stick only turns, as Quake's
+  mouse does without mouse look, and the view levels itself as in classic Quake. It is on by
+  default, and `config.cfg` keeps a `-mlook` when it is turned off.
 - **Lookspring** recentres the view as the player runs after looking up or down.
 
 Lookstrafe is gone: it had the mouse strafe instead of turn, and a look stick that strafed would

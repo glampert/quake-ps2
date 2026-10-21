@@ -157,12 +157,14 @@ Player's strip takes the see-through row under it, so a sprite's repeated last r
 For the pad in the menus (`engine_hooks.h`, `ps2/input/input.cpp`): the Options rows QuakeSpasm
 gives the mouse work the look stick. `OPT_MOUSESPEED` is Look Speed (`PS2_LookSpeed`/
 `PS2_SetLookSpeed`, `joy_sensitivity_yaw` and `_pitch` together, 0.5 to 2), `OPT_INVMOUSE` Invert
-Look (`joy_invert`), `OPT_ALWAYSMLOOK` Stick Look (QuakeSpasm's own `+mlook` toggle, which
-`IN_Move` now reads as the look stick's switch), `OPT_MUSICEXT` Background Music. `OPT_LOOKSTRAFE`
-is commented out (the mouse strafing instead of turning; a look stick that did would leave nothing
-to turn with), and `OPT_PS2RUMBLE` steps `in_rumble`. `PS2_DefaultConfig` adds `+mlook`, as
-QuakeSpasm's own default.cfg does, so `host.c`'s `Host_WriteConfiguration` writes `-mlook` when it
-is off: with only QuakeSpasm's `+mlook` line, the defaults would turn it back on at every boot.
+Look (`joy_invert`), `OPT_ALWAYSMLOOK` Stick Look (QuakeSpasm's own `+mlook` toggle: `IN_Move`
+lets the look stick look up and down only under it, and without it the stick only turns and
+leaves the pitch drifting, as in_sdl.c's `IN_MouseMove` treats the mouse), `OPT_MUSICEXT`
+Background Music. `OPT_LOOKSTRAFE` is commented out (the mouse strafing instead of turning; a look
+stick that did would leave nothing to turn with), and `OPT_PS2RUMBLE` steps `in_rumble`.
+`PS2_DefaultConfig` adds `+mlook`, as QuakeSpasm's own default.cfg does, so `host.c`'s
+`Host_WriteConfiguration` writes `-mlook` when it is off: with only QuakeSpasm's `+mlook` line,
+the defaults would turn it back on at every boot.
 The Controls page lists the pad's buttons only, by `PS2_PadKeyName`'s names: `M_FindKeysForCommand`
 and `M_UnbindCommand` skip every other key, the bind grab takes only a pad button, Square
 (`K_XBUTTON`) clears beside Backspace, and the header says so. `bindnames`' `+mlook` and `+klook`

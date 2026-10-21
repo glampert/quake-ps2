@@ -1270,7 +1270,7 @@ void M_Options_Draw (void)
 	M_Print (16, 32 + 8*OPT_INVMOUSE,	"           Invert Look");
 	M_DrawCheckbox (220, 32 + 8*OPT_INVMOUSE, Cvar_VariableValue ("joy_invert") != 0);
 
-	// OPT_ALWAYSMLOOK: [PS2_QUAKE]: +mlook switches the look stick (input.cpp)
+	// OPT_ALWAYSMLOOK: [PS2_QUAKE]: +mlook lets the look stick look up and down (input.cpp)
 	M_Print (16, 32 + 8*OPT_ALWAYSMLOOK,	"            Stick Look");
 	M_DrawCheckbox (220, 32 + 8*OPT_ALWAYSMLOOK, in_mlook.state & 1);
 
@@ -1396,7 +1396,7 @@ const char *bindnames[][2] =
 	{"+lookup",		"look up"},
 	{"+lookdown",		"look down"},
 	{"centerview",		"center view"},
-	{"+mlook",		"stick look"}, // [PS2_QUAKE]: was "mouse look": it switches the look stick (input.cpp)
+	{"+mlook",		"stick look"}, // [PS2_QUAKE]: was "mouse look": the look stick's up and down (input.cpp)
 	{"+klook",		"d-pad look"}, // [PS2_QUAKE]: was "keyboard look": the D-pad holds the move keys
 	{"+moveup",		"swim up"},
 	{"+movedown",		"swim down"}

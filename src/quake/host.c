@@ -332,8 +332,8 @@ void Host_WriteConfiguration (void)
 		//johnfitz -- extra commands to preserve state
 		fprintf (f, "vid_restart\n");
 		if (in_mlook.state & 1) fprintf (f, "+mlook\n");
-		// [PS2_QUAKE]: and off, which the PS2's defaults aren't: +mlook is the look stick's
-		// switch there (input.cpp), and config.cfg runs after them.
+		// [PS2_QUAKE]: and off, which the PS2's defaults aren't: +mlook lets the look stick look
+		// up and down there (input.cpp), and config.cfg runs after them.
 		else fprintf (f, "-mlook\n");
 		//johnfitz
 

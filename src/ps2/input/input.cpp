@@ -102,8 +102,9 @@ static cvar_t s_inDebugKeys = ps2::MakeCvar("in_debugkeys", "0", CVAR_NONE);
 // Circle to swim down (Circle is also the menus' Back; keys.c keeps quiet about unbound buttons
 // pressed in a menu, as QuakeSpasm didn't). Always run is on, so that the stick's deflection
 // sets the pace up to Quake's run rather than its walk. And +mlook, which QuakeSpasm's own
-// default.cfg ends with too: here it is the look stick's switch (IN_Move), the options menu's
-// Stick Look. config.cfg says "-mlook" when the player turned it off (host.c).
+// default.cfg ends with too: here it lets the look stick look up and down, not only turn
+// (IN_Move), the options menu's Stick Look. config.cfg says "-mlook" when the player turned it
+// off (host.c).
 constexpr char kDefaultConfig[] =
     "bind RTRIGGER +attack\n"
     "bind LTRIGGER +jump\n"
@@ -583,9 +584,13 @@ void IN_SendKeyEvents()
 // ------------------------------------------------------------------------------------------------
 
 // The sticks' share of the frame's move: in_sdl.c's IN_JoyMove. The left stick walks and strafes,
-// the right one turns and looks (joy_swapmovelook swaps them), straight into cl.viewangles. The
-// look stick only while +mlook holds, the options menu's Stick Look: with no mouse, mouse look's
-// switch is the stick's.
+// the right one turns and looks (joy_swapmovelook swaps them), straight into cl.viewangles.
+//
+// The look stick looks up and down only while +mlook holds, the options menu's Stick Look: with
+// no mouse, mouse look is the stick's. Without it the stick turns and nothing more, as Quake's
+// mouse does without mouse look (in_sdl.c's IN_MouseMove): its up and down are left out of the
+// dead zone and the easing too, and turning doesn't stop the view's pitch from drifting, so it
+// levels itself as classic Quake's does, following the slopes and with lookspring.
 void IN_Move(usercmd_t * cmd)
 {
     if (!SticksActive() || cl.paused || key_dest != key_game)
@@ -599,9 +604,11 @@ void IN_Move(usercmd_t * cmd)
     {
         std::swap(move, look);
     }
-    if ((in_mlook.state & 1) == 0)
+
+    const bool stickLook = (in_mlook.state & 1) != 0;
+    if (!stickLook)
     {
-        look = {};
+        look.y = 0.0f;
     }
 
     move = ApplyEasing(ApplyDeadzone(move, s_joyDeadzoneMove.value, s_joyOuterThresholdMove.value),
@@ -614,13 +621,17 @@ void IN_Move(usercmd_t * cmd)
     cmd->forwardmove -= speed * move.y;
 
     const float frameTime = static_cast<float>(host_frametime);
-    const float invert    = (s_joyInvert.value != 0.0f) ? -1.0f : 1.0f;
-    cl.viewangles[YAW]   -= look.x * s_joySensitivityYaw.value * frameTime;
-    cl.viewangles[PITCH] += look.y * s_joySensitivityPitch.value * invert * frameTime;
+    cl.viewangles[YAW] -= look.x * s_joySensitivityYaw.value * frameTime;
 
-    if (look.x != 0.0f || look.y != 0.0f)
+    if (stickLook)
     {
-        V_StopPitchDrift();
+        const float invert = (s_joyInvert.value != 0.0f) ? -1.0f : 1.0f;
+        cl.viewangles[PITCH] += look.y * s_joySensitivityPitch.value * invert * frameTime;
+
+        if (look.x != 0.0f || look.y != 0.0f)
+        {
+            V_StopPitchDrift();
+        }
     }
 
     // QuakeSpasm's variable pitch clamping, as the mouse look does it.

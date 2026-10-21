@@ -157,9 +157,10 @@ const char * PS2_PadKeyName(int key);
 
 // Config text "exec default.cfg" runs right after the file: the gamepad's binds, which id's
 // default.cfg doesn't have (QuakeSpasm's own default.cfg, in a quakespasm.pak the PS2 doesn't
-// ship, adds some), always run, for the sticks, and +mlook, the look stick's switch (see
-// input.cpp). It runs whenever default.cfg does, so the options menu's "Reset to defaults"
-// restores it too, and config.cfg, which quake.rc runs next, keeps the player's own settings.
+// ship, adds some), always run, for the sticks, and +mlook, which lets the look stick look up
+// and down (see input.cpp). It runs whenever default.cfg does, so the options menu's "Reset to
+// defaults" restores it too, and config.cfg, which quake.rc runs next, keeps the player's own
+// settings.
 const char * PS2_DefaultConfig(void);
 
 // ------------------------------------------------------------------------------------------------
