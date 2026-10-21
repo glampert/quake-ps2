@@ -84,11 +84,11 @@ float		scr_conlines;		// lines of console to display
 // original did. The status bar stays at 1, as id's Quake drew it at 640x480: centred, crisp under
 // the 2D's nearest sampling, and clear of most of the view weapon, which the 3D view puts under
 // the translucent bar.
-cvar_t		scr_menuscale = {"scr_menuscale", "2", CVAR_ARCHIVE};
+cvar_t		scr_menuscale = {"scr_menuscale", "1.5", CVAR_ARCHIVE}; // [PS2_QUAKE]: default from 2 to 1.5
 cvar_t		scr_sbarscale = {"scr_sbarscale", "1.5", CVAR_ARCHIVE}; // [PS2_QUAKE]: default from 1 to 1.5
 cvar_t		scr_sbaralpha = {"scr_sbaralpha", "0.5", CVAR_ARCHIVE}; // [PS2_QUAKE]: default from 0.75 to 0.5
 cvar_t		scr_conwidth = {"scr_conwidth", "0", CVAR_ARCHIVE};
-cvar_t		scr_conscale = {"scr_conscale", "1", CVAR_ARCHIVE};
+cvar_t		scr_conscale = {"scr_conscale", "1.5", CVAR_ARCHIVE}; // [PS2_QUAKE]: default from 1 to 1.5
 cvar_t		scr_crosshairscale = {"scr_crosshairscale", "1", CVAR_ARCHIVE};
 cvar_t		scr_showfps = {"scr_showfps", "0", CVAR_NONE};
 cvar_t		scr_clock = {"scr_clock", "0", CVAR_NONE};
