@@ -21,3 +21,12 @@ extern const int qplaque_width;
 extern const int qplaque_height;
 extern const int qplaque_size_bytes;
 extern const unsigned char qplaque_data[];
+
+// gfx/menuabout.lmp: the main menu's "About" item, in the lettering of gfx/mainmenu.lmp's items,
+// which no game data has. Its letters are mainmenu.lmp's and sp_menu.lmp's, the A and the b made
+// from their a and d, put together by src/tools/scripts/make_menu_about.py. Draw_CachePic hands
+// it to the main menu (draw.cpp).
+extern const int menuabout_width;
+extern const int menuabout_height;
+extern const int menuabout_size_bytes;
+extern const unsigned char menuabout_data[];

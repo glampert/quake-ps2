@@ -5,7 +5,8 @@ debug (`make`) and release (`make release`) builds. See the [README](README.md) 
 bigger picture. QuakeSpasm's own cvars are not listed here, including the ones the backend
 registers in place of the QuakeSpasm files it replaced (`gamma`, `r_lerpmodels`, the `joy_*`
 cvars, ...). Where one of those means something different on the PS2 (`joy_enable`,
-`in_debugkeys`), the README's section on that subsystem says so.
+`in_debugkeys`, the Options page's Look Speed, Invert Look and Stick Look rows over `joy_*` and
+`+mlook`), the README's section on that subsystem says so.
 
 - **Arch.** marks `CVAR_ARCHIVE` cvars: they are written to `config.cfg` and read back on
   the next boot, so the value in your config, not the default, is what a run starts with.
@@ -24,7 +25,7 @@ More come back as each subsystem is ported.
 | `ps2_video_mode` | auto | auto | Arch. | The TV standard: `auto` (the console's own, from its BIOS ROM name), `ntsc` (59.94 Hz, 640x448) or `pal` (50 Hz, 640x512). A PAL console can drive NTSC if the TV takes 60 Hz. Read at boot, as `ps2_fb_16bit` is, so a change applies on the next run; the error screen follows it too. On the Video Options page. |
 | `in_keyboard` | 1 | 0 | Arch. | The USB keyboard, a development tool here. Its IOP driver (usbd and ps2kbd) loads the first time this is on: at boot it is read from `config.cfg` ahead of time, so with it off there the driver never loads. Switching it off lets go of any keys the keyboard holds. Each poll is a file read on the IOP, so it is read every frame only while in use (a key in the last 10 s, or one held) and every 250 ms otherwise, and not while a music read is out. Live. |
 | `ps2_savedevice` | host | host | Arch. | Where save games go when running from the emulator's `host:` filesystem: `host` keeps them as QuakeSpasm does, `<gamedir>/<name>.sav` files; `mc` sends them to the memory card in MEMORY CARD slot 1, with a copy of `config.cfg`. On a console saves always go to the card, whatever this says. `ps2_saveinfo` shows where they are going. On the Options page (Save Device), which on a console reads "memory card" and doesn't change. |
-| `in_rumble` | 1 | 1 | Arch. | The pad's vibration: bursts for the player's shots, damage taken (stronger the harder the hit), pickups and powerups coming on. Off in menus, the console, demos and while paused. Live. |
+| `in_rumble` | 1 | 1 | Arch. | The pad's vibration: bursts for the player's shots, damage taken (stronger the harder the hit), pickups and powerups coming on. Off in menus, the console, demos and while paused. Live. On the Options page (Rumble). |
 | `in_rumbledebug` | 0 | 0 | | Prints each rumble effect as it starts, with its motor speeds and durations. |
 | `ps2_mip_filter` | bilinear | bilinear | Arch. | How the walls filter, as QuakeSpasm's `gl_texturemode` does: `nearest`, `bilinear` (between texels, the nearest mip level) or `trilinear` (between levels too, at twice the texture reads). Live. On the Video Options page. |
 | `ps2_dynamic_lights` | lightmaps | lightmaps | Arch. | How the walls take the dynamic lights while `gl_flashblend` is 0: `lightmaps` rebuilds the luxels they reach and re-uploads their atlases, as QuakeSpasm does; `vertex` leaves the lightmaps alone and has VU1 add the four lights nearest the camera at each vertex of the lightmap pass (the Quake II port's `ps2_dynamic_lightmaps 2`). The vertex lights add a flat colour beside the texture rather than brightening it, light big faces only at their corners, and light brush entities in their own space. Alias models are lit by every light either way. `r_dynamic 0` turns both off. Live. On the Video Options page (Dynamic lights), whose third value, glows, is `gl_flashblend 1`. |

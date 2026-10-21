@@ -3,9 +3,10 @@
  * Brief: What QuakeSpasm's C needs from the backend that no QuakeSpasm header declares: the PS2
  *        stand-ins for the few OpenGL calls made outside the renderer (the status bar's alpha
  *        and scissor, the view blend, the screenshot readback), the loading screen, the
- *        compressed packs, the debug page, the PS2's additions to the default config, where save
- *        games and config.cfg are kept, and the engine state and functions the backend uses that
- *        QuakeSpasm keeps to one file. Every engine line that uses this is tagged [PS2_QUAKE].
+ *        compressed packs, the debug and About pages, the gamepad's settings and button names for
+ *        the menus, the PS2's additions to the default config, where save games and config.cfg
+ *        are kept, and the engine state and functions the backend uses that QuakeSpasm keeps to
+ *        one file. Every engine line that uses this is tagged [PS2_QUAKE].
  *        NOTE: Shared header between C and C++.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -21,12 +22,16 @@ extern "C" {
 #include "quake/quakedef.h" // qpic_t, particle_t
 
 // ------------------------------------------------------------------------------------------------
-// 2D (sbar.c)
+// 2D (sbar.c, menu.c)
 // ------------------------------------------------------------------------------------------------
 
 // Draw_Pic at 'alpha' opacity, 0 to 1: what Sbar_DrawPicAlpha did by wrapping Draw_Pic in GL
 // blend state.
 void PS2_DrawPicAlpha(int x, int y, const qpic_t * pic, float alpha);
+
+// Draw_Pic of rows 'firstRow' to 'firstRow' + 'numRows' of 'pic' alone, their top at 'y': the main
+// menu draws gfx/mainmenu.lmp an item at a time, to leave Multiplayer out.
+void PS2_DrawPicRows(int x, int y, const qpic_t * pic, int firstRow, int numRows);
 
 // Clips the 2D draws that follow to a rectangle, in screen pixels, until PS2_ResetScissor2D:
 // Sbar_DrawScrollString's glScissor. The origin is the top-left corner; the one caller clips to
@@ -122,14 +127,39 @@ void PS2_DebugMenuDraw(void);
 void PS2_DebugMenuKey(int key);
 
 // ------------------------------------------------------------------------------------------------
+// The About page (menu.c)
+// ------------------------------------------------------------------------------------------------
+
+// The main menu's "About" item opens the page (m_state m_ps2about): what this port is, who made
+// it and where it lives. M_Draw and M_Keydown hand it its frames and keys while it is up
+// (src/ps2/menu/about_menu.cpp).
+void PS2_AboutMenuOpen(void);
+void PS2_AboutMenuDraw(void);
+void PS2_AboutMenuKey(int key);
+
+// ------------------------------------------------------------------------------------------------
+// The gamepad (menu.c)
+// ------------------------------------------------------------------------------------------------
+
+// The options menu's Look Speed: how fast the look stick turns and looks at full deflection, as a
+// multiple of QuakeSpasm's speeds. It sets joy_sensitivity_yaw and joy_sensitivity_pitch together
+// (src/ps2/input/input.cpp).
+float PS2_LookSpeed(void);
+void PS2_SetLookSpeed(float speed);
+
+// What the controls menu calls a key the pad sends: its button ("Cross", "L2", "Up" for the
+// D-pad's, ...). Null for any other key, a keyboard's, which the menu leaves out.
+const char * PS2_PadKeyName(int key);
+
+// ------------------------------------------------------------------------------------------------
 // Configs (cmd.c)
 // ------------------------------------------------------------------------------------------------
 
 // Config text "exec default.cfg" runs right after the file: the gamepad's binds, which id's
 // default.cfg doesn't have (QuakeSpasm's own default.cfg, in a quakespasm.pak the PS2 doesn't
-// ship, adds some), and always run, for the sticks (see input.cpp). It runs whenever
-// default.cfg does, so the options menu's "Reset to defaults" restores it too, and config.cfg,
-// which quake.rc runs next, keeps the player's own settings.
+// ship, adds some), always run, for the sticks, and +mlook, the look stick's switch (see
+// input.cpp). It runs whenever default.cfg does, so the options menu's "Reset to defaults"
+// restores it too, and config.cfg, which quake.rc runs next, keeps the player's own settings.
 const char * PS2_DefaultConfig(void);
 
 // ------------------------------------------------------------------------------------------------
@@ -205,6 +235,10 @@ extern particle_t * active_particles;
 // gl_screen.c's "ready to draw", set by SCR_Init: before it, the memory card notice draws over
 // the boot splash instead. screen.h doesn't declare it.
 extern qboolean scr_initialized;
+
+// gl_screen.c's "drawing SCR_ModalMessage's question", for the one frame it draws before it waits
+// for the answer: GL_EndRendering shows that frame at once. screen.h doesn't declare it.
+extern qboolean scr_drawdialog;
 
 // menu.c's message box, built from the gfx/box_*.lmp pieces on the menu canvas, which the memory
 // card notice is drawn in. 'x' and 'y' are its top-left corner, border included; 'width' and

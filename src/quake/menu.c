@@ -264,7 +264,16 @@ void M_Main_Draw (void)
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
 	p = Draw_CachePic ("gfx/ttl_main.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
-	M_DrawTransPic (72, 32, Draw_CachePic ("gfx/mainmenu.lmp") );
+	// [PS2_QUAKE]: mainmenu.lmp an item (20 rows) at a time, so Multiplayer can be left out (the
+	// PS2 has no network play) and About go in after Help/Ordering. Help/Ordering's last row is
+	// its g's tail, and the transparent row under Single Player keeps the sprite's extra row
+	// (gs-renderer.md) off the next item.
+	p = Draw_CachePic ("gfx/mainmenu.lmp");
+	PS2_DrawPicRows (72, 32, p, 0, 21); // Single Player
+	//PS2_DrawPicRows (72, 52, p, 20, 20); // Multiplayer
+	PS2_DrawPicRows (72, 52, p, 40, 41); // Options, Help/Ordering
+	M_DrawTransPic (72, 92, Draw_CachePic ("gfx/menuabout.lmp") ); // About
+	PS2_DrawPicRows (72, 113, p, 81, p->height - 81); // Quit
 
 	f = (int)(realtime * 10)%6;
 
@@ -305,22 +314,27 @@ void M_Main_Key (int key)
 	case K_ABUTTON:
 		m_entersound = true;
 
+		// [PS2_QUAKE]: no Multiplayer, and About after Help/Ordering (see M_Main_Draw)
 		switch (m_main_cursor)
 		{
 		case 0:
 			M_Menu_SinglePlayer_f ();
 			break;
 
-		case 1:
-			M_Menu_MultiPlayer_f ();
-			break;
+		//case 1:
+		//	M_Menu_MultiPlayer_f ();
+		//	break;
 
-		case 2:
+		case 1:
 			M_Menu_Options_f ();
 			break;
 
-		case 3:
+		case 2:
 			M_Menu_Help_f ();
+			break;
+
+		case 3:
+			PS2_AboutMenuOpen ();
 			break;
 
 		case 4:
@@ -392,7 +406,8 @@ void M_SinglePlayer_Key (int key)
 		{
 		case 0:
 			if (sv.active)
-				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game? (y/n)\n", 0.0f))
+				// [PS2_QUAKE]: the pad's buttons in place of the keyboard's y and n
+				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game?\n\nCross: yes   Circle: no\n", 0.0f))
 					break;
 			IN_Activate();
 			key_dest = key_game;
@@ -992,10 +1007,13 @@ enum
 	OPT_INVMOUSE,
 	OPT_ALWAYSMLOOK,
 	OPT_LOOKSPRING,
-	OPT_LOOKSTRAFE,
+	// [PS2_QUAKE]: no lookstrafe row. It has the mouse strafe rather than turn; the look stick
+	// strafing would leave the pad with no stick to turn with.
+	//OPT_LOOKSTRAFE,
 //#ifdef _WIN32
 //	OPT_USEMOUSE,
 //#endif
+	OPT_PS2RUMBLE, // [PS2_QUAKE]: the pad's vibration, in_rumble
 	OPT_PS2SAVEDEVICE, // [PS2_QUAKE]: where saves go, host files or the memory card
 	OPT_PS2DEBUG, // [PS2_QUAKE]: the backend's debugging aids, on the gamepad
 	OPT_VIDEO,	// This is the last before OPTIONS_ITEMS
@@ -1059,11 +1077,11 @@ void M_AdjustSliders (int dir)
 		else if (f > 2)	f = 2;
 		Cvar_SetValue ("contrast", f);
 		break;
-	case OPT_MOUSESPEED:	// mouse speed
-		f = sensitivity.value + dir * 0.5;
-		if (f > 11)	f = 11;
-		else if (f < 1)	f = 1;
-		Cvar_SetValue ("sensitivity", f);
+	case OPT_MOUSESPEED:	// [PS2_QUAKE]: the look stick's speed, a multiple of QuakeSpasm's
+		f = PS2_LookSpeed () + dir * 0.1;
+		if (f > 2)	f = 2;
+		else if (f < 0.5)	f = 0.5;
+		PS2_SetLookSpeed (f);
 		break;
 	case OPT_SBALPHA:	// statusbar alpha
 		f = scr_sbaralpha.value - dir * 0.05;
@@ -1117,8 +1135,8 @@ void M_AdjustSliders (int dir)
 		}
 		break;
 
-	case OPT_INVMOUSE:	// invert mouse
-		Cvar_SetValue ("m_pitch", -m_pitch.value);
+	case OPT_INVMOUSE:	// [PS2_QUAKE]: invert the look stick, not the mouse
+		Cvar_SetValue ("joy_invert", !Cvar_VariableValue ("joy_invert"));
 		break;
 
 	case OPT_ALWAYSMLOOK:
@@ -1132,8 +1150,12 @@ void M_AdjustSliders (int dir)
 		Cvar_Set ("lookspring", lookspring.value ? "0" : "1");
 		break;
 
-	case OPT_LOOKSTRAFE:	// lookstrafe
-		Cvar_Set ("lookstrafe", lookstrafe.value ? "0" : "1");
+	//case OPT_LOOKSTRAFE:	// lookstrafe [PS2_QUAKE]: no row (see the enum)
+	//	Cvar_Set ("lookstrafe", lookstrafe.value ? "0" : "1");
+	//	break;
+
+	case OPT_PS2RUMBLE: // [PS2_QUAKE]
+		Cvar_SetValue ("in_rumble", !Cvar_VariableValue ("in_rumble"));
 		break;
 
 	case OPT_PS2SAVEDEVICE: // [PS2_QUAKE]
@@ -1211,10 +1233,10 @@ void M_Options_Draw (void)
 	r = vid_contrast.value - 1.0;
 	M_DrawSlider (220, 32 + 8*OPT_CONTRAST, r, vid_contrast.value, "%.1f");
 	
-	// OPT_MOUSESPEED:
-	M_Print (16, 32 + 8*OPT_MOUSESPEED,	"           Mouse Speed");
-	r = (sensitivity.value - 1)/10;
-	M_DrawSlider (220, 32 + 8*OPT_MOUSESPEED, r, sensitivity.value, "%.1f");
+	// OPT_MOUSESPEED: [PS2_QUAKE]: the look stick's speed (M_AdjustSliders)
+	M_Print (16, 32 + 8*OPT_MOUSESPEED,	"            Look Speed");
+	r = (PS2_LookSpeed () - 0.5) / 1.5;
+	M_DrawSlider (220, 32 + 8*OPT_MOUSESPEED, r, PS2_LookSpeed (), "%.1f");
 
 	// OPT_SBALPHA:
 	M_Print (16, 32 + 8*OPT_SBALPHA,	"       Statusbar alpha");
@@ -1231,8 +1253,8 @@ void M_Options_Draw (void)
 	r = bgmvolume.value;
 	M_DrawSlider (220, 32 + 8*OPT_MUSICVOL, r, bgmvolume.value, "%.1f");
 
-	// OPT_MUSICEXT:
-	M_Print (16, 32 + 8*OPT_MUSICEXT,	"        External Music");
+	// OPT_MUSICEXT: [PS2_QUAKE]: the only music there is, the CD's tracks from files
+	M_Print (16, 32 + 8*OPT_MUSICEXT,	"      Background Music");
 	M_DrawCheckbox (220, 32 + 8*OPT_MUSICEXT, bgm_extmusic.value);
 
 	// OPT_ALWAYRUN:
@@ -1244,21 +1266,25 @@ void M_Options_Draw (void)
 	else
 		M_Print (220, 32 + 8*OPT_ALWAYRUN, "off");
 
-	// OPT_INVMOUSE:
-	M_Print (16, 32 + 8*OPT_INVMOUSE,	"          Invert Mouse");
-	M_DrawCheckbox (220, 32 + 8*OPT_INVMOUSE, m_pitch.value < 0);
+	// OPT_INVMOUSE: [PS2_QUAKE]: the look stick's (M_AdjustSliders)
+	M_Print (16, 32 + 8*OPT_INVMOUSE,	"           Invert Look");
+	M_DrawCheckbox (220, 32 + 8*OPT_INVMOUSE, Cvar_VariableValue ("joy_invert") != 0);
 
-	// OPT_ALWAYSMLOOK:
-	M_Print (16, 32 + 8*OPT_ALWAYSMLOOK,	"            Mouse Look");
+	// OPT_ALWAYSMLOOK: [PS2_QUAKE]: +mlook switches the look stick (input.cpp)
+	M_Print (16, 32 + 8*OPT_ALWAYSMLOOK,	"            Stick Look");
 	M_DrawCheckbox (220, 32 + 8*OPT_ALWAYSMLOOK, in_mlook.state & 1);
 
 	// OPT_LOOKSPRING:
 	M_Print (16, 32 + 8*OPT_LOOKSPRING,	"            Lookspring");
 	M_DrawCheckbox (220, 32 + 8*OPT_LOOKSPRING, lookspring.value);
 
-	// OPT_LOOKSTRAFE:
-	M_Print (16, 32 + 8*OPT_LOOKSTRAFE,	"            Lookstrafe");
-	M_DrawCheckbox (220, 32 + 8*OPT_LOOKSTRAFE, lookstrafe.value);
+	// OPT_LOOKSTRAFE: [PS2_QUAKE]: no row (see the enum)
+	//M_Print (16, 32 + 8*OPT_LOOKSTRAFE,	"            Lookstrafe");
+	//M_DrawCheckbox (220, 32 + 8*OPT_LOOKSTRAFE, lookstrafe.value);
+
+	// OPT_PS2RUMBLE: [PS2_QUAKE]
+	M_Print (16, 32 + 8*OPT_PS2RUMBLE,	"                Rumble");
+	M_DrawCheckbox (220, 32 + 8*OPT_PS2RUMBLE, Cvar_VariableValue ("in_rumble") != 0);
 
 	// OPT_PS2SAVEDEVICE: [PS2_QUAKE]
 	M_Print (16, 32 + 8*OPT_PS2SAVEDEVICE,	"           Save Device");
@@ -1298,8 +1324,9 @@ void M_Options_Key (int k)
 			M_Menu_Keys_f ();
 			break;
 		case OPT_DEFAULTS:
+			// [PS2_QUAKE]: the pad's buttons in place of the keyboard's y and n
 			if (SCR_ModalMessage("This will reset all controls\n"
-					"and stored cvars. Continue? (y/n)\n", 15.0f))
+					"and stored cvars. Continue?\n\nCross: yes   Circle: no\n", 15.0f))
 			{
 				Cbuf_AddText ("resetcfg\n");
 				Cbuf_AddText ("exec default.cfg\n");
@@ -1369,8 +1396,8 @@ const char *bindnames[][2] =
 	{"+lookup",		"look up"},
 	{"+lookdown",		"look down"},
 	{"centerview",		"center view"},
-	{"+mlook",		"mouse look"},
-	{"+klook",		"keyboard look"},
+	{"+mlook",		"stick look"}, // [PS2_QUAKE]: was "mouse look": it switches the look stick (input.cpp)
+	{"+klook",		"d-pad look"}, // [PS2_QUAKE]: was "keyboard look": the D-pad holds the move keys
 	{"+moveup",		"swim up"},
 	{"+movedown",		"swim down"}
 };
@@ -1405,6 +1432,8 @@ void M_FindKeysForCommand (const char *command, int *threekeys)
 		b = keybindings[j];
 		if (!b)
 			continue;
+		if (!PS2_PadKeyName (j))
+			continue; // [PS2_QUAKE]: the pad's buttons only, not a keyboard's keys
 		if (!strncmp (b, command, l) )
 		{
 			threekeys[count] = j;
@@ -1428,6 +1457,8 @@ void M_UnbindCommand (const char *command)
 		b = keybindings[j];
 		if (!b)
 			continue;
+		if (!PS2_PadKeyName (j))
+			continue; // [PS2_QUAKE]: the pad's buttons only, as M_FindKeysForCommand lists them
 		if (!strncmp (b, command, l) )
 			Key_SetBinding (j, NULL);
 	}
@@ -1445,10 +1476,12 @@ void M_Keys_Draw (void)
 	p = Draw_CachePic ("gfx/ttl_cstm.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
+	// [PS2_QUAKE]: the pad's buttons, by their names (PS2_PadKeyName), where QuakeSpasm says
+	// Enter and Backspace and lists the keys by the names config.cfg binds them by
 	if (bind_grab)
-		M_Print (12, 32, "Press a key or button for this action");
+		M_Print (40, 32, "Press a button for this action");
 	else
-		M_Print (18, 32, "Enter to change, backspace to clear");
+		M_Print (32, 32, "Cross to change, Square to clear");
 
 // search for known bindings
 	for (i = 0; i < (int)NUMCOMMANDS; i++)
@@ -1465,19 +1498,19 @@ void M_Keys_Draw (void)
 		}
 		else
 		{
-			name = Key_KeynumToString (keys[0]);
+			name = PS2_PadKeyName (keys[0]); // [PS2_QUAKE]
 			M_Print (140, y, name);
 			x = strlen(name) * 8;
 			if (keys[1] != -1)
 			{
-				name = Key_KeynumToString (keys[1]);
+				name = PS2_PadKeyName (keys[1]); // [PS2_QUAKE]
 				M_Print (140 + x + 8, y, "or");
 				M_Print (140 + x + 32, y, name);
 				x = x + 32 + strlen(name) * 8;
 				if (keys[2] != -1)
 				{
 					M_Print (140 + x + 8, y, "or");
-					M_Print (140 + x + 32, y, Key_KeynumToString (keys[2]));
+					M_Print (140 + x + 32, y, PS2_PadKeyName (keys[2])); // [PS2_QUAKE]
 				}
 			}
 		}
@@ -1498,7 +1531,8 @@ void M_Keys_Key (int k)
 	if (bind_grab)
 	{	// defining a key
 		S_LocalSound ("misc/menu1.wav");
-		if ((k != K_ESCAPE) && (k != '`'))
+		// [PS2_QUAKE]: a button of the pad's, which is all the menu lists
+		if ((k != K_ESCAPE) && (k != '`') && PS2_PadKeyName (k))
 		{
 			sprintf (cmd, "bind \"%s\" \"%s\"\n", Key_KeynumToString (k), bindnames[keys_cursor][0]);
 			Cbuf_InsertText (cmd);
@@ -1545,6 +1579,7 @@ void M_Keys_Key (int k)
 
 	case K_BACKSPACE:	// delete bindings
 	case K_DEL:
+	case K_XBUTTON: // [PS2_QUAKE]: Square, on the pad
 		S_LocalSound ("misc/menu2.wav");
 		M_UnbindCommand (bindnames[keys_cursor][0]);
 		break;
@@ -2683,6 +2718,10 @@ void M_Draw (void)
 	case m_ps2debug: // [PS2_QUAKE]
 		PS2_DebugMenuDraw ();
 		break;
+
+	case m_ps2about: // [PS2_QUAKE]
+		PS2_AboutMenuDraw ();
+		break;
 	}
 
 	if (m_entersound)
@@ -2768,6 +2807,10 @@ void M_Keydown (int key)
 
 	case m_ps2debug: // [PS2_QUAKE]
 		PS2_DebugMenuKey (key);
+		return;
+
+	case m_ps2about: // [PS2_QUAKE]
+		PS2_AboutMenuKey (key);
 		return;
 	}
 }

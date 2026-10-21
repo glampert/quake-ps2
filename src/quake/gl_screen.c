@@ -880,12 +880,31 @@ void SCR_DrawNotifyString (void)
 	int		l;
 	int		j;
 	int		x, y;
+	int		lines, longest; // [PS2_QUAKE]
 
 	GL_SetCanvas (CANVAS_MENU); //johnfitz
 
 	start = scr_notifystring;
 
 	y = 200 * 0.35; //johnfitz -- stretched overlays
+
+	// [PS2_QUAKE]: in a message box, as the memory card notice is, rather than on the faded
+	// screen alone: as wide as the longest line (at most 40, as below) with a space either side,
+	// and even, as M_DrawTextBox draws it. A newline at the very end makes no line.
+	for (lines = 1, longest = 0, l = 0; *start; start++)
+	{
+		if (*start == '\n')
+		{
+			if (start[1])
+				lines++;
+			l = 0;
+		}
+		else if (++l > longest && l <= 40)
+			longest = l;
+	}
+	longest = (longest + 3) & ~1;
+	M_DrawTextBox (160 - 4 * (longest + 2), y - 8, longest, lines);
+	start = scr_notifystring;
 
 	do
 	{

@@ -14,11 +14,12 @@
  *        filter for exactly double (a 44.1kHz CD rip), linear interpolation otherwise -
  *        better than the nearest sample S_RawSamples takes.
  *
- *        Behaviour follows bgmusic.c: bgm_extmusic (the options menu's "External Music") gates
- *        it, bgmvolume (its "CD Music Volume") sets the level, music_loop decides whether a
- *        track starts over when it ends, and "music", "music_stop", "music_pause" and
- *        "music_resume" drive it by hand. One addition: bgm_extmusic takes effect at once -
- *        off stops the music, on starts the map's track again - rather than at the next map.
+ *        Behaviour follows bgmusic.c: bgm_extmusic (the options menu's "Background Music",
+ *        QuakeSpasm's "External Music") gates it, bgmvolume (its "Music Volume") sets the
+ *        level, music_loop decides whether a track starts over when it ends, and "music",
+ *        "music_stop", "music_pause" and "music_resume" drive it by hand. One addition:
+ *        bgm_extmusic takes effect at once - off stops the music, on starts the map's track
+ *        again - rather than at the next map.
  *
  *        Everything here runs on the main thread, in BGM_Update just before S_Update mixes,
  *        so the mixer and this top-up never race over s_rawsamples. Only MusicStream's file
@@ -659,7 +660,8 @@ void ps2::audio::ReleaseMusic()
 
 extern "C" {
 
-// The options menu's "External Music", and the music_loop setting, both bgmusic.c's.
+// The options menu's "Background Music" (QuakeSpasm's "External Music"), and the music_loop
+// setting, both bgmusic.c's.
 cvar_t bgm_extmusic = ps2::MakeCvar("bgm_extmusic", "1", CVAR_ARCHIVE);
 qboolean bgmloop = true;
 

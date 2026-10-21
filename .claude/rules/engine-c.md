@@ -144,6 +144,33 @@ stays last as its hiding logic needs, and hands the page its frames and keys in 
 `M_Keydown`. Options' own "Goto console" row (`OPT_CONSOLE`) is gone: the debug page's "Open
 console" row does it.
 
+For the main menu (`engine_hooks.h`, `ps2/menu/about_menu.cpp`): `M_Main_Draw` draws
+`gfx/mainmenu.lmp` a 20-row item at a time with `PS2_DrawPicRows` (draw.cpp), the Multiplayer row's
+line commented out, and `gfx/menuabout.lmp` (the ELF's, served by `Draw_CachePic`) in the slot
+after Help/Ordering; `M_Main_Key`'s cases follow, with `M_Menu_MultiPlayer_f`'s commented out, and
+the About item opens the backend's page (`m_ps2about` in `menu.h`, handed its frames and keys in
+`M_Draw` and `M_Keydown` as the debug page is). The multiplayer menus' code and `menu_multiplayer`
+stay. The strips' bounds keep each item whole: Help/Ordering's g reaches row 80, and Single
+Player's strip takes the see-through row under it, so a sprite's repeated last row
+(gs-renderer.md) lands on nothing.
+
+For the pad in the menus (`engine_hooks.h`, `ps2/input/input.cpp`): the Options rows QuakeSpasm
+gives the mouse work the look stick. `OPT_MOUSESPEED` is Look Speed (`PS2_LookSpeed`/
+`PS2_SetLookSpeed`, `joy_sensitivity_yaw` and `_pitch` together, 0.5 to 2), `OPT_INVMOUSE` Invert
+Look (`joy_invert`), `OPT_ALWAYSMLOOK` Stick Look (QuakeSpasm's own `+mlook` toggle, which
+`IN_Move` now reads as the look stick's switch), `OPT_MUSICEXT` Background Music. `OPT_LOOKSTRAFE`
+is commented out (the mouse strafing instead of turning; a look stick that did would leave nothing
+to turn with), and `OPT_PS2RUMBLE` steps `in_rumble`. `PS2_DefaultConfig` adds `+mlook`, as
+QuakeSpasm's own default.cfg does, so `host.c`'s `Host_WriteConfiguration` writes `-mlook` when it
+is off: with only QuakeSpasm's `+mlook` line, the defaults would turn it back on at every boot.
+The Controls page lists the pad's buttons only, by `PS2_PadKeyName`'s names: `M_FindKeysForCommand`
+and `M_UnbindCommand` skip every other key, the bind grab takes only a pad button, Square
+(`K_XBUTTON`) clears beside Backspace, and the header says so. `bindnames`' `+mlook` and `+klook`
+read "stick look" and "d-pad look". The binds `config.cfg` keeps still name the keys as keys.c
+does (`ABUTTON`); only the page shows `Cross`. `SCR_ModalMessage`'s two questions (New Game over a
+running game, Reset config) say "Cross: yes   Circle: no" for the keyboard's "(y/n)", and
+`gl_screen.c`'s `SCR_DrawNotifyString` draws them in a message box, as the memory card notice is.
+
 For saves and settings (`save-games.md`): `host_cmd.c`'s `Host_Savegame_f` and
 `Host_Loadgame_f`, and `menu.c`'s `M_ScanSaves`, read and write through the `PS2_Save*` hooks;
 `host.c`'s `Host_WriteConfiguration` and `cmd.c`'s `Cmd_Exec_f` (for `config.cfg` only) through
@@ -194,12 +221,23 @@ Record QuakeSpasm quirks here as they are found.
   (`History_Init`, tagged; 2026-10-14).
 - `Key_Event` prints "`<KEY>` is unbound, hit F4 to set." for an unbound key numbered 200 or
   more on every press, in menus too. Every pad key is one, which is why Circle, the menus'
-  Back, has a default bind.
+  Back, got a default bind. Here it names the pad's button and the Controls page ("Square is
+  unbound: bind it in Options, Controls.", tagged) and keeps quiet while a menu is up, where
+  Circle goes back and Square clears a bind.
 - Input is polled twice a frame: `Sys_SendKeyEvents` runs `IN_Commands` and
   `IN_SendKeyEvents`, then `Host_Frame` runs `IN_Commands` again. `SCR_ModalMessage` (the
   "start a new game?" prompt) and `Con_NotifyBox` loop on `Sys_SendKeyEvents` from inside a key
   handler, so the input layer re-enters itself: a key's state must be updated before its
   `Key_Event`, as in_sdl.c does.
+- `SCR_ModalMessage` draws its question in one frame (`scr_drawdialog`), then waits for the answer
+  drawing nothing. With `ps2_gs_latency` that frame was left for the next to show, so New Game
+  over a running game showed nothing and seemed to hang; `GL_EndRendering` shows it at once now.
+  Its `Key_BeginInputGrab` lets go of every held key (`Key_ClearStates`), so a pad button still
+  held repeats as a fresh press: Cross held half a second on New Game answered yes. A pad key
+  whose `keydown[]` the engine cleared doesn't repeat until let go (`UpdatePadKey`).
+- `M_AdjustSliders`' mouse look row queues `+mlook`/`-mlook` with `Cbuf_AddText` and no newline:
+  behind whatever a script still has queued (its `wait`s hold the rest of it), so a scripted
+  toggle runs only once the script ends. Scripts type `-mlook` themselves.
 - Typed text goes through `Char_Event`, already shifted (SDL2's text input), and only while
   `Key_TextEntry()` says the engine takes text. `Key_Event` takes keys by position, and keys.c
   has no `keyshift[]` table, unlike Quake II's.

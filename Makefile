@@ -128,8 +128,10 @@ PS2_CXX_SRC =                         \
 	ps2/debug/io_log.cpp              \
 	ps2/debug/debug_menu.cpp          \
 	ps2/debug/profile.cpp             \
+	ps2/menu/about_menu.cpp           \
 	ps2/builtin/palette.cpp           \
-	ps2/builtin/qplaque.cpp
+	ps2/builtin/qplaque.cpp           \
+	ps2/builtin/menuabout.cpp
 
 # Doug Lea's allocator: vendored third-party C, left as C on purpose (see the
 # note at the top of dlmalloc.c). Everything else of ours is C++.
@@ -192,7 +194,8 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/debug/load_trace.cpp          \
 	ps2/debug/io_log.cpp              \
 	ps2/debug/debug_menu.cpp          \
-	ps2/debug/profile.cpp
+	ps2/debug/profile.cpp             \
+	ps2/menu/about_menu.cpp
 
 SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.o))
 

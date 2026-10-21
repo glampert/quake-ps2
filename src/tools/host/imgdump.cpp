@@ -3,8 +3,8 @@
  * Created on: 26/10/15
  * Brief: Dumps Quake's 8-bit pics into C++ byte arrays, to be compiled into the ELF. The built-ins
  *        under src/ps2/builtin/ come from it: the QUAKE plaque down the left of the menus, which
- *        the boot splash shows before any game data has been found, and the palette it draws
- *        through.
+ *        the boot splash shows before any game data has been found, the palette it draws
+ *        through, and the main menu's About item, from the .lmp make_menu_about.py makes.
  *
  *          imgdump [--format pal|rgba32|rgb16] [--palette <palette.lmp>] [--out <dir>] <pic.lmp>...
  *

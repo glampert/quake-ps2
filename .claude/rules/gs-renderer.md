@@ -60,6 +60,10 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   0`) leaves out its see-through texels, so the splash's textures are RGBA now, the plaque's
   pixels unchanged (checked against its texels, 2026-10-20). `gs::Init` calls `splash::Retire`
   before laying out VRAM, after which the splash draws nothing.
+- **So is `SCR_ModalMessage`'s question** ("start a new game?", Reset config's): it draws one
+  frame with `scr_drawdialog` set, then waits for the answer drawing nothing, so a frame left for
+  the next to show stayed off screen and the game seemed to hang. `GL_EndRendering` passes
+  `deferPresent=false` for it (logged from a scratch build, 2026-10-21).
 - **Framebuffer 0 is on screen from `gs::Init` until the first present** (the first frame is
   drawn into frame 1), showing whatever VRAM holds there. The boot splash draws the QUAKE plaque
   into exactly the default layout of frame 0 (640 wide, the standard's full height, 16-bit, at

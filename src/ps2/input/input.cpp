@@ -41,6 +41,9 @@ extern "C" {
 extern cvar_t sv_maxspeed;
 extern cvar_t cl_maxpitch;
 extern cvar_t cl_minpitch;
+
+// keys.c's record of the keys it holds down, which keys.h doesn't declare.
+extern qboolean keydown[MAX_KEYS];
 } // extern "C"
 
 namespace {
@@ -66,6 +69,8 @@ static cvar_t s_joyOuterThresholdLook = ps2::MakeCvar("joy_outer_threshold_look"
 static cvar_t s_joyOuterThresholdMove = ps2::MakeCvar("joy_outer_threshold_move", "0.02",  CVAR_ARCHIVE);
 static cvar_t s_joySensitivityYaw     = ps2::MakeCvar("joy_sensitivity_yaw",      "240",   CVAR_ARCHIVE);
 static cvar_t s_joySensitivityPitch   = ps2::MakeCvar("joy_sensitivity_pitch",    "130",   CVAR_ARCHIVE);
+constexpr float kDefaultSensitivityYaw   = 240.0f; // the two above, for the options menu's Look Speed
+constexpr float kDefaultSensitivityPitch = 130.0f;
 static cvar_t s_joyInvert             = ps2::MakeCvar("joy_invert",               "0",     CVAR_ARCHIVE);
 static cvar_t s_joyExponent           = ps2::MakeCvar("joy_exponent",             "2",     CVAR_ARCHIVE);
 static cvar_t s_joyExponentMove       = ps2::MakeCvar("joy_exponent_move",        "2",     CVAR_ARCHIVE);
@@ -94,9 +99,11 @@ static cvar_t s_inDebugKeys = ps2::MakeCvar("in_debugkeys", "0", CVAR_NONE);
 // What cmd.c runs right after default.cfg (PS2_DefaultConfig). id's default.cfg binds nothing to
 // the pad, so these are the binds QuakeSpasm's own default.cfg adds - the triggers attack and
 // jump, the shoulders cycle the weapons - plus Cross to jump, as on most PlayStation games, and
-// Circle to swim down. Circle is also the menus' Back: unbound, leaving a menu with it would
-// print "BBUTTON is unbound" over the game. Always run is on, so that the stick's deflection
-// sets the pace up to Quake's run rather than its walk.
+// Circle to swim down (Circle is also the menus' Back; keys.c keeps quiet about unbound buttons
+// pressed in a menu, as QuakeSpasm didn't). Always run is on, so that the stick's deflection
+// sets the pace up to Quake's run rather than its walk. And +mlook, which QuakeSpasm's own
+// default.cfg ends with too: here it is the look stick's switch (IN_Move), the options menu's
+// Stick Look. config.cfg says "-mlook" when the player turned it off (host.c).
 constexpr char kDefaultConfig[] =
     "bind RTRIGGER +attack\n"
     "bind LTRIGGER +jump\n"
@@ -104,7 +111,8 @@ constexpr char kDefaultConfig[] =
     "bind LSHOULDER \"impulse 12\"\n"
     "bind ABUTTON +jump\n"
     "bind BBUTTON +movedown\n"
-    "cl_alwaysrun 1\n";
+    "cl_alwaysrun 1\n"
+    "+mlook\n";
 
 // ------------------------------------------------------------------------------------------------
 // Devices
@@ -204,6 +212,11 @@ void TracePadKey(const char * name, const int key, const bool down)
 // when it stops: in_sdl.c's IN_JoyKeyEvent. The state is written before Key_Event is called,
 // because a key handler can re-enter IN_Commands (SCR_ModalMessage polls for its Y/N answer from
 // inside the menu's key handler), and the inner call must find this key already sent.
+//
+// A key the engine has let go of while the button still holds it stops repeating until the button
+// is let go: SCR_ModalMessage's grab of the keys lets go of all of them (Key_ClearStates), and a
+// repeat would then read as a fresh press - the Cross that picked New Game, held half a second
+// too long, would answer its "start a new game?" with a yes.
 void UpdatePadKey(PadKey & padKey, const bool isDown, const int key, const char * name)
 {
     const int now = ps2::sys::Milliseconds();
@@ -216,7 +229,7 @@ void UpdatePadKey(PadKey & padKey, const bool isDown, const int key, const char 
             TracePadKey(name, padKey.key, false);
             Key_Event(padKey.key, false);
         }
-        else if (now >= padKey.repeatMs)
+        else if (now >= padKey.repeatMs && keydown[padKey.key])
         {
             padKey.repeatMs = now + kPadRepeatIntervalMs;
             Key_Event(padKey.key, true);
@@ -570,7 +583,9 @@ void IN_SendKeyEvents()
 // ------------------------------------------------------------------------------------------------
 
 // The sticks' share of the frame's move: in_sdl.c's IN_JoyMove. The left stick walks and strafes,
-// the right one turns and looks (joy_swapmovelook swaps them), straight into cl.viewangles.
+// the right one turns and looks (joy_swapmovelook swaps them), straight into cl.viewangles. The
+// look stick only while +mlook holds, the options menu's Stick Look: with no mouse, mouse look's
+// switch is the stick's.
 void IN_Move(usercmd_t * cmd)
 {
     if (!SticksActive() || cl.paused || key_dest != key_game)
@@ -583,6 +598,10 @@ void IN_Move(usercmd_t * cmd)
     if (s_joySwapMoveLook.value != 0.0f)
     {
         std::swap(move, look);
+    }
+    if ((in_mlook.state & 1) == 0)
+    {
+        look = {};
     }
 
     move = ApplyEasing(ApplyDeadzone(move, s_joyDeadzoneMove.value, s_joyOuterThresholdMove.value),
@@ -637,6 +656,37 @@ void IN_ClearStates() {}
 const char * PS2_DefaultConfig()
 {
     return kDefaultConfig;
+}
+
+// ------------------------------------------------------------------------------------------------
+// The options and controls menus
+// ------------------------------------------------------------------------------------------------
+
+// The yaw's speed stands for both: the pitch's is set from the same multiple, and kept to whole
+// degrees a second like the yaw's, so config.cfg reads "264" rather than "264.000006".
+float PS2_LookSpeed()
+{
+    return s_joySensitivityYaw.value / kDefaultSensitivityYaw;
+}
+
+void PS2_SetLookSpeed(const float speed)
+{
+    Cvar_SetValueQuick(&s_joySensitivityYaw, ps2::math::Floorf((speed * kDefaultSensitivityYaw) + 0.5f));
+    Cvar_SetValueQuick(&s_joySensitivityPitch, ps2::math::Floorf((speed * kDefaultSensitivityPitch) + 0.5f));
+}
+
+// The names in_debugkeys traces the buttons by. The left stick's arrows, outside a game, are the
+// D-pad's keys, and go by the D-pad's names.
+const char * PS2_PadKeyName(const int key)
+{
+    for (const ButtonKey & button : kButtonKeys)
+    {
+        if (button.key == key)
+        {
+            return button.name;
+        }
+    }
+    return nullptr;
 }
 
 } // extern "C"

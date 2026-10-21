@@ -8,10 +8,10 @@
  *        Each pic is a qpic_t of our own carrying its texture's pointer where the pixels would
  *        start, as gl_draw.c kept its glpic_t there. WAD pics under 64x64 are packed into the
  *        scrap atlases, as QuakeSpasm does; every other pic is copied into a block the upload
- *        DMA can read (see MakeStandalone), but for the QUAKE plaque: the ELF carries it for the
- *        boot splash (src/ps2/builtin), and the menus draw it from there. The pics bypass TexMgr:
- *        nothing outside this file sees their textures, so the engine's texture manager has
- *        nothing to manage for them.
+ *        DMA can read (see MakeStandalone), but for the QUAKE plaque and the main menu's About
+ *        item: the ELF carries them (src/ps2/builtin), the plaque for the boot splash, and the
+ *        menus draw them from there. The pics bypass TexMgr: nothing outside this file sees
+ *        their textures, so the engine's texture manager has nothing to manage for them.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -28,6 +28,7 @@
 #include "ps2/system/heap.h"
 #include "ps2/math/math.h"
 
+#include <algorithm>
 #include <cstring>
 
 extern "C" {
@@ -304,6 +305,13 @@ qpic_t * CachePic(const char * path)
     if (std::strcmp(path, "gfx/qplaque.lmp") == 0)
     {
         MakeBuiltin(cached.pic, path, qplaque_data, qplaque_width, qplaque_height);
+        return &cached.pic.pic;
+    }
+
+    // The main menu's About item, which no game data has: the ELF's, in the menu items' lettering.
+    if (std::strcmp(path, "gfx/menuabout.lmp") == 0)
+    {
+        MakeBuiltin(cached.pic, path, menuabout_data, menuabout_width, menuabout_height);
         return &cached.pic.pic;
     }
 
@@ -747,6 +755,24 @@ void PS2_DrawPicAlpha(int x, int y, const qpic_t * pic, float alpha)
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
     DrawPic(x, y, pic, AlphaByte(alpha));
+}
+
+// The rows are held to the pic's own: a mod's gfx/mainmenu.lmp may be shorter than id's.
+void PS2_DrawPicRows(int x, int y, const qpic_t * pic, int firstRow, int numRows)
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
+    const Texture & texture = TextureOf(pic);
+    const int top    = std::clamp(firstRow, 0, static_cast<int>(texture.srcHeight));
+    const int bottom = std::clamp(firstRow + numRows, top, static_cast<int>(texture.srcHeight));
+    if (bottom == top)
+    {
+        return;
+    }
+
+    const ScreenRect r = ToScreen(static_cast<float>(x), static_cast<float>(y), static_cast<float>(pic->width),
+                                  static_cast<float>(bottom - top));
+    ps2::rs::DrawTexturedRect(texture, r.x, r.y, r.width, r.height, 0, top, texture.srcWidth, bottom, kTexelColour);
 }
 
 void PS2_SetScissor2D(int x, int y, int width, int height)

@@ -296,7 +296,11 @@ those directly on the PS2's hardware, with no GL underneath.
   [particles](src/ps2/renderer/particles.cpp) are QuakeSpasm's round dots.
 - **2D** ([draw.cpp](src/ps2/renderer/draw.cpp)): the console, menus and status bar. The menus are
   drawn at twice their size (`scr_menuscale`), filling the 640x448 screen as the original filled
-  320x200.
+  320x200. The main menu leaves out Multiplayer, which the PS2 doesn't play, and has an About page
+  after Help/Ordering ([about_menu.cpp](src/ps2/menu/about_menu.cpp)): what the port is, its
+  version, its author and its GitHub page. No game data has an "About" in the menu's lettering, so
+  the ELF carries one, made from the menu pictures' own letters by
+  [make_menu_about.py](src/tools/scripts/make_menu_about.py).
 - **Video Options** (in the Options menu): NTSC or PAL, a 16- or 32-bit framebuffer (16-bit leaves
   more VRAM for textures), the texture filtering, dithering, the dynamic lights (lightmaps, vertex
   or glows), the models' shadows, the GS latency, and the FPS counter and debug overlays.
@@ -330,9 +334,25 @@ The left stick moves and strafes and the right one turns and looks, through Quak
 cvars. The dead zones are wider than QuakeSpasm's, since a worn DualShock 2's stick can rest far
 enough off centre to turn the camera on its own. Outside a game the left stick navigates the menus.
 
+**The menus speak the pad's language.** Options' Controls page lists the binds by the pad's buttons
+(Cross, Circle, Square, Triangle, L1 to R3, the D-pad's Up, Down, Left and Right, Select): Cross
+changes one, Square clears it. A keyboard's binds stay in `config.cfg`, but the page leaves them out.
+The Options rows QuakeSpasm gives the mouse work the look stick instead:
+
+- **Look Speed** scales `joy_sensitivity_yaw` and `joy_sensitivity_pitch` together, 0.5 to 2; at 1
+  they are QuakeSpasm's 240 and 130 degrees a second.
+- **Invert Look** is `joy_invert`.
+- **Stick Look** is `+mlook`, which switches the look stick on and off. It is on by default, and
+  `config.cfg` keeps a `-mlook` when it is turned off.
+- **Lookspring** recentres the view as the player runs after looking up or down.
+
+Lookstrafe is gone: it had the mouse strafe instead of turn, and a look stick that strafed would
+leave nothing to turn with. The yes/no questions ("start a new game?") take Cross for yes and
+Circle for no.
+
 **Rumble** ([rumble.cpp](src/ps2/input/rumble.cpp)) gives short bursts for the player's shots, damage
 taken (stronger the harder the hit), pickups and powerups. It is off in menus, demos and while
-paused; `in_rumble 0` turns it off.
+paused; the Options page's Rumble row (`in_rumble`) turns it off.
 
 **A USB keyboard** is a development tool here, so it is off by default in release builds
 (`in_keyboard 1` turns it on). It types at the console, with the keys mapped by position as on a US
@@ -348,9 +368,9 @@ topped up, so the sound carries on cleanly through stalls such as a level load o
 
 **CD music.** The PS2 can't play the soundtrack off the Quake CD, so it plays it from files instead:
 `id1/music/trackNN.adp`, made from a CD rip by `make music` (see [Prerequisites](#prerequisites)),
-or the `.wav` files directly. It behaves as QuakeSpasm's external music does: "External Music" and
-"CD Music Volume" in the options menu, `music_loop`, and the `music`, `music_stop`, `music_pause` and
-`music_resume` commands. The format is the Quake II port's, so its tracks play here too.
+or the `.wav` files directly. It behaves as QuakeSpasm's external music does: "Background Music"
+(QuakeSpasm's "External Music", `bgm_extmusic`) and "Music Volume" in the options menu, `music_loop`,
+and the `music`, `music_stop`, `music_pause` and `music_resume` commands. The format is the Quake II port's, so its tracks play here too.
 
 ---
 
@@ -422,12 +442,14 @@ src/
     save/               save games on the memory card
     fs/                 compressed game packs (pakN.pkz) for QuakeSpasm's file system
     debug/              on-screen error printing, the log file, stack traces, EE exception handling
+    menu/               the main menu's About page
     tests/              standalone bring-up scenes and tests
-    builtin/            images compiled into the ELF (the QUAKE plaque, the palette), from imgdump
+    builtin/            images compiled into the ELF (the QUAKE plaque, the main menu's About
+                        item, the palette), from imgdump
   tools/
     host/               host-side command line tools (unpak, imgdump, musenc, pakzip)
     scripts/            Python helpers (symbolize, compile_commands.json, frame logs, the USB
-                        image) and make_github_release.sh
+                        image, the About item) and make_github_release.sh
     vclpp/              VCL preprocessor for the VU microprograms (git submodule)
     vu-checker/         openvcl/dvp-as output checks run by every VU build (git submodule)
     miniz/              deflate codec for the save games, the compressed packs and pakzip (git submodule)

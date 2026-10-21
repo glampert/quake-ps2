@@ -200,6 +200,20 @@ The rest are scripted runs:
     load menu (the scratch command), `menu_quit`, after a boot that reads the card's config. A
     `screenshot` run from inside a command (the scratch shots inside the scan) retokenizes, so
     that command's `Cmd_Argv` is gone afterwards: read the arguments first.
+- **The menus' pages and rows** (the main menu, About, Options, Controls, the yes/no questions):
+  `menu_main`, `menu_options` and `menu_keys`, each with `w10` and a `screenshot`. The rest want a
+  key press, through scratch commands (menu.c's functions and cursors are extern, but
+  `keys_cursor` is static, so put them in menu.c): `M_Menu_Main_f()`, `m_main_cursor = 3` and
+  `M_Main_Key(K_ENTER)` open the About page; `M_Menu_SinglePlayer_f()`,
+  `m_singleplayer_cursor = 0` and `M_SinglePlayer_Key(K_ENTER)` over a running map ask "start a
+  new game?", which waits for an answer forever, so give the scratch build's `SCR_ModalMessage`
+  a `Cmd_ExecuteString("screenshot", src_command)` after its `SCR_UpdateScreen` and a 2 s timeout
+  when it has none (the shot reads the frame drawn, presented or not: log `GL_EndRendering`'s
+  `deferPresent` to see it shown). The Options rows step with `options_cursor` and
+  `M_AdjustSliders`; Stick Look's queues `-mlook` behind the rest of the script (engine-c.md), so
+  type it. Lookspring: `+lookup` for 20 frames, then `+forward` for 100, with `viewpos` after
+  each. With `lookspring 1` the pitch went from -73 back to 0, and with 0 it stayed (2026-10-21).
+  A scratch `config.cfg` with `ps2_savedevice "host"` keeps the quit's write off the card.
 - **The debug page** (Options → Debug Options, or `menu_debug`): a script can't press the pad,
   but `menu_debug`, `w10` and a `screenshot` show it, and its rows are commands and cvars to run
   directly. The cursor blinks between conchars 12 and 13 four times a second, so a shot catches

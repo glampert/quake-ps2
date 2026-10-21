@@ -449,7 +449,11 @@ void GL_EndRendering()
     // once when off.
     ps2::overlay::Draw();
 
-    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency.value != 0.0f && !cardNotice);
+    // SCR_ModalMessage's question ("start a new game?") is shown at once too: it draws this one
+    // frame and then waits for the answer, so a frame left for the next to show would never be.
+    const bool dialog = (scr_drawdialog != 0);
+
+    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency.value != 0.0f && !cardNotice && !dialog);
 }
 
 // QuakeSpasm's shader gamma pass, applied as the last step of every frame; nothing to do
