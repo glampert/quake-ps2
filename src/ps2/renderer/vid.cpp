@@ -23,6 +23,7 @@
 #include "ps2/renderer/overlays.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/view.h"
+#include "ps2/menu/page_layout.h"
 #include "ps2/tests/draw_cube.h"
 #include "ps2/save/save_notice.h"
 #include "ps2/save/save_system.h"
@@ -203,14 +204,17 @@ void VideoMenuOpen()
 
 void VideoMenuDraw()
 {
-    M_DrawTransPic(16, 4, Draw_CachePic("gfx/qplaque.lmp"));
+    using namespace ps2::menu;
+
+    qpic_t * const plaque = Draw_CachePic("gfx/qplaque.lmp");
+    M_DrawTransPic(kPlaqueX, kPlaqueY, plaque);
     qpic_t * const banner = Draw_CachePic("gfx/vidmodes.lmp");
     M_DrawPic((320 - banner->width) / 2, 4, banner);
 
     for (int i = 0; i < kNumVideoRows; ++i)
     {
         const VideoRow & row = kVideoRows[i];
-        const int y = 32 + (8 * i);
+        const int y = kRowsY + (kRowHeight * i);
 
         // Labels end at column 22, as Options' do.
         M_Print(16 + ((22 - static_cast<int>(std::strlen(row.label))) * 8), y, row.label);
@@ -224,10 +228,11 @@ void VideoMenuDraw()
         }
     }
 
-    M_DrawCharacter(200, 32 + (8 * s_videoCursor), 12 + (static_cast<int>(realtime * 4.0) & 1));
+    M_DrawCharacter(200, kRowsY + (kRowHeight * s_videoCursor), 12 + (static_cast<int>(realtime * 4.0) & 1));
 
+    // The row's help, centred under the rows and clear of the plaque (page_layout.h).
     const char * const help = kVideoRows[s_videoCursor].help;
-    const int helpY = 32 + (8 * (kNumVideoRows + 1));
+    const int helpY = HelpLineY(kNumVideoRows, plaque->height);
     M_Print((320 - (static_cast<int>(std::strlen(help)) * 8)) / 2, helpY, help);
     if (VideoNeedsRestart())
     {

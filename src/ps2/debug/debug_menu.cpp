@@ -17,6 +17,7 @@
 #include "ps2/common.h"
 #include "ps2/engine_hooks.h"
 #include "ps2/system/iop_boot.h"
+#include "ps2/menu/page_layout.h"
 
 #include <cstdio>
 #include <cstring>
@@ -192,9 +193,10 @@ const Row kRows[] = {
 
 constexpr int kNumRows = ps2::ArrayLength(kRows);
 
-// The rows sit where Options puts its own: 8 units apart from y 32, labels ending at column 22,
-// the cursor at x 200 and the checkboxes at 220.
-constexpr int kRowsY        = 32;
+// The rows sit where Options puts its own (page_layout.h has the plaque's place and the rows'):
+// labels ending at column 22, the cursor at x 200 and the checkboxes at 220.
+using ps2::menu::kRowsY;
+using ps2::menu::kRowHeight;
 constexpr int kLabelX       = 16;
 constexpr int kLabelColumns = 22;
 constexpr int kCursorX      = 200;
@@ -239,7 +241,8 @@ void PS2_DebugMenuOpen()
 void PS2_DebugMenuDraw()
 {
     // There is no debug banner among the game's pictures: the page sits under the Options one.
-    M_DrawTransPic(16, 4, Draw_CachePic("gfx/qplaque.lmp"));
+    qpic_t * const plaque = Draw_CachePic("gfx/qplaque.lmp");
+    M_DrawTransPic(ps2::menu::kPlaqueX, ps2::menu::kPlaqueY, plaque);
     qpic_t * const banner = Draw_CachePic("gfx/p_option.lmp");
     M_DrawPic((320 - banner->width) / 2, 4, banner);
 
@@ -251,7 +254,7 @@ void PS2_DebugMenuDraw()
             continue;
         }
 
-        const int y = kRowsY + (8 * i);
+        const int y = kRowsY + (kRowHeight * i);
         M_Print(kLabelX + ((kLabelColumns - static_cast<int>(std::strlen(row.label))) * 8), y, row.label);
         if (row.cvar != nullptr)
         {
@@ -263,11 +266,12 @@ void PS2_DebugMenuDraw()
         }
     }
 
-    M_DrawCharacter(kCursorX, kRowsY + (8 * s_cursor), 12 + (static_cast<int>(realtime * 4.0) & 1));
+    M_DrawCharacter(kCursorX, kRowsY + (kRowHeight * s_cursor), 12 + (static_cast<int>(realtime * 4.0) & 1));
 
-    // What the row under the cursor does, centred under the rows, then what the last one did.
+    // What the row under the cursor does, centred under the rows and clear of the plaque
+    // (page_layout.h), then what the last one did.
     const char * const help = kRows[s_cursor].help;
-    const int helpY = kRowsY + (8 * (kNumRows + 1));
+    const int helpY = ps2::menu::HelpLineY(kNumRows, plaque->height);
     M_Print((320 - (static_cast<int>(std::strlen(help)) * 8)) / 2, helpY, help);
     if (s_feedback[0] != '\0')
     {
