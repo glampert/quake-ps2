@@ -26,6 +26,7 @@
 #include "ps2/common.h"
 #include "ps2/small_pool.h"
 #include "ps2/renderer/alias.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/view.h"
 #include "ps2/renderer/texmgr.h"
 #include "ps2/renderer/texture.h"
@@ -676,8 +677,11 @@ void DrawAliasModel(entity_t & e, const bool viewModel)
     }
     else
     {
+        // Through the Brightness curve, as the walls' light is in the lightmap ramp (gamma.h); the
+        // shade term it meets stays linear.
         const float lightScale = overbright ? 2.0f : 1.0f;
-        shadeLight = { light[0] * lightScale, light[1] * lightScale, light[2] * lightScale, alpha * alphaScale };
+        shadeLight = { gamma::LightCurve(light[0] * lightScale), gamma::LightCurve(light[1] * lightScale),
+                       gamma::LightCurve(light[2] * lightScale), alpha * alphaScale };
         dots = s_shadeDotBytes[dotRow];
     }
 

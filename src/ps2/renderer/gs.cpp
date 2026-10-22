@@ -232,8 +232,8 @@ void UploadCluts(const tex::Clut * const (&cluts)[kNumCluts])
 // The first bind through that CLUT would then compare equal and skip its load.
 //
 // Must follow the CLUT uploads, since it reads one. Anything that rewrites a CLUT
-// in place later has to force a reload the same way: binds compare addresses, not
-// contents.
+// in place later has to force a reload the same way, as UpdateCluts does: binds
+// compare addresses, not contents.
 void SeedClutBuffer()
 {
     // TEX2 writes only TEX0's PSM and CLUT fields, so there is no texture to make up
@@ -247,6 +247,26 @@ void SeedClutBuffer()
 
     s_texUploadPacket.SendNormal();
     GifPacket::WaitGifChannel();
+}
+
+// ------------------------------------------------------------------------------------------------
+// The picture's place on the TV
+// ------------------------------------------------------------------------------------------------
+
+// What DISPLAY's origin was last written with: ps2_screen_x and ps2_screen_y's adjustments
+// (video_mode.h), rewritten with the frame's DISPFB when they change.
+static int s_screenAdjustX = 0;
+static int s_screenAdjustY = 0;
+
+void SetDisplayPosition()
+{
+    s_screenAdjustX = video::ScreenAdjustX();
+    s_screenAdjustY = video::ScreenAdjustY();
+    graph_set_screen(s_screenAdjustX, s_screenAdjustY, detail::g_state.width, detail::g_state.height);
+
+    const video::Standard standard = video::Selected();
+    Con_DPrintf("GS: picture %+d pixels, %+d rows: DISPLAY DX %d, DY %d.\n",
+                video::ScreenOffsetX(), video::ScreenOffsetY(), video::DisplayX(standard), video::DisplayY(standard));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -294,7 +314,7 @@ namespace detail { State g_state; }
 
 void Init(const Config & cfg)
 {
-    PS2_Assert(cfg.palette != nullptr);
+    PS2_Assert(cfg.palette != nullptr && cfg.lightRamp != nullptr);
     PS2_Assert(cfg.width > 0 && cfg.height > 0);
 
     // VRAM is laid out from here, over the boot splash's fixed spots: it draws nothing more.
@@ -369,10 +389,11 @@ void Init(const Config & cfg)
 
     // Display framebuffer 0 first, in the config's standard. These are graph_initialize's calls -
     // interlaced FIELD mode with the flicker filter, a black background, frame 0 on both read
-    // circuits - with the mode passed in, where graph_initialize can only take the console's own.
-    // The output comes on below, once frame 0 holds a picture.
+    // circuits - with the mode passed in, where graph_initialize can only take the console's own,
+    // and the picture where ps2_screen_x/y put it. The output comes on below, once frame 0 holds a
+    // picture.
     graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(cfg.standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
-    graph_set_screen(0, 0, cfg.width, cfg.height);
+    SetDisplayPosition();
     graph_set_bgcolor(0, 0, 0);
     graph_set_framebuffer_filtered(static_cast<int>(frames[0].address), cfg.width, framePsm, 0, 0);
 
@@ -423,13 +444,32 @@ void Init(const Config & cfg)
 
     graph_enable_output();
 
-    // Build and upload the CLUTs. None of them ever changes again.
+    // Build and upload the CLUTs. Only UpdateCluts changes them again.
     s_paletteClut.BuildFromPalette(cfg.palette);
     s_noBrightClut.BuildNoBright(cfg.palette);
     s_fullbrightClut.BuildFullbright(cfg.palette);
     s_alphaRampClut.BuildAlphaRamp();
-    s_lightRampClut.BuildLightRamp();
+    s_lightRampClut.BuildLightRamp(cfg.lightRamp);
 
+    UploadCluts({ &s_paletteClut, &s_noBrightClut, &s_fullbrightClut, &s_alphaRampClut, &s_lightRampClut });
+    SeedClutBuffer();
+}
+
+void UpdateCluts(const u32 * const palette, const u8 * const lightRamp)
+{
+    // As UploadTexture: nothing may be in flight over the other paths while this goes down
+    // PATH3, and the caller finished the frame that was left drawing (rs::FinishFrameInFlight).
+    // The GS reads the CLUTs as it draws, which is the other reason this sits between frames.
+    cmdbuf::WaitIdle();
+
+    s_paletteClut.BuildFromPalette(palette);
+    s_noBrightClut.BuildNoBright(palette);
+    s_fullbrightClut.BuildFullbright(palette);
+    s_lightRampClut.BuildLightRamp(lightRamp);
+
+    // The alpha ramp hasn't changed, but one send covers them all. The seed reloads the palette
+    // into the GS's CLUT buffer: the one it holds is whichever was bound last, and a bind of the
+    // same address would keep it (see SeedClutBuffer).
     UploadCluts({ &s_paletteClut, &s_noBrightClut, &s_fullbrightClut, &s_alphaRampClut, &s_lightRampClut });
     SeedClutBuffer();
 }
@@ -535,6 +575,12 @@ void PresentFramebuffer(const DrawContext ctx)
         graph_wait_vsync();
     }
     StampPresent();
+
+    // The picture's place too, in the same blanking interval, when the Video Options page moved it.
+    if (s_screenAdjustX != video::ScreenAdjustX() || s_screenAdjustY != video::ScreenAdjustY())
+    {
+        SetDisplayPosition();
+    }
 
     const framebuffer_t & fb = detail::g_state.framebuffer[Index(ctx)];
     graph_set_framebuffer_filtered(static_cast<int>(fb.address),

@@ -99,6 +99,14 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   follows the chosen standard, not the console's. *(Q2)* Forcing NTSC on a PAL console works on
   hardware (2026-10-11): the perf test paced at 59.94 Hz.
 
+- **The picture's place on the TV is DISPLAY's DX/DY**, `graph_set_screen`'s x/y adjustments over
+  libgraph's origin for the standard (NTSC 652/50, PAL 680/72): 4 VCK per pixel at 640 wide (DW
+  2560, MAGH 3) and 2 raster lines per framebuffer row in FIELD mode. `ps2_screen_x/y` keep them
+  (`video::SetScreenOffset`), `gs::Init` sets them and `PresentFramebuffer` rewrites them after
+  its vsync wait when they changed, and the error screen's `DisplayX/Y` carry them. Nothing is
+  redrawn: the TV shows BGCOLOR where the picture moved from, and clips it at the blanking (a few
+  lines of room above on NTSC). PCSX2 ignores DX/DY unless `pcrtc_offsets = true`, and
+  `screenshot` reads VRAM, so it never shows the shift either way.
 - **VRAM readback** (`gs::DownloadFramebufferRows`, ps2sdk's own sequence): BITBLTBUF, TRXPOS,
   TRXREG, FINISH and TRXDIR=1 go down PATH2 (VIF1 DIRECT) behind MSKPATH3 and FLUSHA; wait for
   FINISH and an empty VIF1 FIFO, set `VIF1_STAT.FDR` and `BUSDIR`, receive by VIF1 DMA, then
@@ -185,8 +193,21 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   CBP is in blocks (word address >> 6).
 - **CLD:** `gs::MakeTex0` binds indexed textures with `CLUT_COMPARE_CBP0` (CLD=4), and
   `gs::Init`'s `SeedClutBuffer` writes TEX2 with CLD=2 so CBP0 starts known. Invariants: every
-  indexed TEX0 uses CLD=4 (one CLD=1 load leaves CBP0 stale), and CLUT contents never change
-  after Init (the compare is on the address only). CLD is ignored for non-indexed formats.
+  indexed TEX0 uses CLD=4 (one CLD=1 load leaves CBP0 stale), and CLUT contents change only
+  through `gs::UpdateCluts`, between frames (`gamma::ApplyPendingChange`, just before
+  `rs::BeginFrame`, after a `rs::FinishFrameInFlight`: the Brightness and Contrast curves), which
+  re-uploads them and seeds CBP0 again, since the compare is on the address only and the CLUT the
+  GS holds would otherwise stay stale. Inside a frame it can't happen: the sky's rebuild goes
+  through `ClearLayers`, whose `FinishFrameInFlight` asserts there (found 2026-10-22). CLD is
+  ignored for non-indexed formats.
+- **Brightness and Contrast are palette curves** (`gamma.cpp`): `pow(colour * contrast, gamma)`,
+  QuakeSpasm's shader, in the three colour CLUTs and the few palette colours the EE sets itself
+  (`gamma::Palette()`, where `d_8to24table` stays the data's), and `pow(light, gamma)` in the
+  lightmap ramp, so a lit wall is exact: `pow(t * l, g) = pow(t, g) * pow(l, g)`. The contrast
+  sits in the palette alone, so a bright texel saturates there whatever its light. The sky's RGBA
+  front layer is built from `gamma::Palette()` and rebuilt on a change (`sky::PaletteChanged`,
+  which reruns the loader for the current world only); the alias light goes through
+  `gamma::LightCurve` per model.
 - **TBW must be even for PSMT8/PSMT4** (128-px stride). Narrow 8-bit textures round their
   stride up for TEX0 and the upload (`TextureStridePixels()`).
 - Page sizes: PSMT8 128x64, PSMCT32 64x32, PSMCT16/16S 64x64. libdraw's

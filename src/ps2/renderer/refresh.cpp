@@ -16,6 +16,7 @@
 #include "ps2/debug/load_trace.h"
 #include "ps2/renderer/alias.h"
 #include "ps2/renderer/brush.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/sky.h"
@@ -71,10 +72,11 @@ cvar_t r_noshadow_list = ps2::MakeCvar("r_noshadow_list",
 // Lifecycle
 // ------------------------------------------------------------------------------------------------
 
-// r_clearcolor's callback: QuakeSpasm's R_SetClearColor_f.
+// r_clearcolor's callback: QuakeSpasm's R_SetClearColor_f, the colour as the palette shows it.
+// gamma::ApplyPendingChange runs it again when that changes.
 static void ClearColorChanged(cvar_t * var)
 {
-    const u32 rgba = d_8to24table[static_cast<int>(var->value) & 0xFF];
+    const u32 rgba = ps2::gamma::Palette()[static_cast<int>(var->value) & 0xFF];
     ps2::rs::SetClearColor(static_cast<u8>(rgba & 0xFFu), static_cast<u8>((rgba >> 8) & 0xFFu),
                            static_cast<u8>((rgba >> 16) & 0xFFu));
 }

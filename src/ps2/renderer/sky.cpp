@@ -21,6 +21,7 @@
  * ================================================================================================ */
 
 #include "ps2/renderer/sky.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/view.h"
 #include "ps2/renderer/brush.h"
 #include "ps2/renderer/texture.h"
@@ -119,6 +120,12 @@ static const tex::Texture * s_alphaLayer = nullptr;
 static void *               s_layerPixels = nullptr;
 static u32                  s_layerBytes  = 0;
 
+// What the layers were built from, to build them again when the palette changes (PaletteChanged):
+// the map's sky texture, on its hunk, and which kind of sky it is. Null without layers.
+static qmodel_t *  s_layerModel   = nullptr;
+static texture_t * s_layerTexture = nullptr;
+static bool        s_layerQ64     = false;
+
 // The flat colour r_fastsky draws: the front layer's opaque texels averaged.
 static u32 s_flatColor = vu1::PackColorRGBA(64, 64, 96, 0x80);
 
@@ -167,8 +174,10 @@ void ClearLayers()
         s_alphaLayer = nullptr;
     }
     heap::Free(s_layerPixels, s_layerBytes, heap::MemTag::TexImage);
-    s_layerPixels = nullptr;
-    s_layerBytes  = 0;
+    s_layerPixels  = nullptr;
+    s_layerBytes   = 0;
+    s_layerModel   = nullptr;
+    s_layerTexture = nullptr;
 }
 
 // QuakeSpasm's TexMgr_AlphaEdgeFix: each transparent texel takes the average colour of its opaque
@@ -923,6 +932,9 @@ void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)
     using namespace ps2::sky;
 
     ClearLayers();
+    s_layerModel   = mod;
+    s_layerTexture = mt;
+    s_layerQ64     = false;
 
     if (mt->width != 256 || mt->height != 128)
     {
@@ -940,12 +952,15 @@ void Sky_LoadTexture(qmodel_t * mod, texture_t * mt)
     const byte * const src = static_cast<const byte *>(static_cast<const void *>(mt + 1));
     const int stride = static_cast<int>(mt->width);
 
+    // The front layer's colours as the palette shows them now (gamma.h): the back one's go
+    // through the CLUT.
+    const u32 * const palette = ps2::gamma::Palette();
     CreateLayers(*mod, *mt, width, height,
         [src, stride, width](const int x, const int y) -> byte { return src[(y * stride) + width + x]; },
-        [src, stride](const int x, const int y) -> u32
+        [src, stride, palette](const int x, const int y) -> u32
         {
             const byte p = src[(y * stride) + x];
-            return (p == 0) ? 0u : ((d_8to24table[p] & 0x00FFFFFFu) | (0x80u << 24));
+            return (p == 0) ? 0u : ((palette[p] & 0x00FFFFFFu) | (0x80u << 24));
         });
 }
 
@@ -956,6 +971,9 @@ void Sky_LoadTextureQ64(qmodel_t * mod, texture_t * mt)
     using namespace ps2::sky;
 
     ClearLayers();
+    s_layerModel   = mod;
+    s_layerTexture = mt;
+    s_layerQ64     = true;
 
     const int width  = static_cast<int>(mt->width);
     const int height = static_cast<int>(mt->height) / 2;
@@ -968,11 +986,12 @@ void Sky_LoadTextureQ64(qmodel_t * mod, texture_t * mt)
     const byte * const front = static_cast<const byte *>(static_cast<const void *>(mt + 1));
     const byte * const back  = front + (width * height);
 
+    const u32 * const palette = ps2::gamma::Palette();
     CreateLayers(*mod, *mt, width, height,
         [back, width](const int x, const int y) -> byte { return back[(y * width) + x]; },
-        [front, width](const int x, const int y) -> u32
+        [front, width, palette](const int x, const int y) -> u32
         {
-            return (d_8to24table[front[(y * width) + x]] & 0x00FFFFFFu) | (0x40u << 24);
+            return (palette[front[(y * width) + x]] & 0x00FFFFFFu) | (0x40u << 24);
         });
 }
 
@@ -993,3 +1012,23 @@ void Sky_ClearAll()
 }
 
 } // extern "C"
+
+// sky.h:
+void ps2::sky::PaletteChanged()
+{
+    // The layers are the map's, and a map without a sky keeps the last one's, never drawn, whose
+    // texture went with its hunk: only this map's are built again.
+    if (s_layerTexture == nullptr || s_layerModel != cl.worldmodel)
+    {
+        return;
+    }
+
+    if (s_layerQ64)
+    {
+        Sky_LoadTextureQ64(s_layerModel, s_layerTexture);
+    }
+    else
+    {
+        Sky_LoadTexture(s_layerModel, s_layerTexture);
+    }
+}

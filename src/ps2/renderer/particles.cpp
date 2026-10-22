@@ -14,6 +14,7 @@
 #include "ps2/common.h"
 #include "ps2/engine_hooks.h"
 #include "ps2/renderer/particles.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/view.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/profile.h"
@@ -46,12 +47,14 @@ void Draw()
         ++count;
     }
 
-    // Each in its palette colour, opaque; the texture's coverage blends the edge.
+    // Each in its palette colour as the palette shows it (gamma.h), opaque; the texture's coverage
+    // blends the edge.
+    const u32 * const palette = gamma::Palette();
     vu1::ParticleVertex * __restrict particles = rs::Begin<vu1::ParticleVertex *>(count);
     vu1::ParticleVertex * __restrict out = particles;
     for (const particle_t * p = active_particles; p != nullptr; p = p->next, ++out)
     {
-        const u32 rgb = d_8to24table[static_cast<int>(p->color) & 0xFF] & 0x00FFFFFFu;
+        const u32 rgb = palette[static_cast<int>(p->color) & 0xFF] & 0x00FFFFFFu;
         out->rgba = rgb | (0x80u << 24);
         out->x    = p->org[0];
         out->y    = p->org[1];

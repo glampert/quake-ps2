@@ -20,6 +20,7 @@
 #include "ps2/engine_hooks.h"
 #include "ps2/builtin/builtin.h"
 #include "ps2/renderer/draw.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/scrap_atlas.h"
 #include "ps2/renderer/texmgr.h"
@@ -633,12 +634,12 @@ void Draw_TileClear(int x, int y, int w, int h)
                               kTexelColour);
 }
 
-// A box of one palette colour, at 'alpha' opacity.
+// A box of one palette colour, as the palette shows it (gamma.h), at 'alpha' opacity.
 void Draw_Fill(int x, int y, int w, int h, int c, float alpha)
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
-    const u32 rgba = d_8to24table[c & 0xFF];
+    const u32 rgba = ps2::gamma::Palette()[c & 0xFF];
     FillRect(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h),
              static_cast<u8>(rgba & 0xFFu), static_cast<u8>((rgba >> 8) & 0xFFu),
              static_cast<u8>((rgba >> 16) & 0xFFu), AlphaByte(alpha));

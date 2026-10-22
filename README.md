@@ -307,11 +307,19 @@ those directly on the PS2's hardware, with no GL underneath.
   made from the menu pictures' own letters by
   [make_menu_about.py](src/tools/scripts/make_menu_about.py).
 - **Video Options** (in the Options menu): NTSC or PAL, a 16- or 32-bit framebuffer (16-bit leaves
-  more VRAM for textures), the texture filtering, dithering, the dynamic lights (lightmaps, vertex
-  or glows), the models' shadows, round or square particles, the GS latency, and the FPS counter
-  and debug overlays.
+  more VRAM for textures), the picture's place on the TV (Screen X and Y, for a set that cuts an
+  edge off: a white line marks the picture's edge while either row is under the cursor), the
+  texture filtering, dithering, the dynamic lights (lightmaps, vertex or glows), the models'
+  shadows, round or square particles, the GS latency, and the FPS counter and debug overlays.
   The first two apply after a restart. The Options page itself has the save device: the memory
   card, or the drive the game booted from (see [Save games](#save-games)).
+- **Brightness and Contrast** (the Options page's sliders, QuakeSpasm's `gamma` and `contrast`):
+  QuakeSpasm applies them to the finished frame, which the GS has no stage for, so here they go
+  into the palette as software Quake's gamma did ([gamma.cpp](src/ps2/renderer/gamma.cpp)): into
+  the CLUTs every texture samples through, and into the lightmaps' ramp, so a lit wall comes out as
+  QuakeSpasm's shader would make it. The models' light takes the curve per model, their shading
+  doesn't; the vertex dynamic lights, the glows and the view tint are left as they are. A 16-bit
+  framebuffer bands more in darks a brightening lifts, which `ps2_fb_dither` softens.
 - **The boot splash** shows the QUAKE plaque from the menus, built into the ELF, from the first
   moment of the boot until the game draws its first frame. **The loading screen** shows the loading
   plaque with a status line naming the file being read.

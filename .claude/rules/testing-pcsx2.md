@@ -25,6 +25,10 @@
   flake below, which comes later, inside the game's file I/O.
 - PCSX2 memory card slot 1: `~/Library/Application Support/PCSX2/memcards/Mcd001.ps2`.
   `Slot1_Enable = false` in the ini simulates "no card".
+- `pcrtc_offsets = true` under `[EmuCore/GS]` makes PCSX2 move the picture as the GS DISPLAY
+  registers say (`ps2_screen_x`/`ps2_screen_y`); off, the default, it never moves. `screenshot`
+  reads VRAM, so it never shows the shift either way: `developer 1` logs each change (`GS: picture
+  +8 pixels, -4 rows: DISPLAY DX 684, DY 42.`), and the rest wants eyes, on a TV above all.
 - `[USB1] Type = hidkbd` attaches a host-passthrough USB keyboard. It reports itself as JIS,
   and its boot `Missing host mapping for QKey` warnings are harmless. It sends HID usage
   `0x34` for the host's `` ` `` key, never `0x35`. `in_keyboard` defaults to 1 in debug builds
@@ -51,6 +55,11 @@
   the menus, and `toggleconsole` the console. `ps2_debug_overlays 0` and `ps2_show_fps 0` keep
   the debug panels out of the shot. The commands run before `quake.rc`'s `startdemos`, which
   then finds a demo playing and leaves it.
+- **Brightness and Contrast** (`gamma`, `contrast`) show in a shot's mean pixel value: the TGA's
+  bytes past its 18-byte header, averaged in Python. Over demo1's start (dark) on 2026-10-22: 16.8
+  at gamma 1, 62.9 at `gamma 0.5`, 87.7 with `contrast 2` as well, and the menus drawn at
+  `gamma 0.6` read 51.3 against the demo behind them. A change applies at the next frame, so one
+  `w10` before the `screenshot` is enough.
 - Launching PCSX2 by hand on a release build needs `build/release/id1`, which `make release
   run` creates: `ln -s $PWD/id1 build/release/id1`.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2

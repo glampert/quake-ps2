@@ -103,6 +103,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/cmd_buffer.cpp       \
 	ps2/renderer/render_system.cpp    \
 	ps2/renderer/vid.cpp              \
+	ps2/renderer/gamma.cpp            \
 	ps2/renderer/draw.cpp             \
 	ps2/renderer/texmgr.cpp           \
 	ps2/renderer/brush.cpp            \
@@ -182,6 +183,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/input/keyboard.cpp            \
 	ps2/input/pad.cpp                 \
 	ps2/renderer/vid.cpp              \
+	ps2/renderer/gamma.cpp            \
 	ps2/renderer/loading_screen.cpp   \
 	ps2/renderer/splash_screen.cpp    \
 	ps2/tests/draw_cube.cpp           \

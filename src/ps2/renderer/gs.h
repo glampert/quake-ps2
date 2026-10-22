@@ -55,6 +55,7 @@ constexpr u64 ContextReg(const int reg, const DrawContext ctx)
 struct Config
 {
     const u32 *     palette;          // 256 RGBA entries; the palette every indexed image samples
+    const u8 *      lightRamp;        // 256 alphas, one per luxel value: the light ramp CLUT (gamma.h)
     int             width, height;    // framebuffer dimensions, in pixels; height fits the standard
     bool            framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
     video::Standard standard;         // NTSC or PAL (ps2_video_mode, see system/video_mode.h)
@@ -62,8 +63,15 @@ struct Config
 
 // Brings up the GS: allocates the framebuffers and z-buffer, sets the video mode for the config's
 // standard, programs both drawing contexts and builds and uploads the CLUTs. Call once. The
-// config is latched - it fixes the VRAM layout, so none of it can change afterwards.
+// config is latched - it fixes the VRAM layout, so none of it can change afterwards, but for the
+// CLUTs' contents through UpdateCluts.
 void Init(const Config & cfg);
+
+// Rebuilds the colour CLUTs from 'palette' and the light ramp from 'lightRamp', as Init built them,
+// and uploads them again: the Brightness and Contrast curves (gamma.h). Only between frames, after
+// rs::FinishFrameInFlight: the GS reads the CLUTs as it draws, and the one it holds is reloaded by
+// this, which a bind's address compare alone would not do.
+void UpdateCluts(const u32 * palette, const u8 * lightRamp);
 
 // ------------------------------------------------------------------------------------------------
 // State the emitters and the builders below read. In the header only so they can be inline;

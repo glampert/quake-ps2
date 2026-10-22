@@ -15,6 +15,8 @@
 #include "ps2/system/sys.h"
 #include "ps2/system/iop_boot.h"
 #include "ps2/system/heap.h"
+#include "ps2/system/video_mode.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/texture.h"
@@ -66,15 +68,31 @@ static cvar_t s_enableDither = ps2::MakeCvar("ps2_fb_dither",  "0", CVAR_ARCHIVE
 static cvar_t s_fb16Bit   = ps2::MakeCvar("ps2_fb_16bit",   "1",    CVAR_ARCHIVE);
 static cvar_t s_videoMode = ps2::MakeCvar("ps2_video_mode", "auto", CVAR_ARCHIVE);
 
+// Where the picture sits on the TV: pixels to the right and rows down of the standard's usual
+// place, for a set that cuts an edge off (system/video_mode.h). Live, from the Video Options
+// page's Screen X and Screen Y rows, and read ahead of the configs too, so the GS comes up with it.
+static cvar_t s_screenX = ps2::MakeCvar("ps2_screen_x", "0", CVAR_ARCHIVE);
+static cvar_t s_screenY = ps2::MakeCvar("ps2_screen_y", "0", CVAR_ARCHIVE);
+
+constexpr int kMaxScreenX = 32; // pixels either way
+constexpr int kMaxScreenY = 16; // rows either way
+
+void ScreenOffsetChanged(cvar_t *)
+{
+    ps2::video::SetScreenOffset(std::clamp(static_cast<int>(s_screenX.value), -kMaxScreenX, kMaxScreenX),
+                                std::clamp(static_cast<int>(s_screenY.value), -kMaxScreenY, kMaxScreenY));
+}
+
 // VID_Init runs inside Host_Init, before quake.rc executes config.cfg, so the cvars the GS is
 // brought up with are read from the file ahead of time, as QuakeSpasm does for its video mode.
 // A "+ps2_fb_16bit 0" on the command line overrides the config.
 void ReadInitCvars()
 {
-    const char * vars[] = { s_fb16Bit.name, s_videoMode.name };
+    const char * vars[] = { s_fb16Bit.name, s_videoMode.name, s_screenX.name, s_screenY.name };
 
     ps2::save::ReadConfigCvars(vars, ps2::ArrayLength(vars));
     CFG_ReadCvarOverrides(vars, ps2::ArrayLength(vars));
+    ScreenOffsetChanged(nullptr);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -84,9 +102,9 @@ void ReadInitCvars()
 // QuakeSpasm's video module draws Options' "Video Options" page itself, through the vid_menu*fn
 // hooks menu.c calls (gl_vidsdl.c's has the PC's modes). This one has the PS2's, laid out as
 // QuakeSpasm's Options page is: the TV standard and the framebuffer format, which apply on the next
-// boot, then the texture filtering, the dithering, the dynamic lights, the models' shadows, the
-// particles' shape, the GS latency, the FPS counter and the debug panels, which apply at once. Each
-// row steps its cvar through its values with left, right or Enter.
+// boot, then the picture's place on the TV, the texture filtering, the dithering, the dynamic
+// lights, the models' shadows, the particles' shape, the GS latency, the FPS counter and the debug
+// panels, which apply at once. Each row steps its cvar through its values with left, right or Enter.
 
 struct VideoRow
 {
@@ -101,6 +119,10 @@ struct VideoRow
     // them through these instead; null for the rest.
     int  (*getIndex)();
     void (*setIndex)(int index);
+
+    // A row over a signed number: the cvar holds it, from -count/2 to count/2, the row shows it
+    // and the steps stop at the ends rather than wrap. The screen position rows.
+    bool number;
 };
 
 constexpr const char * kVideoModes[]      = { "auto", "ntsc", "pal" };
@@ -147,16 +169,18 @@ void SetParticlesIndex(const int index)
 }
 
 const VideoRow kVideoRows[] = {
-    { "Video mode",     "auto is the console's own; on restart",   &s_videoMode,                         kVideoModes, kVideoModeNames,  3, nullptr,            nullptr },
-    { "Color depth",    "16-bit leaves more VRAM; on restart",     &s_fb16Bit,                           kFbFormats,  kFbFormatNames,   2, nullptr,            nullptr },
-    { "Texture filter", "trilinear blends mip levels too",         &ps2::view::MipFilterCvar(),          kMipFilters, kMipFilters,      3, nullptr,            nullptr },
-    { "Dithering",      "hides 16-bit color banding",              &s_enableDither,                      kOffOn,      nullptr,          2, nullptr,            nullptr },
-    { "Dynamic lights", "vertex: on VU1, no lightmap rebuilds",    nullptr,                              nullptr,     kDlightModeNames, 3, DynamicLightsIndex, SetDynamicLightsIndex },
-    { "Model shadows",  "a shadow on the ground under each model", &r_shadows,                           kOffOn,      nullptr,          2, nullptr,            nullptr },
-    { "Particles",      "square: as software Quake drew them",     nullptr,                              nullptr,     kParticleNames,   2, ParticlesIndex,     SetParticlesIndex },
-    { "GS latency",     "a frame ahead: faster, one frame of lag", &s_gsLatency,                         kOffOn,      nullptr,          2, nullptr,            nullptr },
-    { "Show FPS",       "frames per second, at the top right",     &ps2::overlay::FpsCounterCvar(),      kOffOn,      nullptr,          2, nullptr,            nullptr },
-    { "Debug overlays", "memory, VRAM and profiling panels",       &ps2::overlay::DebugOverlaysCvar(),   kOffOn,      nullptr,          2, nullptr,            nullptr },
+    { "Video mode",     "auto is the console's own; on restart",   &s_videoMode,                         kVideoModes, kVideoModeNames,  3,                     nullptr,            nullptr,               false },
+    { "Color depth",    "16-bit leaves more VRAM; on restart",     &s_fb16Bit,                           kFbFormats,  kFbFormatNames,   2,                     nullptr,            nullptr,               false },
+    { "Screen X",       "the picture left or right on the TV",     &s_screenX,                           nullptr,     nullptr,          (2 * kMaxScreenX) + 1, nullptr,            nullptr,               true  },
+    { "Screen Y",       "the picture up or down on the TV",        &s_screenY,                           nullptr,     nullptr,          (2 * kMaxScreenY) + 1, nullptr,            nullptr,               true  },
+    { "Texture filter", "trilinear blends mip levels too",         &ps2::view::MipFilterCvar(),          kMipFilters, kMipFilters,      3,                     nullptr,            nullptr,               false },
+    { "Dithering",      "hides 16-bit color banding",              &s_enableDither,                      kOffOn,      nullptr,          2,                     nullptr,            nullptr,               false },
+    { "Dynamic lights", "vertex: on VU1, no lightmap rebuilds",    nullptr,                              nullptr,     kDlightModeNames, 3,                     DynamicLightsIndex, SetDynamicLightsIndex, false },
+    { "Model shadows",  "a shadow on the ground under each model", &r_shadows,                           kOffOn,      nullptr,          2,                     nullptr,            nullptr,               false },
+    { "Particles",      "square: as software Quake drew them",     nullptr,                              nullptr,     kParticleNames,   2,                     ParticlesIndex,     SetParticlesIndex,     false },
+    { "GS latency",     "a frame ahead: faster, one frame of lag", &s_gsLatency,                         kOffOn,      nullptr,          2,                     nullptr,            nullptr,               false },
+    { "Show FPS",       "frames per second, at the top right",     &ps2::overlay::FpsCounterCvar(),      kOffOn,      nullptr,          2,                     nullptr,            nullptr,               false },
+    { "Debug overlays", "memory, VRAM and profiling panels",       &ps2::overlay::DebugOverlaysCvar(),   kOffOn,      nullptr,          2,                     nullptr,            nullptr,               false },
 };
 
 constexpr int kNumVideoRows = ps2::ArrayLength(kVideoRows);
@@ -165,12 +189,16 @@ static int s_videoCursor = 0;
 
 // Which of its values the row's cvar holds now: by name for the rows whose values are names, and
 // for the rest, whose values are "0" and "1", by whether the cvar reads 0. One the row doesn't list
-// reads as the first.
+// reads as the first. A number row's index is its number from the bottom of its range.
 int VideoRowIndex(const VideoRow & row)
 {
     if (row.getIndex != nullptr)
     {
         return row.getIndex();
+    }
+    if (row.number)
+    {
+        return std::clamp(static_cast<int>(row.cvar->value) + (row.count / 2), 0, row.count - 1);
     }
 
     const bool byName = (row.values[0][0] < '0' || row.values[0][0] > '9');
@@ -202,6 +230,18 @@ void VideoMenuOpen()
     m_entersound = true;
 }
 
+// The picture's edge, a white line along each side of the screen, while a screen position row is
+// under the cursor: what the rows move, against the set's own edge. In screen pixels, whatever the
+// menu's canvas, as the overlays draw.
+void DrawScreenEdge()
+{
+    constexpr int kLine = 2;
+    ps2::rs::FillRect(0, 0, glwidth, kLine, 255, 255, 255, 255);
+    ps2::rs::FillRect(0, glheight - kLine, glwidth, kLine, 255, 255, 255, 255);
+    ps2::rs::FillRect(0, 0, kLine, glheight, 255, 255, 255, 255);
+    ps2::rs::FillRect(glwidth - kLine, 0, kLine, glheight, 255, 255, 255, 255);
+}
+
 void VideoMenuDraw()
 {
     using namespace ps2::menu;
@@ -218,7 +258,21 @@ void VideoMenuDraw()
 
         // Labels end at column 22, as Options' do.
         M_Print(16 + ((22 - static_cast<int>(std::strlen(row.label))) * 8), y, row.label);
-        if (row.names != nullptr)
+        if (row.number)
+        {
+            char text[8];
+            const int value = VideoRowIndex(row) - (row.count / 2);
+            if (value == 0)
+            {
+                q_strlcpy(text, "0", sizeof(text));
+            }
+            else
+            {
+                q_snprintf(text, sizeof(text), "%+d", value);
+            }
+            M_Print(220, y, text);
+        }
+        else if (row.names != nullptr)
         {
             M_Print(220, y, row.names[VideoRowIndex(row)]);
         }
@@ -229,6 +283,11 @@ void VideoMenuDraw()
     }
 
     M_DrawCharacter(200, kRowsY + (kRowHeight * s_videoCursor), 12 + (static_cast<int>(realtime * 4.0) & 1));
+
+    if (kVideoRows[s_videoCursor].number)
+    {
+        DrawScreenEdge();
+    }
 
     // The row's help, centred under the rows and clear of the plaque (page_layout.h).
     const char * const help = kVideoRows[s_videoCursor].help;
@@ -244,10 +303,15 @@ void VideoMenuDraw()
 void StepVideoRow(const int step)
 {
     const VideoRow & row = kVideoRows[s_videoCursor];
-    const int next = (VideoRowIndex(row) + step + row.count) % row.count;
+    const int index = VideoRowIndex(row);
+    const int next  = row.number ? std::clamp(index + step, 0, row.count - 1) : ((index + step + row.count) % row.count);
     if (row.setIndex != nullptr)
     {
         row.setIndex(next);
+    }
+    else if (row.number)
+    {
+        Cvar_SetValue(row.cvar->name, static_cast<float>(next - (row.count / 2)));
     }
     else
     {
@@ -341,6 +405,10 @@ void VID_Init()
     Cvar_RegisterVariable(&s_enableDither);
     Cvar_RegisterVariable(&s_fb16Bit);
     Cvar_RegisterVariable(&s_videoMode);
+    Cvar_RegisterVariable(&s_screenX);
+    Cvar_RegisterVariable(&s_screenY);
+    Cvar_SetCallback(&s_screenX, ScreenOffsetChanged);
+    Cvar_SetCallback(&s_screenY, ScreenOffsetChanged);
 
     // Options' "Video Options" row shows once the video module draws the page.
     vid_menucmdfn  = VideoMenuOpen;
@@ -356,8 +424,10 @@ void VID_Init()
 
     ReadInitCvars();
 
-    // The palette first: the GS builds its CLUTs from it as it comes up.
+    // The palette first: the GS builds its CLUTs from it as it comes up, through the Brightness and
+    // Contrast curves, at 1 until the configs set them.
     ps2::tex::LoadPalette();
+    ps2::gamma::Init();
     ps2::tex::Init();
 
     void * const chain = ps2::heap::AllocAligned(ps2::heap::MemAlign(64), kChainBytes,
@@ -374,7 +444,8 @@ void VID_Init()
     }
 
     const ps2::gs::Config gsConfig = {
-        .palette          = d_8to24table,
+        .palette          = ps2::gamma::Palette(),
+        .lightRamp        = ps2::gamma::LightRamp(),
         .width            = kScreenWidth,
         .height           = ps2::video::VisibleLines(standard),
         .framebuffer16Bit = (s_fb16Bit.value != 0.0f),
@@ -433,6 +504,10 @@ void GL_BeginRendering(int * x, int * y, int * width, int * height)
     // Snapshot that finished frame for the CSV log. Must sit between the rollover above and
     // rs::BeginFrame below, which is where the counters it reads get cleared.
     ps2::debug::FrameLogCapture();
+
+    // The CLUTs, if the Brightness or Contrast slider moved them: between frames, with the one
+    // left drawing finished first.
+    ps2::gamma::ApplyPendingChange();
 
     // 2D and 3D now draw freely until GL_EndRendering: 2D primitives open the pending 2D batch
     // lazily, and it flushes at each 2D->3D boundary and in rs::EndFrame.
@@ -499,6 +574,7 @@ bool ps2::loading::DrawLoadingScreen(const char * status)
         return false;
     }
 
+    ps2::gamma::ApplyPendingChange();
     ps2::rs::BeginFrame(/*dither=*/s_enableDither.value != 0.0f);
     ps2::tex::ReleaseRetiredTextures();
 

@@ -95,15 +95,16 @@ struct Clut final
     }
 
     // Fills with the light ramp sampled by PixelFormat::Light8: as the alpha ramp, but the alpha is
-    // the index itself, up to 255. The lightmap pass blends Cd * As / 128, so a luxel's 0..255 is
-    // its light from black up to nearly twice the texture's colour: QuakeSpasm's gl_overbright,
-    // whose lightmap texels also hold the light over 2 and are modulated by twice their value.
-    // Index 0 still reads as alpha 0, which the alpha test drops, so the atlases floor at 1.
-    void BuildLightRamp()
+    // 'alphas[index]', up to 255: the index itself, or the index through the Brightness curve
+    // (gamma.h). The lightmap pass blends Cd * As / 128, so a luxel's 0..255 is its light from
+    // black up to nearly twice the texture's colour: QuakeSpasm's gl_overbright, whose lightmap
+    // texels also hold the light over 2 and are modulated by twice their value. Index 0 still
+    // reads as alpha 0, which the alpha test drops, so the atlases floor at 1.
+    void BuildLightRamp(const u8 * alphas)
     {
         for (int i = 0; i < kNumEntries; ++i)
         {
-            entries[Csm1Index(i)] = 128u | (128u << 8) | (128u << 16) | (static_cast<u32>(i) << 24);
+            entries[Csm1Index(i)] = 128u | (128u << 8) | (128u << 16) | (static_cast<u32>(alphas[i]) << 24);
         }
     }
 };

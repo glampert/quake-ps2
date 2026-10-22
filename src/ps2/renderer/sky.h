@@ -19,6 +19,10 @@ void Init();
 // Reads the map's worldspawn for a skybox name (Sky_NewMap). R_NewMap calls it.
 void NewMap();
 
+// Builds the map's layers again from the palette as it now shows (gamma.h): the front one is RGBA,
+// made from it as the map loaded. gamma::ApplyPendingChange calls it, between frames.
+void PaletteChanged();
+
 // Draws the sky behind the frame's visible sky surfaces - the world's and the brush entities' -
 // and then writes those surfaces' depth, so whatever stands behind them stays hidden. Call first
 // in the frame, ahead of the world, once its surfaces are marked: the clouds go down before
