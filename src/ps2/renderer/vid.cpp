@@ -102,14 +102,14 @@ struct VideoRow
     void (*setIndex)(int index);
 };
 
-constexpr const char * kVideoModes[]     = { "auto", "ntsc", "pal" };
-constexpr const char * kVideoModeNames[] = { "auto", "NTSC", "PAL" };
-constexpr const char * kFbFormats[]      = { "1", "0" };
-constexpr const char * kFbFormatNames[]  = { "16-bit", "32-bit" };
-constexpr const char * kOffOn[]          = { "0", "1" };
-constexpr const char * kMipFilters[]     = { "nearest", "bilinear", "trilinear" };
+constexpr const char * kVideoModes[]      = { "auto", "ntsc", "pal" };
+constexpr const char * kVideoModeNames[]  = { "auto", "NTSC", "PAL" };
+constexpr const char * kFbFormats[]       = { "1", "0" };
+constexpr const char * kFbFormatNames[]   = { "16-bit", "32-bit" };
+constexpr const char * kOffOn[]           = { "0", "1" };
+constexpr const char * kMipFilters[]      = { "nearest", "bilinear", "trilinear" };
 constexpr const char * kDlightModeNames[] = { "lightmaps", "vertex", "glows" };
-constexpr const char * kParticleNames[]  = { "round", "square" };
+constexpr const char * kParticleNames[]   = { "round", "square" };
 
 // The dynamic lights row spans two cvars: gl_flashblend's glows stand in for the walls' lighting
 // whichever way ps2_dynamic_lights says they take it, so picking the glows sets the one and leaves
