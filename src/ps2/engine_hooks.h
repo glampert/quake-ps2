@@ -240,6 +240,10 @@ const char * PS2_ConfigLoadHunk(void);
 // R_DrawParticles. QuakeSpasm had this static to r_part.c.
 extern particle_t * active_particles;
 
+// r_part.c's particle style: 0 draws none, 1 discs, 2 squares. The backend's R_DrawParticles reads
+// it as it draws, and the Video Options page sets it. No QuakeSpasm header declares it.
+extern cvar_t r_particles;
+
 // gl_screen.c's "ready to draw", set by SCR_Init: before it, the save notice draws over the boot
 // splash instead. screen.h doesn't declare it.
 extern qboolean scr_initialized;

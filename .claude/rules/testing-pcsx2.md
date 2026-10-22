@@ -55,6 +55,11 @@
   run` creates: `ln -s $PWD/id1 build/release/id1`.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
+- **Other projects on this machine run PCSX2 too.** doom3-bfg-ps2's test runners launch batches,
+  a new instance every 15-20 s, and refuse to start a run while any `pcsx2` process is up ("an
+  emulator is already running"), so a run of ours in the middle of a batch fails their next test.
+  `pgrep -fl PCSX2` before launching, and if theirs are cycling, wait for a gap: 90 s with neither
+  a PCSX2 nor a `src/tools/scripts/*.py` runner up came after 9 minutes (2026-10-22).
 - **The user can drive the pad** (a host controller bound to PCSX2's `[Pad1]`) and the
   passthrough keyboard, which Claude can't. With `in_debugkeys 1` in `autoexec.cfg` every press
   lands in the log (`pad: Cross down -> ABUTTON`, `keyboard: usage 0x04 down -> a`). Until the
@@ -214,6 +219,10 @@ The rest are scripted runs:
   `M_AdjustSliders`; Stick Look's queues `-mlook` behind the rest of the script (engine-c.md), so
   type it. Lookspring: `+lookup` for 20 frames, then `+forward` for 100, with `viewpos` after
   each. With `lookspring 1` the pitch went from -73 back to 0, and with 0 it stayed (2026-10-21).
+  Video Options (`menu_video`) takes its keys in vid.cpp's `VideoMenuKey`, in an anonymous
+  namespace: a scratch `Cmd_AddCommand` in `VID_Init` that passes it `Q_atoi(Cmd_Argv(1))` steps
+  the page by key code (keys.h: 129 down, 130 left, 131 right, 13 Enter), the cursor starting on
+  the first row, and typing a row's cvar prints what the step set.
   A scratch `config.cfg` with `ps2_savedevice "host"` keeps the quit's write off the card.
 - **The debug page** (Options → Debug Options, or `menu_debug`): a script can't press the pad,
   but `menu_debug`, `w10` and a `screenshot` show it, and its rows are commands and cvars to run

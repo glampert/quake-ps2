@@ -20,11 +20,6 @@
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
 
-extern "C" {
-// r_part.c's: 0 draws no particles, 1 discs, 2 squares.
-extern cvar_t r_particles;
-} // extern "C"
-
 namespace ps2::particles {
 namespace {
 

@@ -294,7 +294,8 @@ those directly on the PS2's hardware, with no GL underneath.
 - **Models** ([alias.cpp](src/ps2/renderer/alias.cpp)) are interpolated between poses on VU1 and lit
   as QuakeSpasm lights them, with their shadows (`r_shadows`) and the players' colours.
   [Sprites](src/ps2/renderer/sprite.cpp) face the camera in all of QuakeSpasm's orientations, and
-  [particles](src/ps2/renderer/particles.cpp) are QuakeSpasm's round dots.
+  [particles](src/ps2/renderer/particles.cpp) are QuakeSpasm's round dots, or with `r_particles 2`
+  its squares.
 - **2D** ([draw.cpp](src/ps2/renderer/draw.cpp)): the console, menus and status bar. Quake laid
   them out for 320x200, and at QuakeSpasm's size of 1 they come out small on the 640x448 screen,
   so here they are drawn at 1.5 times their size by default: `scr_menuscale`, `scr_conscale` and
@@ -307,7 +308,8 @@ those directly on the PS2's hardware, with no GL underneath.
   [make_menu_about.py](src/tools/scripts/make_menu_about.py).
 - **Video Options** (in the Options menu): NTSC or PAL, a 16- or 32-bit framebuffer (16-bit leaves
   more VRAM for textures), the texture filtering, dithering, the dynamic lights (lightmaps, vertex
-  or glows), the models' shadows, the GS latency, and the FPS counter and debug overlays.
+  or glows), the models' shadows, round or square particles, the GS latency, and the FPS counter
+  and debug overlays.
   The first two apply after a restart. The Options page itself has the save device: the memory
   card, or the drive the game booted from (see [Save games](#save-games)).
 - **The boot splash** shows the QUAKE plaque from the menus, built into the ELF, from the first

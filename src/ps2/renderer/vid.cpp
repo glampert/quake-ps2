@@ -83,9 +83,9 @@ void ReadInitCvars()
 // QuakeSpasm's video module draws Options' "Video Options" page itself, through the vid_menu*fn
 // hooks menu.c calls (gl_vidsdl.c's has the PC's modes). This one has the PS2's, laid out as
 // QuakeSpasm's Options page is: the TV standard and the framebuffer format, which apply on the next
-// boot, then the texture filtering, the dithering, the dynamic lights, the models' shadows, the GS
-// latency, the FPS counter and the debug panels, which apply at once. Each row steps its cvar
-// through its values with left, right or Enter.
+// boot, then the texture filtering, the dithering, the dynamic lights, the models' shadows, the
+// particles' shape, the GS latency, the FPS counter and the debug panels, which apply at once. Each
+// row steps its cvar through its values with left, right or Enter.
 
 struct VideoRow
 {
@@ -96,8 +96,8 @@ struct VideoRow
     const char * const * names;  // what it shows for each; null for an off/on checkbox
     int                  count;
 
-    // A row over more than one cvar reads and sets its values through these instead; null for
-    // the rest.
+    // A row over more than one cvar, or over values VideoRowIndex can't tell apart, reads and sets
+    // them through these instead; null for the rest.
     int  (*getIndex)();
     void (*setIndex)(int index);
 };
@@ -109,6 +109,7 @@ constexpr const char * kFbFormatNames[]  = { "16-bit", "32-bit" };
 constexpr const char * kOffOn[]          = { "0", "1" };
 constexpr const char * kMipFilters[]     = { "nearest", "bilinear", "trilinear" };
 constexpr const char * kDlightModeNames[] = { "lightmaps", "vertex", "glows" };
+constexpr const char * kParticleNames[]  = { "round", "square" };
 
 // The dynamic lights row spans two cvars: gl_flashblend's glows stand in for the walls' lighting
 // whichever way ps2_dynamic_lights says they take it, so picking the glows sets the one and leaves
@@ -131,6 +132,19 @@ void SetDynamicLightsIndex(const int index)
     }
 }
 
+// The particles row: r_particles draws discs at 1 and squares at 2, which VideoRowIndex would read
+// as the same "on", so they read here as particles.cpp picks its texture: 2 is square and anything
+// else round. 0, which draws none, is left to the console.
+int ParticlesIndex()
+{
+    return (static_cast<int>(r_particles.value) == 2) ? 1 : 0;
+}
+
+void SetParticlesIndex(const int index)
+{
+    Cvar_Set(r_particles.name, (index == 1) ? "2" : "1");
+}
+
 const VideoRow kVideoRows[] = {
     { "Video mode",     "auto is the console's own; on restart",   &s_videoMode,                         kVideoModes, kVideoModeNames,  3, nullptr,            nullptr },
     { "Color depth",    "16-bit leaves more VRAM; on restart",     &s_fb16Bit,                           kFbFormats,  kFbFormatNames,   2, nullptr,            nullptr },
@@ -138,6 +152,7 @@ const VideoRow kVideoRows[] = {
     { "Dithering",      "hides 16-bit color banding",              &s_enableDither,                      kOffOn,      nullptr,          2, nullptr,            nullptr },
     { "Dynamic lights", "vertex: on VU1, no lightmap rebuilds",    nullptr,                              nullptr,     kDlightModeNames, 3, DynamicLightsIndex, SetDynamicLightsIndex },
     { "Model shadows",  "a shadow on the ground under each model", &r_shadows,                           kOffOn,      nullptr,          2, nullptr,            nullptr },
+    { "Particles",      "square: as software Quake drew them",     nullptr,                              nullptr,     kParticleNames,   2, ParticlesIndex,     SetParticlesIndex },
     { "GS latency",     "a frame ahead: faster, one frame of lag", &s_gsLatency,                         kOffOn,      nullptr,          2, nullptr,            nullptr },
     { "Show FPS",       "frames per second, at the top right",     &ps2::overlay::FpsCounterCvar(),      kOffOn,      nullptr,          2, nullptr,            nullptr },
     { "Debug overlays", "memory, VRAM and profiling panels",       &ps2::overlay::DebugOverlaysCvar(),   kOffOn,      nullptr,          2, nullptr,            nullptr },
