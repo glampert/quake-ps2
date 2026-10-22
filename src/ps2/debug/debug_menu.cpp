@@ -174,7 +174,7 @@ const Row kRows[] = {
     { "Log to file",          "the console to quake.log; slow on USB", "ps2_logfile",   nullptr,        nullptr   },
     { "Dump IOP modules",     "boot report, modules, IOP memory",      nullptr,         DumpIopModules, nullptr   },
     { "List saves",           "where saves go, and the card's saves",  nullptr,         ListSaves,      nullptr   },
-    { "Save console to file", "the console's text to condump.txt",     nullptr,         DumpConsole,    nullptr   },
+    { "Console to file",      "save the console's text to condump.txt",nullptr,         DumpConsole,    nullptr   },
     { "Take screenshot",      "the screen without this menu, in id1/", nullptr,         TakeScreenshot, nullptr   },
     { nullptr,                nullptr,                                 nullptr,         nullptr,        nullptr   },
     { "God mode",             "no damage taken: the god command",      nullptr,         ToggleGodMode,  GodModeOn },
