@@ -107,6 +107,12 @@ public:
         return slot < MaxSize;
     }
 
+    // Whether the slot holds an item, for walking the pool: the live slots are not contiguous.
+    bool IsLive(u16 slot) const
+    {
+        return IsValid(slot) && m_liveSlots[slot];
+    }
+
     // The slot an item handed out by this pool lives in.
     u16 IndexOf(const T & item) const
     {

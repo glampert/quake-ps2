@@ -232,5 +232,22 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
   nearest/bilinear/trilinear (live), `ps2_mip_bias` (live).
 - Lightmap atlases are `ImageType::Wall` (Alpha8). Exclude them by format when a rule means
   "walls".
-- Before changing the heap or residency policy, read the README's VRAM heap notes: LRU, never
-  evict textures bound this frame, recoverable OOM, defrag on level change.
+- **What the levels ask of the texture heap (2026-10-22, the map tour `ps2_testmaps 2` over the 38
+  registered levels, 5 viewpoints each, debug build, `build/baselines/q1-mapvram2.*`):** the heap
+  is 2408 KB (NTSC, 16-bit framebuffers). The most it held at once was 2.30 MB (e3m4, 117 textures),
+  and every level's peak sat between 1.61 (start) and 2.30 MB. 22 levels fit whole; **16 had it
+  evicting** (LRU, silent: a re-upload on the next bind, never a forced drain - 0 OOM syncs in the
+  run). As if it never evicted, e4m1 needs **2.89 MB in 163 textures**, e3m1 and e3m5 2.73, e4m4
+  2.58, e4m3 2.51, e3m4 2.48, e2m3 and e2m5 2.46 MB; e1m1-e1m4, e1m6 and e1m7 fit (1.8-2.2 MB).
+  The evictions start from about 2.2 MB used, not 2.35: first-fit against the holes a level change
+  leaves (the 2D pics and the earlier level's survivors stay where they were), so the heap's
+  effective room is about 2.2-2.3 MB. So a 32-bit framebuffer pair (-1120 KB) or PAL's 512 lines
+  (-240 KB) would come out of a heap that already thrashes on nearly half the levels, unless the
+  textures shrink with it. The `loaded` figure on the same `MapCycle` line (4.0-6.0 MB) is every
+  texture alive, the cache's earlier-level models included, so it grows through the run and is
+  not a level's demand. The `MapCycle` lines, `ps2_vramstats` and the frame log's `vramUsedKB` /
+  `vramEvicts` columns are where the numbers come from (testing-pcsx2.md, performance.md).
+- Before changing the heap or residency policy, read `vram.h` and `vram.cpp`'s header comment:
+  LRU eviction, never of a texture bound this frame, and the recoverable OOM in
+  `rs::AllocateVramFor` (fence the GS, unpin, then defragment). `gs::DefragVramHeap` has no caller
+  in this port: a level change frees the old level's textures one by one (`gs::ReleaseTexture`).

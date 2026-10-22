@@ -25,6 +25,7 @@
 #include "ps2/renderer/overlays.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/view.h"
+#include "ps2/renderer/vram.h"
 #include "ps2/menu/page_layout.h"
 #include "ps2/tests/draw_cube.h"
 #include "ps2/save/save_notice.h"
@@ -398,6 +399,10 @@ void VID_Init()
     // With one fixed mode there is nothing to lock, unlock or restart.
     Cmd_AddCommand("vid_unlock", []() {});
     Cmd_AddCommand("vid_restart", []() {});
+
+    // The texture heap block by block, with its totals and its peak this run: the same dump a
+    // failed allocation prints, on demand.
+    Cmd_AddCommand("ps2_vramstats", []() { ps2::vram::DumpAllBlocks(); });
 
     Cvar_RegisterVariable(&vid_gamma);
     Cvar_RegisterVariable(&vid_contrast);

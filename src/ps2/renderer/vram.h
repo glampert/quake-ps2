@@ -130,7 +130,14 @@ void ClearReuseHazard();
 // a large free total next to a small largest-free-block means fragmentation.
 void DumpAllBlocks();
 
-// Live snapshot of the texture heap, for the ref.cpp debug overlay.
+// The most VRAM the heap had committed at one moment, and the textures holding it then.
+struct Peak
+{
+    int usedWords;        // committed VRAM at that moment (its totalWords - freeWords)
+    int residentTextures; // textures holding a block then
+};
+
+// Live snapshot of the texture heap, for the debug overlay, the frame log and the map cycle.
 struct Stats
 {
     int freeWords;         // uncommitted VRAM: total size of the free blocks
@@ -138,9 +145,32 @@ struct Stats
     int residentTextures;  // textures currently holding a block
     int uploadsThisFrame;  // texture DMA uploads since the last BeginFrame()
     int oomSyncsThisFrame; // allocation failures that forced a GS drain
+    int evictionsThisFrame; // textures evicted to make room since the last BeginFrame()
+
+    // High-water marks of the committed VRAM: what the heap has to hold, which is the number a
+    // smaller heap (larger framebuffers) is weighed against. The heap evicts only when it is
+    // full, so in a run that never filled it (oomSyncsThisFrame always 0) a peak is the
+    // footprint of every texture bound since the level came up, the 2D's included: the level's
+    // working set as the run saw it, not one frame's. 'peak' is since Init(); 'windowPeak'
+    // since the last ResetWindowPeak().
+    Peak peak;
+    Peak windowPeak;
+
+    // What the window asked of the heap as if it had never evicted: the footprint of every
+    // distinct texture resident at any moment since ResetWindowPeak(), counted once, and the
+    // evictions it took to fit them. With no evictions it is windowPeak; past the heap's size
+    // it says by how much a level outgrows it, which windowPeak, capped by the heap, cannot.
+    int windowDemandWords;
+    int windowDemandTextures;
+    int windowEvictions;
 };
 
 // Computes the current stats (cheap; walks the block list).
 Stats GetStats();
+
+// Restarts the window high-water mark, and the window's demand and eviction count, from the heap
+// as it is now: the map cycle restarts them as each level comes up, so they read one level's
+// rather than the whole run's.
+void ResetWindowPeak();
 
 } // namespace ps2::vram

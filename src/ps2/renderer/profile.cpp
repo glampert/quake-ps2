@@ -117,8 +117,11 @@ struct FrameSample
 
     // vram::Stats. Uploads are bursty around map transitions and each one that
     // followed an eviction also forced a GS drain, so these are the first thing
-    // to check against a frame-time spike.
-    int vramUploads, vramOomSyncs, vramResident;
+    // to check against a frame-time spike. vramUsedKB is the heap's committed VRAM
+    // as the frame ended: its peak over a level is what the level asks of the
+    // texture heap, which a larger framebuffer would take from. vramEvicts says
+    // whether that peak is the level's whole demand (none) or the heap's cap (some).
+    int vramUploads, vramOomSyncs, vramResident, vramUsedKB, vramEvicts;
 
     // chain counters. The chain is built front to back across a whole frame and
     // only moves to the other half when it runs out, so chainKB against
@@ -273,7 +276,7 @@ void WriteBatch()
              "TexChains,LmChains,Entities,EntCull,EntShade,EntGeom,EntShadow,EntBrush,"
              "Particles,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,ClParticles,SndMix,FsIo,Music,Input,"
              "tris,batches,particles,"
-             "vramUploads,vramOomSyncs,vramResident,"
+             "vramUploads,vramOomSyncs,vramResident,vramUsedKB,vramEvicts,"
              "chainKB,chainKicks,chainDrains\n");
         Emit("FLOG#note,timings are microseconds\n");
     }
@@ -298,9 +301,9 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.tris, s.batches, s.particles,
-                          s.vramUploads, s.vramOomSyncs, s.vramResident,
+                          s.vramUploads, s.vramOomSyncs, s.vramResident, s.vramUsedKB, s.vramEvicts,
                           s.chainKB, s.chainKicks, s.chainDrains);
         }
 
@@ -380,6 +383,8 @@ void FrameLogCapture()
     s.vramUploads  = v.uploadsThisFrame;
     s.vramOomSyncs = v.oomSyncsThisFrame;
     s.vramResident = v.residentTextures;
+    s.vramUsedKB   = (v.totalWords - v.freeWords) * 4 / 1024;
+    s.vramEvicts   = v.evictionsThisFrame;
 
     // cmdbuf::EndFrame has not run for the new frame either, so these are still the finished
     // frame's. Rounded to KB because the interesting comparison is against a half, which is

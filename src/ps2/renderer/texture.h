@@ -114,6 +114,7 @@ struct Texture final
     // upload it (or evict others), so vramAddr mutates behind the const API.
     static constexpr auto kNotResident = vram::Address::Invalid;
     mutable vram::Address vramAddr; // GS VRAM word address; kNotResident when not uploaded.
+    mutable u32           vramWindow; // The heap window that last counted it in its demand (vram::ResetWindowPeak).
 
     // True if the texture is uploaded to VRAM and ready to be used by the GS.
     bool IsVramResident() const { return vramAddr != kNotResident; }
@@ -276,6 +277,12 @@ constexpr u32 kMaxTextures = 640;
 
 // The most textures alive at once this run, of kMaxTextures. The map cycle reports it.
 u32 PeakTextureCount();
+
+// The VRAM every texture now loaded would take resident at once, in words, and how many there
+// are: the most a level can ask of the texture heap, against the peak the heap saw of it
+// (vram::Stats), which the map cycle reports side by side. An image inside a scrap atlas
+// counts through its atlas.
+int LoadedVramFootprintWords(int * outTextures);
 
 // Number of built-in debug checkerboard variants (distinct colors).
 constexpr int kNumDebugTextures = PS2_QUAKE_DEBUG ? 6 : 1;

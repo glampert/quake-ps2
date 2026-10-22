@@ -123,10 +123,14 @@ The rest are scripted runs:
 
 - **Map cycle** (debug builds): `ps2_testmaps 1` in `autoexec.cfg`. It lists every level in the
   paks (the campaign in play order, then the rest alphabetically: pak1's dm1-dm6), names the
-  campaign maps the data lacks, loads each for 8 s (`ps2_testmaps_dwell`), prints a
-  `MapCycle [n/N] <map> <pak>` line per map (hunk, cache, backend tags, heap peak, RAM free) and
-  ends with the fixed pools' peaks against their sizes (textures, texmgr's records, alias models)
-  and `MapCycle: done.`, then quits (`MapCycle: done - quitting now`), which writes a
+  campaign maps the data lacks, loads each for 8 s (`ps2_testmaps_dwell`), prints three
+  `MapCycle [n/N] <map> <pak>` lines per map (hunk, cache, backend tags, heap peak, RAM free; the
+  load's own peak; the texture heap's peak in the level, what the level needed of it as if it never
+  evicted, with its evictions, and what every texture it loaded would take: `VRAM peak ... needed
+  ... (N evictions) loaded ...`) and ends with the fixed pools' peaks against their sizes (textures,
+  texmgr's records, alias models), the texture heap's peak and the level that set it, the most a
+  level needed and how many levels had it evicting, and `MapCycle: done.`, then quits
+  (`MapCycle: done - quitting now`), which writes a
   config: the card's in a scratch run, so restore it. With `ps2_test_quit 0` it stays up instead
   (`... the game stays up for the next test`), as every test does. `ps2_testmaps 2` is its perf
   pass (see the perf run below).
@@ -247,6 +251,11 @@ The rest are scripted runs:
   `host:`. Then PCSX2 boots into the PS2 BIOS menu; stop it there.
 - **Stop every PCSX2 you launch once its log is read.** A run stays open after the game halts,
   quits or idles, and the next launch starts another instance beside it.
+- **Launch PCSX2 from a background shell with its stdout to `/dev/null`.** It prints the whole
+  emulog there as well (5 MB over a map tour), which swamps the shell's own output. A watcher
+  that polls `emulog.txt` for `FLOG#end` or `MapCycle: done` every 15 s, then kills the process,
+  copies the log into `build/baselines/` and restores the card, ran both tours of 2026-10-22
+  unattended (10.5 minutes each).
 
 ## Quiet map for renderer work
 

@@ -190,6 +190,7 @@ Texture & Create(const char * name, const void * pixels, const int width, const 
     texture.atlasX     = 0;
     texture.atlasY     = 0;
     texture.vramAddr   = Texture::kNotResident;
+    texture.vramWindow = 0; // not yet counted in any window's demand
 
     // The first upload writes the data cache back over the pixels before the DMA reads them:
     // whatever made them - a file read, a copy, the generators above - may have left them there.
@@ -207,6 +208,33 @@ void Destroy(const Texture & texture)
 u32 PeakTextureCount()
 {
     return s_pool.PeakCount();
+}
+
+int LoadedVramFootprintWords(int * const outTextures)
+{
+    int words = 0;
+    int count = 0;
+
+    for (u32 i = 0; i < kMaxTextures; ++i)
+    {
+        const u16 slot = static_cast<u16>(i);
+        if (!s_pool.IsLive(slot))
+        {
+            continue;
+        }
+
+        const Texture & texture = s_pool.Slot(slot);
+        if (texture.atlas != nullptr)
+        {
+            continue; // a window into its atlas's pixels, which holds the VRAM
+        }
+
+        words += vram::TextureFootprintWords(texture);
+        ++count;
+    }
+
+    *outTextures = count;
+    return words;
 }
 
 const Texture & DebugTexture(int variant)

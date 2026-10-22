@@ -287,7 +287,10 @@ The demos see three levels; this sees all of them. The registered data's 38 took
 3. `frame_budget.py <log>`: the per-map table names each level's slowest viewpoint, and the 20
    slowest viewpoints follow, with the View, World, Ent, Sky and tris means that say what made
    them slow. A viewpoint's first 15 frames (the teleport, and the textures it uploads) settle
-   apart, as a map's first 30 do.
+   apart, as a map's first 30 do. `vramUsedKB` is the texture heap's committed VRAM as each frame
+   ended: its maximum over a level is the level's VRAM peak, which the `MapCycle` lines print too
+   (testing-pcsx2.md), and `summarize_flog.py` shows the run's. `vramEvicts` is the frame's LRU
+   evictions: a level with none fit the heap whole, and its peak is all it needed.
 
 - **Two captures compare row for row** (`compare_flog.py`), as the demos do: a level's
   viewpoints come from its entities and are the same every run, and the turn steps per frame,

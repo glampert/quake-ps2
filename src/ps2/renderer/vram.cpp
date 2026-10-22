@@ -223,6 +223,46 @@ static int s_heapTotalWords    = 0;
 static int s_uploadsThisFrame  = 0;
 static int s_oomSyncsThisFrame = 0;
 
+// Committed VRAM and the textures holding it, kept up as blocks change hands so the high-water
+// marks cost no walk; GetStats checks them against the block list where asserts are on. The
+// peaks are the Stats' (vram.h): the run's since Init, the window's since ResetWindowPeak.
+static int  s_usedWords        = 0;
+static int  s_residentTextures = 0;
+static Peak s_peak             = {};
+static Peak s_windowPeak       = {};
+
+// The window's demand (vram.h): each texture counts the first time it is allocated in the window,
+// told by the window's number stamped on it, so an eviction and re-upload adds nothing.
+static u32 s_windowId            = 1; // never 0, a fresh texture's stamp
+static int s_windowDemandWords    = 0;
+static int s_windowDemandTextures = 0;
+static int s_windowEvictions      = 0;
+static int s_evictionsThisFrame   = 0;
+
+// Books a block handed to a texture, and raises the high-water marks it passes.
+void NoteCommitted(const int sizeWords)
+{
+    s_usedWords += sizeWords;
+    ++s_residentTextures;
+
+    if (s_usedWords > s_peak.usedWords)
+    {
+        s_peak = { s_usedWords, s_residentTextures };
+    }
+    if (s_usedWords > s_windowPeak.usedWords)
+    {
+        s_windowPeak = { s_usedWords, s_residentTextures };
+    }
+}
+
+// Books a block taken back from its texture, by eviction or Free.
+void NoteReleased(const int sizeWords)
+{
+    PS2_Assert(s_usedWords >= sizeWords && s_residentTextures > 0);
+    s_usedWords -= sizeWords;
+    --s_residentTextures;
+}
+
 // Takes a descriptor from the pool and fills it in as a free block, or returns
 // null when the pool is empty. The caller links it into the heap list
 // (LinkAfter); ResetHeap makes the list head.
@@ -301,9 +341,11 @@ void ResetHeap()
         s_blockPool[i].next  = (i + 1 < kBlockPoolCapacity) ? &s_blockPool[i + 1] : nullptr;
     }
 
-    s_unusedBlocks = &s_blockPool[0];
-    s_blockCount   = 0;
-    s_blockList    = NewBlock(Address(s_heapBaseWords), s_heapTotalWords);
+    s_unusedBlocks     = &s_blockPool[0];
+    s_blockCount       = 0;
+    s_usedWords        = 0; // nothing owns a block any more
+    s_residentTextures = 0;
+    s_blockList        = NewBlock(Address(s_heapBaseWords), s_heapTotalWords);
     PS2_AssertMsg(s_blockList != nullptr, "VRAM block pool is empty!"); // pool was just refilled
 }
 
@@ -445,6 +487,13 @@ void DumpAllBlocks()
                stats.residentTextures,
                stats.uploadsThisFrame,
                stats.oomSyncsThisFrame);
+
+    Con_Printf("Peak     : %d KB used in %d textures this run, %d KB in %d since the window reset\n",
+               stats.peak.usedWords * 4 / 1024, stats.peak.residentTextures,
+               stats.windowPeak.usedWords * 4 / 1024, stats.windowPeak.residentTextures);
+
+    Con_Printf("Window   : needed %d KB in %d textures since the reset, with %d evictions\n",
+               stats.windowDemandWords * 4 / 1024, stats.windowDemandTextures, stats.windowEvictions);
 }
 
 void Init(int heapBaseWords)
@@ -471,8 +520,9 @@ void Init(int heapBaseWords)
 void BeginFrame()
 {
     ++s_frame;
-    s_uploadsThisFrame  = 0;
-    s_oomSyncsThisFrame = 0;
+    s_uploadsThisFrame   = 0;
+    s_oomSyncsThisFrame  = 0;
+    s_evictionsThisFrame = 0;
 }
 
 const MipLayout & MipLayoutFor(const tex::Texture & texture)
@@ -577,6 +627,14 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords)
 
             block->owner          = &texture;
             block->lastBoundFrame = s_frame;
+            NoteCommitted(block->sizeWords); // the whole block, when it was handed out unsplit
+
+            if (texture.vramWindow != s_windowId)
+            {
+                texture.vramWindow = s_windowId; // its first time resident in this window
+                s_windowDemandWords += sizeWords;
+                ++s_windowDemandTextures;
+            }
             return block->addrWords;
         }
 
@@ -607,6 +665,9 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords)
 
         Con_DPrintf("VRAM: evicting '%s' (%d KB)\n", victim->owner->name, victim->sizeWords * 4 / 1024);
 
+        NoteReleased(victim->sizeWords);
+        ++s_evictionsThisFrame;
+        ++s_windowEvictions;
         victim->owner->vramAddr = tex::Texture::kNotResident;
         victim->owner = nullptr;
         s_reuseHazard = true;
@@ -673,6 +734,7 @@ void Free(const tex::Texture & texture)
     Block * block = FindBlockFor(texture);
     if (block != nullptr) [[likely]]
     {
+        NoteReleased(block->sizeWords);
         texture.vramAddr = tex::Texture::kNotResident;
         block->owner     = nullptr;
         CoalesceFree(block);
@@ -740,6 +802,12 @@ Stats GetStats()
     stats.totalWords        = s_heapTotalWords;
     stats.uploadsThisFrame  = s_uploadsThisFrame;
     stats.oomSyncsThisFrame = s_oomSyncsThisFrame;
+    stats.evictionsThisFrame  = s_evictionsThisFrame;
+    stats.peak                = s_peak;
+    stats.windowPeak          = s_windowPeak;
+    stats.windowDemandWords    = s_windowDemandWords;
+    stats.windowDemandTextures = s_windowDemandTextures;
+    stats.windowEvictions      = s_windowEvictions;
 
     for (const Block * block = s_blockList; block != nullptr; block = block->next)
     {
@@ -753,7 +821,30 @@ Stats GetStats()
         }
     }
 
+    // The running totals the peaks come from must agree with the list.
+    PS2_AssertMsg(stats.freeWords == s_heapTotalWords - s_usedWords && stats.residentTextures == s_residentTextures,
+                  "VRAM heap's running totals disagree with its block list!");
+
     return stats;
+}
+
+void ResetWindowPeak()
+{
+    s_windowPeak = { s_usedWords, s_residentTextures };
+
+    // The demand starts over from what is resident now, each of it counted once more.
+    ++s_windowId;
+    s_windowDemandWords    = s_usedWords;
+    s_windowDemandTextures = s_residentTextures;
+    s_windowEvictions      = 0;
+
+    for (const Block * block = s_blockList; block != nullptr; block = block->next)
+    {
+        if (block->owner != nullptr)
+        {
+            block->owner->vramWindow = s_windowId;
+        }
+    }
 }
 
 } // namespace ps2::vram

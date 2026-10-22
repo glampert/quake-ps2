@@ -216,7 +216,7 @@ def report_budget(rows, maps, views):
             'EntGeom', 'EntShadow', 'EntBrush', 'Particles', 'TurbSurfs', 'Sky', 'Ui', 'Overlay',
             'Server', 'ClParse', 'ClScene', 'ClParticles', 'SndMix', 'Sound', 'Music', 'FsIo', 'Input',
             'GsWait', 'DmaSend', 'DmaFlush', 'rest',
-            'tris', 'batches', 'particles', 'vramUploads', 'vramOomSyncs', 'vramResident',
+            'tris', 'batches', 'particles', 'vramUploads', 'vramOomSyncs', 'vramResident', 'vramUsedKB', 'vramEvicts',
             'chainKB', 'chainKicks', 'chainDrains']
     print(f"\nOver-budget steady frames ({len(bad)}) vs all steady frames, means:")
     print(f"  {'column':<13}{'all':>9}{'over':>9}{'delta':>9}")

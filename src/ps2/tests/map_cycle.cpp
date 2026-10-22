@@ -20,6 +20,7 @@
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/texmgr.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/vram.h"
 #include "ps2/system/heap.h"
 #include "ps2/system/sys.h"
 
@@ -100,6 +101,18 @@ static int    s_confirmFrames = 0;
 static int    s_failed        = 0;
 static size_t s_peakBeforeMap = 0;
 static int    s_hunkPeak      = 0; // Hunk in use plus cache, the most any map took.
+
+// The texture heap: its run peak as each map is issued (for ReportMap's marker), the map whose
+// window peak was the run's largest, the map that asked the most of it and how many levels had
+// it evicting, for Finish.
+static int    s_vramPeakBeforeMap  = 0;
+static int    s_vramPeakWords      = 0;
+static int    s_vramPeakTextures   = 0;
+static char   s_vramPeakMap[MAX_QPATH] = {};
+static int    s_vramDemandWords    = 0;
+static int    s_vramDemandTextures = 0;
+static char   s_vramDemandMap[MAX_QPATH] = {};
+static int    s_vramLevelsEvicting = 0;
 static char   s_targetBsp[MAX_QPATH] = {};
 static bool   s_perfPass      = false; // this pass is "ps2_testmaps 2"
 static int    s_cutShort      = 0;     // perf pass: levels left before their tour ended
@@ -123,6 +136,15 @@ void Restart()
     s_cutShort      = 0;
     s_mapCount      = 0;
     s_listBuilt     = false; // rescanned, in case the game directory changed in between
+
+    s_vramPeakBeforeMap  = 0;
+    s_vramPeakWords      = 0;
+    s_vramPeakTextures   = 0;
+    s_vramPeakMap[0]     = '\0';
+    s_vramDemandWords    = 0;
+    s_vramDemandTextures = 0;
+    s_vramDemandMap[0]   = '\0';
+    s_vramLevelsEvicting = 0;
 }
 
 bool TargetLevelIsUp()
@@ -580,6 +602,45 @@ void ReportMap(const MapEntry & map, const int index)
                FormatMemoryUnit(ps2::heap::GetWindowPeakMemBytes(), true, peak, sizeof(peak)),
                FormatMemoryUnit(ps2::heap::GetWindowPeakTagBytes(MemTag::Pack), true, pack, sizeof(pack)),
                FormatMemoryUnit(ps2::heap::GetHeapStats().arenaBytes, true, freeMem, sizeof(freeMem)));
+
+    // The texture heap: the most this level had committed since it came up; what it needed, as if
+    // the heap had never evicted (every distinct texture resident at some moment of it, counted
+    // once) and the evictions it took, which is the peak again where there were none and past the
+    // heap's size says by how much the level outgrows it; and what all of its loaded textures would
+    // take resident at once, as far as it could push. "NEW PEAK" marks the map that set the run's
+    // high-water.
+    const ps2::vram::Stats vram = ps2::vram::GetStats();
+    int loadedTextures = 0;
+    const int loadedWords = ps2::tex::LoadedVramFootprintWords(&loadedTextures);
+
+    char vramPeak[kUnit], vramNeed[kUnit], vramLoaded[kUnit];
+    Con_Printf("MapCycle [%2d/%2d] %-6s %-5s VRAM peak %-9s in %3d textures   needed %-9s in %3d (%d evictions)   "
+               "loaded %-9s in %3d%s\n",
+               index + 1, s_mapCount, map.name, map.pak,
+               FormatMemoryUnit(static_cast<size_t>(vram.windowPeak.usedWords) * 4u, true, vramPeak, sizeof(vramPeak)),
+               vram.windowPeak.residentTextures,
+               FormatMemoryUnit(static_cast<size_t>(vram.windowDemandWords) * 4u, true, vramNeed, sizeof(vramNeed)),
+               vram.windowDemandTextures, vram.windowEvictions,
+               FormatMemoryUnit(static_cast<size_t>(loadedWords) * 4u, true, vramLoaded, sizeof(vramLoaded)),
+               loadedTextures,
+               (vram.windowPeak.usedWords > s_vramPeakBeforeMap) ? "  <- NEW PEAK" : "");
+
+    if (vram.windowPeak.usedWords > s_vramPeakWords)
+    {
+        s_vramPeakWords    = vram.windowPeak.usedWords;
+        s_vramPeakTextures = vram.windowPeak.residentTextures;
+        std::snprintf(s_vramPeakMap, sizeof(s_vramPeakMap), "%s", map.name);
+    }
+    if (vram.windowDemandWords > s_vramDemandWords)
+    {
+        s_vramDemandWords    = vram.windowDemandWords;
+        s_vramDemandTextures = vram.windowDemandTextures;
+        std::snprintf(s_vramDemandMap, sizeof(s_vramDemandMap), "%s", map.name);
+    }
+    if (vram.windowEvictions > 0)
+    {
+        ++s_vramLevelsEvicting;
+    }
 }
 
 // Where the free memory sits, which the memtag table cannot show: dlmalloc never moves a live
@@ -631,6 +692,20 @@ void Finish()
     Con_Printf("MapCycle: pools at their peak - textures %u of %u, texture records %u of %u, alias models %u of %u.\n",
                ps2::tex::PeakTextureCount(), ps2::tex::kMaxTextures, ps2::tex::PeakTextureRecordCount(),
                ps2::tex::kMaxTextureRecords, ps2::alias::PeakModelCount(), ps2::alias::kMaxModels);
+
+    // The texture heap at its fullest and the level that filled it, then the most any level asked
+    // of it: what a smaller heap (larger framebuffers) is weighed against.
+    char vramPeak[ps2::heap::kMemUnitStrSize], vramNeed[ps2::heap::kMemUnitStrSize];
+    char vramHeap[ps2::heap::kMemUnitStrSize];
+    Con_Printf("MapCycle: the texture heap peaked at %s in %d textures (%s), of %s; the most a level needed was %s "
+               "in %d (%s), and %d levels had it evicting.\n",
+               ps2::heap::FormatMemoryUnit(static_cast<size_t>(s_vramPeakWords) * 4u, true, vramPeak, sizeof(vramPeak)),
+               s_vramPeakTextures, (s_vramPeakMap[0] != '\0') ? s_vramPeakMap : "no map",
+               ps2::heap::FormatMemoryUnit(static_cast<size_t>(ps2::vram::GetStats().totalWords) * 4u, true,
+                                           vramHeap, sizeof(vramHeap)),
+               ps2::heap::FormatMemoryUnit(static_cast<size_t>(s_vramDemandWords) * 4u, true, vramNeed, sizeof(vramNeed)),
+               s_vramDemandTextures, (s_vramDemandMap[0] != '\0') ? s_vramDemandMap : "no map",
+               s_vramLevelsEvicting);
 
     // Survives Restart(), so re-running the test in the same session numbers the passes and
     // makes drift between them obvious.
@@ -698,8 +773,10 @@ bool StartNextMap()
     std::snprintf(s_targetBsp, sizeof(s_targetBsp), "maps/%s.bsp", name);
 
     // Sampled before the load so ReportMap can tell whether this map set a new high-water,
-    // and the window peak restarted, so it measures this load alone.
-    s_peakBeforeMap = ps2::heap::GetPeakMemBytes();
+    // and the window peak restarted, so it measures this load alone. The texture heap's window
+    // restarts once the level is up instead (RunMapCycle), clear of the last level's textures.
+    s_peakBeforeMap     = ps2::heap::GetPeakMemBytes();
+    s_vramPeakBeforeMap = ps2::vram::GetStats().peak.usedWords;
     ps2::heap::ResetWindowPeak();
 
     Cbuf_AddText(va("map %s\n", name));
@@ -743,6 +820,10 @@ void RunMapCycle()
     case State::Loading:
         if (TargetLevelIsUp() && ++s_confirmFrames >= kFramesToConfirm)
         {
+            // The level is up and drawing, the last one's textures gone: from here the texture
+            // heap's window peak is this level's.
+            ps2::vram::ResetWindowPeak();
+
             if (s_perfPass)
             {
                 StartTour(s_maps[s_nextMap], s_nextMap);

@@ -241,6 +241,7 @@ either drive's speed, so its load times say nothing about a console's.
 | Command | What it does |
 | --- | --- |
 | `ps2_memstats` | Prints memory use by subsystem, and the heap's totals. |
+| `ps2_vramstats` | Prints the GS texture heap block by block, with its totals and its peak this run. |
 | `hunk_print` | QuakeSpasm's own: prints the hunk by block, with what remains. |
 | `ps2_dump_iop_mods` | Prints the boot report, the IOP modules loaded and the IOP memory free. |
 | `screenshot` | Writes the last frame to `id1/spasmNNNN.tga`. |
@@ -265,7 +266,8 @@ stdout and the log, then stops with an error screen.
 
 **Tests and traces**, armed by cvars and build flags (see [CVARS.md](CVARS.md)):
 
-- `ps2_testmaps 1` (debug builds) loads every level in turn and reports what each costs in memory.
+- `ps2_testmaps 1` (debug builds) loads every level in turn and reports what each costs in RAM and
+  in the GS texture heap.
 - `ps2_perftest 1` (profile builds) plays the three demos with a per-frame timing log, and
   `ps2_testmaps 2` turns a full circle at a few points on every level. The scripts in
   [src/tools/scripts/frame_log/](src/tools/scripts/frame_log/) summarize and compare the captures.

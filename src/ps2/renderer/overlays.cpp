@@ -281,9 +281,10 @@ void DrawMemUsageOverlay()
     DrawText(textX, textY, line);
 }
 
-// GS VRAM panel in the lower-left corner: how much of the texture heap is committed, the resident
-// textures, and this frame's uploads (streaming pressure) and the GS drains a full heap forced
-// (see rs::EnsureTextureResident; anything but zero means the frame's working set does not fit).
+// GS VRAM panel in the lower-left corner: how much of the texture heap is committed and the most
+// it ever was this run, the resident textures, and this frame's uploads (streaming pressure) and
+// the GS drains a full heap forced (see rs::EnsureTextureResident; anything but zero means the
+// frame's working set does not fit).
 void DrawVramUsageOverlay()
 {
     if (s_showVramStats.value == 0.0f)
@@ -291,7 +292,7 @@ void DrawVramUsageOverlay()
         return;
     }
 
-    constexpr int kNumLines   = 5; // header + four stats
+    constexpr int kNumLines   = 6; // header + five stats
     constexpr int kPanelWidth = 174;
     constexpr int kPadding    = 4;
 
@@ -315,6 +316,11 @@ void DrawVramUsageOverlay()
     std::snprintf(line, sizeof(line), "%-10s %s", "Used",
                   ps2::heap::FormatMemoryUnit(static_cast<size_t>(stats.totalWords - stats.freeWords) * 4u,
                                               true, unit, sizeof(unit)));
+    DrawText(textX, textY, line);
+    textY += kLineHeight;
+
+    std::snprintf(line, sizeof(line), "%-10s %s", "Peak",
+                  ps2::heap::FormatMemoryUnit(static_cast<size_t>(stats.peak.usedWords) * 4u, true, unit, sizeof(unit)));
     DrawText(textX, textY, line);
     textY += kLineHeight;
 
