@@ -21,7 +21,7 @@ extern cvar_t r_clearcolor;
 } // extern "C"
 
 namespace ps2::gamma {
-namespace {
+namespace detail {
 
 // QuakeSpasm's GLSL pass: pow(colour * contrast, gamma), the colour 0 to 1. Its Options sliders
 // step gamma from 1 down to 0.5 (brighter) and contrast from 1 to 2. The console takes anything,
@@ -33,46 +33,47 @@ constexpr float kMaxContrast = 4.0f;
 
 constexpr int kNumEntries = 256;
 
-alignas(16) static u32 s_palette[kNumEntries];
-alignas(16) static u8  s_lightRamp[kNumEntries];
+alignas(16) u32 g_palette[kNumEntries];
+alignas(16) u8  g_lightRamp[kNumEntries];
 
-static float s_gamma    = 1.0f;
+float g_gamma    = 1.0f;
+bool  g_identity = true;  // gamma 1, contrast 1: the tables are the data's
+
 static float s_contrast = 1.0f;
-static bool  s_identity = true;  // gamma 1, contrast 1: the tables are the data's
 static bool  s_pending  = false; // the tables changed since the last ApplyPendingChange
 
 // A colour or light 'x' (0 to 1, or over for a light) through the curve.
-float Curve(const float x)
+Q_ALWAYS_INLINE static float Curve(const float x)
 {
-    return std::pow(x * s_contrast, s_gamma);
+    return std::pow(x * s_contrast, g_gamma);
 }
 
-u8 CurveByte(const u32 v)
+Q_ALWAYS_INLINE static u8 CurveByte(const u32 v)
 {
     const float out = std::min(Curve(static_cast<float>(v) / 255.0f), 1.0f);
     return static_cast<u8>((out * 255.0f) + 0.5f);
 }
 
-void Rebuild()
+static void Rebuild()
 {
-    s_gamma    = std::clamp(vid_gamma.value, kMinGamma, kMaxGamma);
+    g_gamma    = std::clamp(vid_gamma.value, kMinGamma, kMaxGamma);
     s_contrast = std::clamp(vid_contrast.value, kMinContrast, kMaxContrast);
-    s_identity = (s_gamma == 1.0f && s_contrast == 1.0f);
+    g_identity = (g_gamma == 1.0f && s_contrast == 1.0f);
 
     for (int i = 0; i < kNumEntries; ++i)
     {
         // The alpha stays the data's: 255 for every index but the transparent 255.
         const u32 rgba = d_8to24table[i];
-        if (s_identity)
+        if (g_identity)
         {
-            s_palette[i] = rgba;
+            g_palette[i] = rgba;
         }
         else
         {
             const u32 r = CurveByte(rgba & 0xFFu);
             const u32 g = CurveByte((rgba >> 8) & 0xFFu);
             const u32 b = CurveByte((rgba >> 16) & 0xFFu);
-            s_palette[i] = r | (g << 8) | (b << 16) | (rgba & 0xFF000000u);
+            g_palette[i] = r | (g << 8) | (b << 16) | (rgba & 0xFF000000u);
         }
     }
 
@@ -80,16 +81,16 @@ void Rebuild()
     // which the texture it multiplies carries. Index 0 stays 0, the alpha the alpha test drops,
     // and the rest never fall to it: a luxel's light darkened to nothing would draw its texel
     // unlit instead.
-    s_lightRamp[0] = 0;
+    g_lightRamp[0] = 0;
     for (int i = 1; i < kNumEntries; ++i)
     {
-        const float light = std::pow(static_cast<float>(i) / 128.0f, s_gamma);
+        const float light = std::pow(static_cast<float>(i) / 128.0f, g_gamma);
         const int   alpha = static_cast<int>((light * 128.0f) + 0.5f);
-        s_lightRamp[i] = static_cast<u8>(std::clamp(alpha, 1, 255));
+        g_lightRamp[i] = static_cast<u8>(std::clamp(alpha, 1, 255));
     }
 }
 
-void CvarChanged(cvar_t *)
+static void CvarChanged(cvar_t *)
 {
     // The tables now, so anything built from the palette from here on takes the new curve (the sky
     // of a loading map); the GS and what was built already at the next frame.
@@ -97,48 +98,30 @@ void CvarChanged(cvar_t *)
     s_pending = true;
 }
 
-} // namespace
+} // namespace detail
 
 void Init()
 {
-    Rebuild();
-    Cvar_SetCallback(&vid_gamma, CvarChanged);
-    Cvar_SetCallback(&vid_contrast, CvarChanged);
-}
-
-const u32 * Palette()
-{
-    return s_palette;
-}
-
-const u8 * LightRamp()
-{
-    return s_lightRamp;
-}
-
-float LightCurve(const float light)
-{
-    if (s_identity)
-    {
-        return light;
-    }
-    return std::pow(std::max(light, 0.0f), s_gamma);
+    detail::Rebuild();
+    Cvar_SetCallback(&vid_gamma, detail::CvarChanged);
+    Cvar_SetCallback(&vid_contrast, detail::CvarChanged);
 }
 
 void ApplyPendingChange()
 {
-    if (!s_pending)
+    if (!detail::s_pending)
     {
         return;
     }
-    s_pending = false;
+    detail::s_pending = false;
 
     // The frame left drawing reads the CLUTs and the sky's layers until it is done: shown now,
     // on its vsync, so the next BeginFrame has nothing to wait for.
     rs::FinishFrameInFlight();
 
-    gs::UpdateCluts(s_palette, s_lightRamp);
+    gs::UpdateCluts(detail::g_palette, detail::g_lightRamp);
     sky::PaletteChanged();
+
     if (r_clearcolor.callback != nullptr)
     {
         r_clearcolor.callback(&r_clearcolor);
