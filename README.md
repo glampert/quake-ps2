@@ -472,12 +472,10 @@ src/
     debug/              on-screen error printing, the log file, stack traces, EE exception handling
     menu/               the main menu's About page
     tests/              standalone bring-up scenes and tests
-    builtin/            images compiled into the ELF (the QUAKE plaque, the main menu's About
-                        item, the palette), from imgdump
+    builtin/            images compiled into the ELF (the QUAKE plaque, the main menu's About item, the palette), from imgdump
   tools/
     host/               host-side command line tools (unpak, imgdump, musenc, pakzip)
-    scripts/            Python helpers (symbolize, compile_commands.json, frame logs, the USB
-                        image, the About item) and make_github_release.sh
+    scripts/            Python helpers (symbolize, compile_commands.json, frame logs, the USB image, the About item) and make_github_release.sh
     vclpp/              VCL preprocessor for the VU microprograms (git submodule)
     vu-checker/         openvcl/dvp-as output checks run by every VU build (git submodule)
     miniz/              deflate codec for the save games, the compressed packs and pakzip (git submodule)
