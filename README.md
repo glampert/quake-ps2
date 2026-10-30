@@ -1,7 +1,7 @@
 
 # Quake port for the PlayStation 2
 
-![Quake 2 PS2](misc/screens/banner.jpg "Quake 2 PS2")
+![Quake PS2](misc/screens/banner.jpg "Quake PS2")
 
 ## Overview
 
