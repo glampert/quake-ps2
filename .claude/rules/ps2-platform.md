@@ -169,6 +169,13 @@ The boot code (`system/iop_boot.cpp`) is the Quake II port's as of quake2-ps2 94
   leaves dirty inode and directory metadata cached (`PFS_MT_ROBUST`, 0x02, would flush it).
   `fileXioSync("pfs0:", 0)` does: `SyncGameDataDevice()` runs it after each log write, and
   returns 0 without an RPC on `host:` and USB.
+- **IOP thread priorities decide who waits on a file read.** The IOP kernel has no time slicing:
+  a thread runs until it blocks or a higher-priority one (a lower number) becomes ready, and an
+  interrupt's `iSignalSema`/`iWakeupThread` switches at its exit. fileXio's RPC thread is 40, and
+  a HDD read keeps it running (dev9's `SpdDmaTransfer` spins on the DMA with interrupts on, by
+  design), so any other server at 40 waits for the whole read; ps2sdk's audsrv was one (its RPC
+  thread 40, its play thread 39). The game's audsrv runs its RPC thread at 39 (audio.md). Check a
+  module's `CreateThread` priority before routing per-frame RPCs through it.
 - **`mass:` is `mass0:`.** iomanX reads a missing unit number as 0. bdmfs_fatfs serves the N-th
   FAT/exFAT volume it mounted as `massN:` (N < 10), one per partition, in mount order;
   usbmass_bd drives two USB drives at once. The boot probes all ten.

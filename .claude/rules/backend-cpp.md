@@ -26,6 +26,8 @@ paths:
   2026-10-18). To check locally, redeclare them with `__attribute__((warn_unused_result))` in a
   header passed by `-include`. Start it with `#pragma GCC system_header`, or the tools' own
   `-Wredundant-decls` rejects the redeclarations.
+- `src/ps2/iop/audsrv` is ps2sdk's C for the IOP, not backend code: none of this applies to it.
+  Keep it close to upstream and tag every change `[PS2_QUAKE]` (its README).
 - Reach the engine through `ps2/common.h`, not by including engine headers directly. It
   renames QuakeSpasm's BSP `texinfo_t` to `q1_texinfo_t` for C++, because libdraw's
   `draw_buffers.h` defines its own `texinfo_t`; the renderer works from `mtexinfo_t` anyway.

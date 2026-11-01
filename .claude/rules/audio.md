@@ -20,6 +20,20 @@ The README's "Sound" section has the design. The facts behind it:
   the ring half full (1175 frames at 22050) with `playing` off, and the read cursor stays put
   until a play call turns it on. A feeder that only tops the queue up to 940 frames never made
   that call, and the game stayed silent. `AudsrvDevice::Init` sends one frame of silence.
+- **On the IOP, audsrv answers behind a file read unless it outranks fileXio.** `audsrv_available`
+  and `audsrv_play_audio` are synchronous RPCs; ps2sdk's audsrv creates its RPC thread at a literal
+  40 (`rpc_server.c`), fileXio's priority, and the IOP has no time slicing, so a request waits out
+  any read in progress (a HDD read keeps fileXio's thread running: dev9's DMA spin). On the Quake II
+  port's console from the HDD the free-space query waited up to 65 ms behind a loader read, most of
+  the ring, heard as a stutter at the railgun pickup; from USB never. **Since 2026-11-01 the game
+  builds its own audsrv** (`src/ps2/iop/audsrv`, the SDK's at `329e2bb` plus a `rpc_prio=`
+  argument, every change tagged `[PS2_QUAKE]`) and `iop_boot.cpp` starts it at 39, the play
+  thread's priority: on that console the slowest free-space call went 65.4 → 0.53-0.64 ms. The
+  module's greeting says which build runs: `greetings from version 0.93 (rpc thread priority 39)`
+  in the IOP console. Here the feeder makes those calls, so a wait holds the feeder, not a frame,
+  but a wait past its 43 ms queue depth still empties the ring; the frame log's `sndQuery` and
+  `sndPlay` columns (`audio/snd.h`, profile builds) are the feeder's time inside each RPC per
+  frame, to see it on a console.
 - **audsrv's EE library is single-threaded:** every call goes through one static `sbuff` and
   one RPC client. Only the feeder calls it once `SNDDMA_Init` returns.
 - **The R5900 has no LL/SC.** The feeder and the main thread share only single loads and

@@ -25,6 +25,7 @@
 
 #include "ps2/audio/audsrv_device.h"
 #include "ps2/audio/mix_ring.h"
+#include "ps2/audio/snd.h"
 #include "ps2/common.h"
 #include "ps2/renderer/profile.h"
 
@@ -79,12 +80,34 @@ static u64 s_tickBusClocks = 0;
 // rule out is the compiler's, and volatile makes it load and store each one where the code does.
 static volatile bool s_feederQuit = false;
 
+// The cycles the feeder spent inside audsrv's free-space query and inside its plays, as monotonic
+// sums the feeder alone writes (snd.h): the frame log takes the differences. Only written in
+// profile builds (TimedRpc), where the frame log is.
+static volatile u32 s_queryCycles = 0;
+static volatile u32 s_playCycles  = 0;
+
 #if PS2_QUAKE_PROFILE
 // Cycles the feeder has spent awake, wall time, round trips to the IOP included. Only the
 // feeder writes it; SNDDMA_Submit folds what is new since its last look into the Sound event.
 static volatile u32 s_feederCycles = 0;
 static u32 s_feederCyclesSeen = 0;
+static u32 s_queryCyclesSeen  = 0;
+static u32 s_playCyclesSeen   = 0;
 #endif // PS2_QUAKE_PROFILE
+
+// An audsrv RPC on the feeder, timed into one of the sums above in profile builds.
+template<typename Call>
+Q_ALWAYS_INLINE int TimedRpc([[maybe_unused]] volatile u32 & sum, Call && call)
+{
+#if PS2_QUAKE_PROFILE
+    const ps2::debug::CpuCycles start = ps2::debug::ReadCycles();
+    const int result = call();
+    sum = sum + (ps2::debug::ReadCycles() - start);
+    return result;
+#else  // PS2_QUAKE_PROFILE
+    return call();
+#endif // PS2_QUAKE_PROFILE
+}
 
 int PickSampleRate()
 {
@@ -107,7 +130,7 @@ int PickSampleRate()
 void Feed()
 {
     const int feed   = s_device.FeedFrames();
-    const int queued = s_device.CapacityFrames() - (s_device.FreeBytes() / AudsrvDevice::kFrameBytes);
+    const int queued = s_device.CapacityFrames() - (TimedRpc(s_queryCycles, [] { return s_device.FreeBytes(); }) / AudsrvDevice::kFrameBytes);
 
     const int room = (kQueueTargetFeeds * feed) - queued;
     if (room <= 0)
@@ -118,13 +141,13 @@ void Feed()
     // `paintedtime` is the mixer's, in snd_dma.c: the main thread writes it, after the samples.
     // Read once, through a volatile lvalue: the engine doesn't declare it volatile.
     const int painted = *static_cast<const volatile int *>(&paintedtime);
-    int depth = queued + s_mixRing.Drain(s_device, painted, room);
+    int depth = queued + TimedRpc(s_playCycles, [painted, room] { return s_mixRing.Drain(s_device, painted, room); });
 
     const int lowWater = kQueueLowFeeds * feed;
     while (depth < lowWater)
     {
         const int frames = ((lowWater - depth) < kSilenceFrames) ? (lowWater - depth) : kSilenceFrames;
-        const int sent   = s_device.Enqueue(s_silence, frames * AudsrvDevice::kFrameBytes);
+        const int sent   = TimedRpc(s_playCycles, [frames] { return s_device.Enqueue(s_silence, frames * AudsrvDevice::kFrameBytes); });
         if (sent <= 0)
         {
             break;
@@ -232,6 +255,21 @@ void StopFeeder()
 }
 
 } // namespace
+
+void ps2::audio::TakeFeederRpcCycles(u32 & queryCycles, u32 & playCycles)
+{
+#if PS2_QUAKE_PROFILE
+    const u32 query = s_queryCycles;
+    const u32 play  = s_playCycles;
+    queryCycles = query - s_queryCyclesSeen;
+    playCycles  = play - s_playCyclesSeen;
+    s_queryCyclesSeen = query;
+    s_playCyclesSeen  = play;
+#else  // PS2_QUAKE_PROFILE
+    queryCycles = 0;
+    playCycles  = 0;
+#endif // PS2_QUAKE_PROFILE
+}
 
 // ------------------------------------------------------------------------------------------------
 // SNDDMA_*

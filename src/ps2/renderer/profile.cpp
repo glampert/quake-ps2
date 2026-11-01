@@ -14,6 +14,7 @@
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/gs.h" // GetPresentClock
 #include "ps2/fs/async_io.h"  // TakeFrameStats
+#include "ps2/audio/snd.h"    // TakeFeederRpcCycles
 
 #include <cstdarg>
 #include <cstdio>
@@ -137,6 +138,11 @@ struct FrameSample
     // The background loader (fs/async_io.h): bytes it landed during the frame, and how many
     // requests were queued or running at the capture.
     int aioBytes, aioQ;
+
+    // The sound feeder's time inside audsrv's two RPCs during the frame (audio/snd.h): the
+    // free-space query and the plays. Either waits on the IOP while a file read is out there, so
+    // these say how long the feeder was held, and the ring with it, by the loader's reads.
+    u32 sndQueryCycles, sndPlayCycles;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -284,9 +290,10 @@ void WriteBatch()
              "Particles,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,ClParticles,SndMix,FsIo,Music,Input,"
              "tris,batches,particles,"
              "vramUploads,vramOomSyncs,vramResident,vramUsedKB,vramEvicts,"
-             "chainKB,chainKicks,chainDrains,aioBytes,aioQ\n");
+             "chainKB,chainKicks,chainDrains,aioBytes,aioQ,sndQuery,sndPlay\n");
         Emit("FLOG#note,timings are microseconds\n");
         Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
+        Emit("FLOG#note,sndQuery and sndPlay are the sound feeder's time inside audsrv's free-space and play RPCs during the frame, in microseconds\n");
     }
 
     // Built into one buffer and written with a single printf: every call is a
@@ -309,10 +316,11 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
                           s.tris, s.batches, s.particles,
                           s.vramUploads, s.vramOomSyncs, s.vramResident, s.vramUsedKB, s.vramEvicts,
-                          s.chainKB, s.chainKicks, s.chainDrains, s.aioBytes, s.aioQ);
+                          s.chainKB, s.chainKicks, s.chainDrains, s.aioBytes, s.aioQ,
+                          ToMicrosec(s.sndQueryCycles), ToMicrosec(s.sndPlayCycles));
         }
 
         Emit("%s", line);
@@ -404,6 +412,8 @@ void FrameLogCapture()
     const aio::Stats aioStats = aio::TakeFrameStats();
     s.aioBytes = static_cast<int>(aioStats.bytesLanded);
     s.aioQ     = static_cast<int>(aioStats.queueDepth);
+
+    audio::TakeFeederRpcCycles(s.sndQueryCycles, s.sndPlayCycles);
 }
 
 void FrameLogFlush()

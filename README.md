@@ -390,7 +390,12 @@ layout.
 
 QuakeSpasm's own mixer runs unchanged, at 22050 Hz, and the backend ([audio/](src/ps2/audio/))
 streams what it mixes to the SPU2 through the audsrv IOP driver. A feeder thread keeps that stream
-topped up, so the sound carries on cleanly through stalls such as a level load or a save.
+topped up, so the sound carries on cleanly through stalls such as a level load or a save. The
+audsrv is the game's own copy of ps2sdk's ([ps2/iop/audsrv](src/ps2/iop/audsrv/README.md)), started
+with its RPC thread one priority above fileXio's: the SDK's answered at fileXio's priority, and the
+IOP has no time slicing, so on the HDD the feeder's calls waited out any file read in progress, up
+to 65 ms of audsrv's 106 ms ring on the Quake II port's console, which is the audible stutter at a
+pickup there. The rest of the IOP modules are the SDK's.
 
 **Sounds first asked for mid-level load in the background** ([sound_load.h](src/ps2/audio/sound_load.h)):
 `S_LoadSound` outside a level's precache (and with the loading plaque down) hands the WAV to the

@@ -11,7 +11,9 @@ C++ backend of the Quake II port (quake2-ps2). Two halves:
   renderer's public surface itself: `draw.h`, `render.h`, `gl_texmgr.h`, `vid.h`,
   `GL_BeginRendering`/`GL_EndRendering`, `Sky_*`. Plus `Sys_*`, `IN_*`, `SNDDMA_*`, `CDAudio_*`/`BGM_*`,
   `PL_*` and the `net_drivers[]` table. [src/ps2/common.h](src/ps2/common.h) is the one header that
-  bridges to the C engine.
+  bridges to the C engine. The exception is `src/ps2/iop/audsrv`, the game's copy of ps2sdk's
+  audsrv IOP module: the SDK's C, built with the IOP compiler, kept close to upstream with every
+  change tagged `[PS2_QUAKE]` ([its README](src/ps2/iop/audsrv/README.md)).
 
 [README.md](README.md) is the architecture document and says what works so far. Read the section you
 need before changing a subsystem, and keep it current when behaviour changes. [CVARS.md](CVARS.md)
@@ -33,7 +35,8 @@ none of id's maps sets it, so it stays a future exercise for custom maps.
 ## Toolchain
 
 - EE compiler: `mips64r5900el-ps2-elf-gcc`/`g++` (GCC 15). There is no `ee-gcc`/`ee-g++`, so
-  don't go looking for them. VU tools: `openvcl`, `dvp-as`. Also `bin2c`.
+  don't go looking for them. IOP compiler (audsrv only): `mipsel-none-elf-gcc`, through the SDK's
+  `samples/Makefile.iopglobal`, into `build/iop/`. VU tools: `openvcl`, `dvp-as`. Also `bin2c`.
 - `$PS2DEV` = `~/ps2dev`, `$PS2SDK` = `~/ps2dev/ps2sdk` (EE headers in `ee/include`). The
   SDK's C sources, for checking what a library really does, are under
   `~/ps2dev/src/ps2dev/build/ps2sdk/ee/<lib>/src/`. gsKit is at `~/ps2dev/gsKit`.
