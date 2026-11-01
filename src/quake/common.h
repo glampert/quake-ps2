@@ -327,6 +327,9 @@ typedef struct pack_s
 	// [PS2_QUAKE]: a compressed pakN.pkz in the pak's place, or NULL. It reads its own files:
 	// handle is -1, and each packfile_t's filepos is the file's index in it (ps2/engine_hooks.h).
 	struct ps2_pkz_s	*pkz;
+	// [PS2_QUAKE]: the background loader's descriptor on a .pak (COM_LocateFile), opened on first
+	// use, -1 until then. Only the loader reads through it; the main thread's reads use 'handle'.
+	int		asyncFd;
 } pack_t;
 
 typedef struct searchpath_s
@@ -354,6 +357,28 @@ int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
 qboolean COM_FileExists (const char *filename, unsigned int *path_id);
 void COM_CloseFile (int h);
+
+// [PS2_QUAKE]: where a file lies, for the background loader (ps2/fs/async_io.h): a descriptor and
+// a byte range, found without reading it. COM_LocateFile returns the file's length or -1, as
+// COM_FindFile does; a found file whose fd is -1 can only be loaded synchronously (the pack's
+// reader descriptor couldn't be opened). The range is the compressed one for
+// FS_LOC_PKZ_DEFLATED, with rawBytes the inflated size. Release it once the read is done: a
+// loose file's stream is held open until then.
+#define FS_LOC_LOOSE		0
+#define FS_LOC_PAK		1
+#define FS_LOC_PKZ_STORED	2
+#define FS_LOC_PKZ_DEFLATED	3
+typedef struct fs_location_s
+{
+	int		kind;
+	int		fd;
+	unsigned	offset;
+	unsigned	bytes;
+	unsigned	rawBytes;
+	FILE		*looseFile;
+} fs_location_t;
+int COM_LocateFile (const char *filename, fs_location_t *out);
+void COM_ReleaseLocation (fs_location_t *loc);
 
 // these procedures open a file using COM_FindFile and loads it into a proper
 // buffer. the buffer is allocated with a total size of com_filesize + 1. the

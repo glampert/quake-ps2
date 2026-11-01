@@ -15,6 +15,7 @@
 #include "ps2/debug/exception_handler.h"
 #include "ps2/debug/log_file.h"
 #include "ps2/tests/map_cycle.h"
+#include "ps2/tests/aio_test.h"
 #include "ps2/tests/perf_run.h"
 
 #include <cstdlib>
@@ -147,6 +148,7 @@ int main(int argc, char ** argv)
         // which the next Host_Frame runs.
 #if PS2_QUAKE_DEBUG
         ps2::test::RunMapCycle();
+        ps2::test::RunAioTest();
 #endif // PS2_QUAKE_DEBUG
 #if PS2_QUAKE_PROFILE
         ps2::test::RunPerfTest();

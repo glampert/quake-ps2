@@ -134,6 +134,14 @@ do the same, and never seek past the file's end. `COM_LoadPkzFile` keeps only th
 `COM_LoadPackFile`'s test for id's pak0: its CRC is of the pak's directory bytes, which a pkz
 doesn't keep, so a pkz of the shareware pak0 still plays as the shareware version.
 
+For the background loader (`ps2/fs/async_io.h`, `async_io_c.h`): `COM_LocateFile` (common.c,
+declared in common.h) finds a file without reading it: a `.pak` gets a second descriptor
+(`pack_t::asyncFd`, opened on first use, closed in `COM_Game_f` after `PS2_AsyncIoDrain`), a pkz
+entry comes back as its compressed range on the pack's reader descriptor (`PS2_PkzLocate`), a loose
+file as its own stream's `fileno`, held open until `COM_ReleaseLocation`. Missing is -1 as from
+`COM_FindFile`; found with `fd` -1 means "load synchronously". It calls `PS2_FileOpening` like an
+open, so the perf run's `FLOG#open` and the loading screen see it.
+
 For rumble: `view.c` calls `PS2_RumbleDamage` from `V_ParseDamage` and `PS2_RumblePickup` from
 `V_BonusFlash_f`. For the memory reports: `zone.c` adds `Cache_UsedBytes` (the cache's list is
 private to it), which `ps2_testmaps` prints.

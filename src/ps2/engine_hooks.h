@@ -83,7 +83,8 @@ void PS2_LoadingScreenEnd(void);
 // looks for one before each pak and keeps it in a pack_t like a pak's, with the same packfile_t
 // list for the lookups; these are the part that knows zips (src/ps2/fs/pkz_pack.cpp). A pkz reads
 // its files itself, so its pack_t has no handle (-1) and its pkz set, and each packfile_t's
-// filepos is the file's index in it. Only the main thread may use one.
+// filepos is the file's index in it. Only the main thread may use one, except through
+// PS2_PkzLocate's reader descriptor, which the background loader reads.
 
 typedef struct ps2_pkz_s ps2_pkz_t;
 
@@ -112,8 +113,18 @@ void PS2_PkzListFiles(ps2_pkz_t * pkz, ps2_pkz_file_fn fn, void * context);
 int PS2_PkzOpenHandle(ps2_pkz_t * pkz, int index, const char * name);
 FILE * PS2_PkzOpenStream(ps2_pkz_t * pkz, int index, const char * name);
 
+// Where file 'index' lies, for the background loader (src/ps2/fs/async_io.h): the pack's reader
+// descriptor (a second one on the pack, opened here on first use and read by the loader alone),
+// the data's offset and compressed size, its inflated size, and whether it is deflated (otherwise
+// stored: the range is the file's bytes). 1 on success, 0 if the pack is damaged there, -1 if the
+// descriptor couldn't be opened (the caller loads synchronously). Reads at most a local header,
+// on the main thread.
+int PS2_PkzLocate(ps2_pkz_t * pkz, int index, int * fd, unsigned * offset, unsigned * compBytes,
+                  unsigned * rawBytes, int * deflated);
+
 // Closes the pack (COM_Game_f, leaving a game directory). Streams still open on it keep it alive
-// until they are closed.
+// until they are closed. Call PS2_AsyncIoDrain first: a background read may still be going
+// through the reader descriptor.
 void PS2_PkzClose(ps2_pkz_t * pkz);
 
 // ------------------------------------------------------------------------------------------------

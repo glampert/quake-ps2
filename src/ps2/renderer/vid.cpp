@@ -33,6 +33,8 @@
 #include "ps2/tests/map_cycle.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/tests/test_quit.h"
+#include "ps2/tests/aio_test.h"
+#include "ps2/fs/async_io.h"
 
 #include <algorithm>
 #include <cstring>
@@ -385,6 +387,7 @@ void VID_Init()
     // which the log's backlog waits on (debug/log_file.h).
     ps2::sys::RegisterCommands();
     ps2::debug::LogFileRegisterCvar();
+    ps2::aio::RegisterCvars();
     ps2::save::Init();
     ps2::test::RegisterPerfTestCvar();
 #if PS2_QUAKE_DEBUG || PS2_QUAKE_PROFILE
@@ -392,6 +395,7 @@ void VID_Init()
 #endif // PS2_QUAKE_DEBUG || PS2_QUAKE_PROFILE
 #if PS2_QUAKE_DEBUG
     ps2::test::InitMapCycle();
+    ps2::test::InitAioTest();
 #endif // PS2_QUAKE_DEBUG
 
     // Host_Init queues "vid_unlock" to run after the configs: QuakeSpasm locks its video mode

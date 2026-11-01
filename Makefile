@@ -94,6 +94,7 @@ PS2_CXX_SRC =                         \
 	ps2/save/mc_icon.cpp              \
 	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
+	ps2/fs/async_io.cpp               \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
@@ -121,6 +122,7 @@ PS2_CXX_SRC =                         \
 	ps2/tests/map_cycle.cpp           \
 	ps2/tests/perf_run.cpp            \
 	ps2/tests/test_quit.cpp           \
+	ps2/tests/aio_test.cpp            \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/pipeline_dump.cpp       \
@@ -190,6 +192,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/tests/map_cycle.cpp           \
 	ps2/tests/perf_run.cpp            \
 	ps2/tests/test_quit.cpp           \
+	ps2/tests/aio_test.cpp            \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/pipeline_dump.cpp       \

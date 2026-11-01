@@ -29,6 +29,10 @@ void NoteRead(int bytes);
 // The file NoteFile named last, for the load trace's lines; "?" before any.
 const char * CurrentFile();
 
+// Whether the plaque is up: PS2_LoadingScreenBegin has run and PS2_LoadingScreenEnd hasn't. A
+// level load, under which every file read stays synchronous (fs/async_io.h's clients ask).
+bool Shown();
+
 // Draws the loading screen again at once, if the plaque is up: the save notice going up or
 // coming down on it (save/save_notice.h). False, drawing nothing, while the plaque is down.
 bool Redraw();

@@ -15,6 +15,7 @@
 
 #include "ps2/input/keyboard.h"
 #include "ps2/audio/music_stream.h"
+#include "ps2/fs/async_io.h"
 #include "ps2/system/iop_boot.h"
 #include "ps2/system/sys.h"
 #include "ps2/common.h"
@@ -327,11 +328,12 @@ bool Keyboard::NextEvent(Event & event)
     }
 
     // Each read is a read() on the usbkbd:dev device file, through the same file client and IOP
-    // file server as the music stream's reads. One made while the music reader has a read out
-    // waits for it to land: over USB on a console, the Quake II port's frames stalled ~300 ms
-    // every 640 ms that way. The driver keeps the keys queued, so they are picked up once the
-    // read is done; checked per read, since each one sleeps and lets the reader start.
-    if (audio::MusicReadPending())
+    // file server as the music stream's and the background loader's reads. One made while either
+    // has a read out waits for it to land: over USB on a console, the Quake II port's frames
+    // stalled ~300 ms every 640 ms that way. The driver keeps the keys queued, so they are picked
+    // up once the read is done; checked per read, since each one sleeps and lets the reader
+    // start.
+    if (audio::MusicReadPending() || aio::Pending())
     {
         return false;
     }

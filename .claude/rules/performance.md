@@ -116,11 +116,16 @@ paths:
   local cursor, a BSP walk that passes clip flags down the tree with an inline corner test
   instead of `BoxOnPlaneSide` (-32%), and the particle gather through a local cursor with
   `sq`. Release View went from 3405 to 2614 µs.
-- **Parked: background loading** of mid-level models/skins (a loader thread doing I/O,
-  decode, and a Loading state). It is the only fix left for DM player joins and dropped world
-  weapons. Decode matters as much as I/O: v_rail's md2+skin cost ~8.9 ms, of which only
-  ~1.7 ms was I/O. The design is in the user's plan file
-  `~/.claude/plans/i-want-you-to-binary-spindle.md`.
+- **Background loading (2026-11-01, from quake2-ps2 3873e6f..d8add53):** the loader thread
+  `ps2::aio` (fs/async_io.cpp), `COM_LocateFile` and the `ps2_testaio` self-test, with the sleeping
+  vsync wait (gs.cpp) that gives it the frame's idle time. The Quake II port's console captures
+  (its performance.md) are the measurements behind the design: mid-level loads there were 95% I/O
+  (41-58 ms from the HDD, 91-147 ms from USB for a model, a skin or a sound), the drive 5 ms per
+  SCSI command plus 900 KB/s over USB 1.1, 1.35 or 6-8 MB/s from the HDD, and a 32 KB
+  cluster-aligned chunk one command. This port's self-test in PCSX2 from the pkz: 24 comparisons,
+  0 failures, 2.1 MB landed in 634 ms as the drive is and 3.1 s throttled to 900 KB/s, the
+  main-thread probe read 2 ms at worst beside 139 chunks in flight (`emulog`, 2026-11-01). The pak
+  and stored-pkz kinds want a run without the pkz.
 
 ## Loading
 

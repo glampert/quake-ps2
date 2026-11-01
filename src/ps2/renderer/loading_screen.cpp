@@ -79,6 +79,11 @@ void NoteRead(const int bytes)
     }
 }
 
+bool Shown()
+{
+    return s_active;
+}
+
 const char * CurrentFile()
 {
     return s_fileName;

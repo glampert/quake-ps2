@@ -13,6 +13,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/gs.h" // GetPresentClock
+#include "ps2/fs/async_io.h"  // TakeFrameStats
 
 #include <cstdarg>
 #include <cstdio>
@@ -132,6 +133,10 @@ struct FrameSample
     // stopped waiting for the GS). chainKicks is the number this refactor exists
     // to bring down.
     int chainKB, chainKicks, chainDrains;
+
+    // The background loader (fs/async_io.h): bytes it landed during the frame, and how many
+    // requests were queued or running at the capture.
+    int aioBytes, aioQ;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -150,8 +155,9 @@ constexpr int kMaxOpenNotes = 64;
 
 struct OpenNote
 {
-    u32  frameIndex;
-    char name[MAX_QPATH];
+    u32          frameIndex;
+    const char * kind; // "open" or "ready"
+    char         name[MAX_QPATH];
 };
 
 static OpenNote s_openNotes[kMaxOpenNotes];
@@ -278,8 +284,9 @@ void WriteBatch()
              "Particles,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,ClParticles,SndMix,FsIo,Music,Input,"
              "tris,batches,particles,"
              "vramUploads,vramOomSyncs,vramResident,vramUsedKB,vramEvicts,"
-             "chainKB,chainKicks,chainDrains\n");
+             "chainKB,chainKicks,chainDrains,aioBytes,aioQ\n");
         Emit("FLOG#note,timings are microseconds\n");
+        Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
     }
 
     // Built into one buffer and written with a single printf: every call is a
@@ -302,10 +309,10 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.tris, s.batches, s.particles,
                           s.vramUploads, s.vramOomSyncs, s.vramResident, s.vramUsedKB, s.vramEvicts,
-                          s.chainKB, s.chainKicks, s.chainDrains);
+                          s.chainKB, s.chainKicks, s.chainDrains, s.aioBytes, s.aioQ);
         }
 
         Emit("%s", line);
@@ -313,7 +320,7 @@ void WriteBatch()
 
     for (int i = 0; i < s_openCount && i < kMaxOpenNotes; ++i)
     {
-        Emit("FLOG#open,%u,%s\n", s_openNotes[i].frameIndex, s_openNotes[i].name);
+        Emit("FLOG#%s,%u,%s\n", s_openNotes[i].kind, s_openNotes[i].frameIndex, s_openNotes[i].name);
     }
     if (s_openCount > kMaxOpenNotes)
     {
@@ -393,6 +400,10 @@ void FrameLogCapture()
     s.chainKB     = static_cast<int>(cmdbuf::BytesLastFrame() / 1024u);
     s.chainKicks  = cmdbuf::KicksLastFrame();
     s.chainDrains = cmdbuf::EmergencyDrainsLastFrame();
+
+    const aio::Stats aioStats = aio::TakeFrameStats();
+    s.aioBytes = static_cast<int>(aioStats.bytesLanded);
+    s.aioQ     = static_cast<int>(aioStats.queueDepth);
 }
 
 void FrameLogFlush()
@@ -436,19 +447,20 @@ void FrameLogNoteOpens(const bool enable)
     s_noteOpens = enable;
 }
 
-void FrameLogNoteOpen(const char * fileName)
+static void NoteFile(const char * const kind, const char * const fileName)
 {
     if (!s_noteOpens || !Enabled())
     {
         return;
     }
-    // The row the open is charged to: the frame being measured now, which FrameLogCapture will
+    // The row the note is charged to: the frame being measured now, which FrameLogCapture will
     // number one past the last row it wrote.
     const u32 row = s_frameIndex + 1;
     if (s_openCount < kMaxOpenNotes)
     {
         OpenNote & note = s_openNotes[s_openCount];
         note.frameIndex = row;
+        note.kind       = kind;
         std::snprintf(note.name, sizeof(note.name), "%s", (fileName != nullptr) ? fileName : "?");
     }
     else if (s_openCount == kMaxOpenNotes)
@@ -456,6 +468,16 @@ void FrameLogNoteOpen(const char * fileName)
         s_openOverflowRow = row;
     }
     ++s_openCount;
+}
+
+void FrameLogNoteOpen(const char * fileName)
+{
+    NoteFile("open", fileName);
+}
+
+void FrameLogNoteReady(const char * fileName)
+{
+    NoteFile("ready", fileName);
 }
 
 void FrameLogMarkMap(const char * mapName)

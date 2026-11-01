@@ -26,6 +26,7 @@ enum class MemTag : size_t
     Music,     // Streamed CD music read buffers (audio/music_stream.cpp), held only while a track plays.
     SaveData,  // A save game being written or read: the deflate state, the deflated save, the card icon.
     Pack,      // Compressed game packs (fs/pkz_pack.cpp): directory tables, restart points, inflate buffers.
+    Aio,       // The background loader (fs/async_io.cpp): its inflate workspace, staging buffers, the read-ahead ring.
 
     TagCount,  // Number of entries in this enum. Internal use only.
 };

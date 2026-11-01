@@ -123,6 +123,11 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   Every load peak rose by 0.05-0.06 MB, and the run's worst moment from 26.83 to 26.89 MB (e3m2);
   the hunk, the cache and the pools didn't move. A release build's tables are 1.7 KB smaller
   (no CRCs). The logs are `build/baselines/q1-mapcycle-pkz.emulog.txt` and `-pak.emulog.txt`.
+- **The background loader** (tag `Aio`, 2026-11-01, from quake2-ps2): ~18 KB static (its 16 KB
+  stack and 32 request slots) and a 40 KB inflate workspace on the heap from the first deflated
+  request on, kept (`AioTest` reads `tag Aio holds 40.19 KB after the pass`). Each client that comes
+  to it holds its own staging while a request is in flight, and drains before any sweep, so nothing
+  of it survives into a load.
 - **The hunk stays 16 MB:** every level fits with room to spare, but the cache fills whatever
   the levels leave. A smaller hunk would trade that room for models and sounds evicted and read
   back mid-level (`Mod_Extradata`, `S_LoadSound`), a hitch each.

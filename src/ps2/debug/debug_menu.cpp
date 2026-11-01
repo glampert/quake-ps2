@@ -142,7 +142,8 @@ void GiveAllWeapons()
 // runs.
 void StartTest(const char * cvarName)
 {
-    if (Cvar_VariableValue("ps2_perftest") != 0.0f || Cvar_VariableValue("ps2_testmaps") != 0.0f)
+    if (Cvar_VariableValue("ps2_perftest") != 0.0f || Cvar_VariableValue("ps2_testmaps") != 0.0f ||
+        Cvar_VariableValue("ps2_testaio") != 0.0f)
     {
         std::snprintf(s_feedback, sizeof(s_feedback), "a test is running already");
         return;
@@ -167,6 +168,11 @@ void StartMapCycle()
 {
     StartTest("ps2_testmaps");
 }
+
+void StartAioTest()
+{
+    StartTest("ps2_testaio");
+}
 #endif // PS2_QUAKE_DEBUG
 
 const Row kRows[] = {
@@ -188,6 +194,7 @@ const Row kRows[] = {
 #endif // PS2_QUAKE_PROFILE
 #if PS2_QUAKE_DEBUG
     { "Start map cycle",      "every level, and what each one takes",  nullptr,         StartMapCycle,  nullptr   },
+    { "Start loader test",    "reads files in the background, compares", nullptr,       StartAioTest,   nullptr   },
 #endif // PS2_QUAKE_DEBUG
 };
 

@@ -66,7 +66,13 @@ paths:
   and copy the unaligned head and tail in their completion callback (`rests` in fileXio_rpc.c,
   `_fio_read_intr` in fileio.c). So `read()` and `fread()` may target any EE memory: the
   compressed packs read a stored file straight into the engine's buffer (fs/pkz_pack.cpp). Only
-  their own input buffers are `alignas(64)`, which spares those copies.
+  their own input buffers are `alignas(64)`, which spares those copies. **Unless another thread
+  runs meanwhile:** those head and tail copies land inside the completion interrupt, so a
+  destination that shares a cache line with anything another thread touches is corrupted when
+  that line is written back. The background loader (fs/async_io.h) therefore takes only 64-byte
+  aligned destinations sized in whole 64-byte units, owning their lines (`aio::Submit` asserts
+  it). Chunk boundaries inside one destination are safe: both halves of a shared line belong to
+  the same request and land in sequence. PCSX2 has no data cache and never shows a violation.
 - **`dma_channel_send_chain` writes back only the tag buffer** (`data` to `data + qwc`), never
   the data its REF tags point at. Anything the CPU wrote and a chain REFs needs its own
   `SyncDCache` first, or the DMAC reads stale RAM. PCSX2 has no data cache, so only a console

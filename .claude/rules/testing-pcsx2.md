@@ -119,6 +119,16 @@
   VU1 microprogram and VRAM upload smoke test. With a `screenshot` it checks all of that
   without anyone watching. Its variants are in [CVARS.md](../../CVARS.md).
 
+- **`ps2_testaio 1`** (debug builds): the background loader's self-test (`tests/aio_test.cpp`).
+  It stops the attract loop (`disconnect`, as the perf run does), then reads 12 files through the
+  loader and through `COM_LoadMallocFile` and compares them, as the drive is and throttled to
+  900 KB/s, with a main-thread read of `gfx/pause.lmp` timed every frame meanwhile; each line
+  gives the source kind (loose, pak, pkz-stored, pkz-deflated), the size and the request-to-landed
+  time, and the run ends in `AioTest: PASS`/`FAIL` and quits (`ps2_test_quit`). About 10 s in
+  PCSX2 from the pkz (2026-11-01: 24 comparisons, 0 failures, `tag Aio holds 40.19 KB` after each
+  pass, the inflate workspace). The pak kind needs a run without the pkz. It writes config.cfg on
+  the way out: restore it.
+
 The rest are scripted runs:
 
 - **Map cycle** (debug builds): `ps2_testmaps 1` in `autoexec.cfg`. It lists every level in the

@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "ps2/engine_hooks.h" // [PS2_QUAKE]: COM_FindFile names what it opens, for the frame log and the loading screen; the compressed packs
+#include "ps2/fs/async_io_c.h" // [PS2_QUAKE]: PS2_AsyncIoDrain before a pack closes
+#include <fcntl.h>  // [PS2_QUAKE]: open, for COM_LocateFile
+#include <unistd.h> // [PS2_QUAKE]: close
 #include <errno.h>
 
 static char	*largv[MAX_NUM_ARGVS + 1];
@@ -1954,6 +1957,110 @@ void COM_CloseFile (int h)
 
 
 /*
+===========
+COM_LocateFile
+
+[PS2_QUAKE]: COM_FindFile's search without its read, for the background loader (ps2/fs/async_io.h).
+The loader only ever sees a descriptor and a byte range: a pak's second descriptor, opened here
+the first time a file of it is located and closed with the pak (COM_Game_f); a pkz's reader
+descriptor and the entry's (compressed) range (PS2_PkzLocate); a loose file's own stream, through
+fileno, held open until COM_ReleaseLocation. The existence check stays synchronous: a missing file
+is -1 here, as it is from COM_FindFile, so the callers' "missing" paths are unchanged. Sets
+com_filesize and file_from_pak as COM_FindFile does.
+===========
+*/
+int COM_LocateFile (const char *filename, fs_location_t *out)
+{
+	searchpath_t	*search;
+	char		netpath[MAX_OSPATH];
+	pack_t		*pak;
+	int		i;
+
+	memset (out, 0, sizeof(*out));
+	out->fd = -1;
+	file_from_pak = 0;
+
+	for (search = com_searchpaths; search; search = search->next)
+	{
+		if (search->pack)
+		{
+			pak = search->pack;
+			for (i = 0; i < pak->numfiles; i++)
+			{
+				if (strcmp(pak->files[i].name, filename) != 0)
+					continue;
+				com_filesize = pak->files[i].filelen;
+				file_from_pak = 1;
+				PS2_FileOpening (filename);
+				if (pak->pkz)
+				{
+					int fd, deflated;
+					unsigned offset, compBytes, rawBytes;
+					int found = PS2_PkzLocate (pak->pkz, pak->files[i].filepos, &fd, &offset, &compBytes, &rawBytes, &deflated);
+					if (found == 0)
+						Sys_Error ("COM_LocateFile: %s is damaged in %s", filename, pak->filename);
+					if (found > 0)
+					{
+						out->kind = deflated ? FS_LOC_PKZ_DEFLATED : FS_LOC_PKZ_STORED;
+						out->fd = fd;
+						out->offset = offset;
+						out->bytes = compBytes;
+						out->rawBytes = rawBytes;
+					}
+					return com_filesize;
+				}
+				if (pak->asyncFd < 0)
+					pak->asyncFd = open (pak->filename, O_RDONLY);
+				out->kind = FS_LOC_PAK;
+				out->fd = pak->asyncFd;
+				out->offset = (unsigned)pak->files[i].filepos;
+				out->bytes = (unsigned)com_filesize;
+				out->rawBytes = (unsigned)com_filesize;
+				return com_filesize;
+			}
+		}
+		else
+		{
+			if (!registered.value)
+			{ /* if not a registered version, don't ever go beyond base */
+				if ( strchr (filename, '/') || strchr (filename,'\\'))
+					continue;
+			}
+
+			q_snprintf (netpath, sizeof(netpath), "%s/%s",search->filename, filename);
+			if (! (Sys_FileType(netpath) & FS_ENT_FILE))
+				continue;
+
+			PS2_FileOpening (filename);
+			out->looseFile = fopen (netpath, "rb");
+			com_filesize = (out->looseFile == NULL) ? -1 : COM_filelength (out->looseFile);
+			if (com_filesize >= 0)
+			{
+				out->kind = FS_LOC_LOOSE;
+				out->fd = fileno (out->looseFile);
+				out->bytes = (unsigned)com_filesize;
+				out->rawBytes = (unsigned)com_filesize;
+			}
+			return com_filesize;
+		}
+	}
+
+	Con_DPrintf ("LocateFile: can't find %s\n", filename);
+	com_filesize = -1;
+	return com_filesize;
+}
+
+void COM_ReleaseLocation (fs_location_t *loc)
+{
+	if (loc->looseFile)
+	{
+		fclose (loc->looseFile);
+		loc->looseFile = NULL;
+	}
+	loc->fd = -1;
+}
+
+/*
 ============
 COM_LoadFile
 
@@ -2208,6 +2315,7 @@ static pack_t *COM_LoadPackFile (const char *packfile)
 	pack = (pack_t *) Z_Malloc (sizeof (pack_t));
 	q_strlcpy (pack->filename, packfile, sizeof(pack->filename));
 	pack->handle = packhandle;
+	pack->asyncFd = -1; // [PS2_QUAKE]
 	pack->numfiles = numpackfiles;
 	pack->files = newfiles;
 
@@ -2264,6 +2372,7 @@ static pack_t *COM_LoadPkzFile (const char *packfile)
 
 	q_strlcpy (pack->filename, packfile, sizeof(pack->filename));
 	pack->handle = -1;
+	pack->asyncFd = -1;
 	pack->numfiles = numpackfiles;
 	pack->pkz = pkz;
 
@@ -2421,6 +2530,7 @@ static void COM_Game_f (void)
 		Host_WriteConfiguration ();
 
 		//Kill the extra game if it is loaded
+		PS2_AsyncIoDrain (); // [PS2_QUAKE]: a background read may still be going through a pack closed below
 		while (com_searchpaths != com_base_searchpaths)
 		{
 			if (com_searchpaths->pack)
@@ -2429,6 +2539,8 @@ static void COM_Game_f (void)
 					PS2_PkzClose (com_searchpaths->pack->pkz);
 				else
 					Sys_FileClose (com_searchpaths->pack->handle);
+				if (com_searchpaths->pack->asyncFd >= 0) // [PS2_QUAKE]: the loader's descriptor on a .pak
+					close (com_searchpaths->pack->asyncFd);
 				Z_Free (com_searchpaths->pack->files);
 				Z_Free (com_searchpaths->pack);
 			}

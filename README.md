@@ -268,6 +268,8 @@ stdout and the log, then stops with an error screen.
 
 - `ps2_testmaps 1` (debug builds) loads every level in turn and reports what each costs in RAM and
   in the GS texture heap.
+- `ps2_testaio 1` (debug builds) reads a list of files through the background loader and through
+  the engine's own loader and compares them, as the drive is and throttled to a USB stick's rate.
 - `ps2_perftest 1` (profile builds) plays the three demos with a per-frame timing log, and
   `ps2_testmaps 2` turns a full circle at a few points on every level. The scripts in
   [src/tools/scripts/frame_log/](src/tools/scripts/frame_log/) summarize and compare the captures.
@@ -411,6 +413,19 @@ the memory it is loaded to. A stream, which a demo is read through, inflates thr
 as it is read, and can seek: `pakzip` leaves a restart point every 32 KB, for 0.1% of the pack's
 size. Both packs' tables and the whole-file workspace take 58 KB (tag `Pack`), and an open stream
 of a deflated file 72 KB more. Debug builds also check the CRC of every file they read whole.
+
+**Background loading** ([async_io.h](src/ps2/fs/async_io.h), `ps2::aio`). Every file read sleeps
+its caller until the IOP's file server answers, 41 ms for a 32 KB chunk on a USB stick, so a read
+made mid-level by the main thread is a dropped frame. `COM_LocateFile` resolves a file to a
+descriptor and a byte range without reading it (a pak's second descriptor, a pkz entry's
+compressed range, a loose file's own stream), and a thread one priority below the main one reads
+it in 32 KB chunks aligned to the file, or inflates a deflated entry straight into the caller's
+buffer, re-picking the best (priority, age) request after every chunk. It runs only while the
+main thread sleeps, which since the vsync wait sleeps on the vblank interrupt is most of every
+frame. Destinations are 64-byte aligned SIF DMA targets; the loader never allocates, prints or
+touches the engine, and the places that free or close behind a read drain it first. The design
+and its console measurements are the Quake II port's (`misc/docs/plans/background-loading.md`
+there); `ps2_testaio 1` is its self-test, and `ps2_aio 0` turns it off. Tag `Aio`.
 
 ---
 
