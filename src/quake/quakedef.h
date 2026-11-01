@@ -39,7 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // [PS2_QUAKE]: Original QuakeSpasm source code this project is derived from starts at 0.97
 // PS2 Quake's first release start at 1.0. Subsequent PS2 releases bump the minor version.
-#define	QUAKESPASM_VERSION   1.0
+#define	QUAKESPASM_VERSION   1.1
 #define	QUAKESPASM_VER_PATCH 0	// helper to print a string like 0.94.7
 
 #ifndef	QUAKESPASM_VER_SUFFIX
