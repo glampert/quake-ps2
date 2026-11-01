@@ -90,13 +90,17 @@ The boot code (`system/iop_boot.cpp`) is the Quake II port's as of quake2-ps2 94
 
 - **The boot, in order.** The `host:` fast path (PCSX2) resets nothing: `sbv_patch_enable_lmb()`
   alone lets `SifExecModuleBuffer` load embedded IRX without disturbing open `host:` handles.
-  **A console boot takes the IOP as the launcher left it:** the module list says what runs, each
-  module the game needs is reused when one doing its job is there (`kModuleIdentities`), and the
-  rest is loaded. The IOP is reset first only for a known conflict (`FindResidentConflict`), and
-  as the fallback when a module won't start, when no game data turns up through the launcher's
-  drivers, or when the largest free IOP block is under 384 KB. The game data is found before
-  `Host_Init`: `host:`, then HDD/PFS, then USB, except that an ELF launched from `mass:` looks on
-  USB only. `-DPS2_QUAKE_ALWAYS_RESET_IOP=1` resets on every boot.
+  **Every console boot resets the IOP** and loads the game's own drivers (since 2026-11-01, from
+  quake2-ps2 f91aa14: on that port's console the launcher's usbhdfsd, wLaunchELF 4.43a's, froze
+  the game after its first level load on every run that went through it, and the boot's behaviour
+  hung on whatever a launcher left). From 2026-10-12 to then a console boot took the IOP as the
+  launcher left it, and `-DPS2_QUAKE_ALWAYS_RESET_IOP=0` still does, for comparisons: the module
+  list says what runs, each module the game needs is reused when one doing its job is there
+  (`kModuleIdentities`), and the rest is loaded; the IOP is then reset only for a known conflict
+  (`FindResidentConflict`), and as the fallback when a module won't start, when no game data turns
+  up through the launcher's drivers, or when the largest free IOP block is under 384 KB. The game
+  data is found before `Host_Init`: `host:`, then HDD/PFS, then USB, except that an ELF launched
+  from `mass:` looks on USB only.
 - **The boot report.** Every step is timed from `main()` (`ps2::sys::Milliseconds` is first
   called there) and kept as `IOP boot:` lines: what the launcher left running, with versions and
   the export libraries found, what was reused, started or reset and why, the HDD probe, the USB

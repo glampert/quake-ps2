@@ -209,6 +209,14 @@ mass:/QUAKE/
   drive roots: over USB only when launched from USB, and on the HDD and then USB otherwise. Every
   driver it needs is built into the ELF. If it finds nothing, the error screen lists where it
   looked.
+- **The IOP is reset at every console boot**, and every driver loaded afresh, whatever the
+  launcher left running: the reset costs ~175 ms, and a USB drive then takes ~0.6 s to come back
+  up. From 2026-10-12 to 2026-11-01 the boot reused the launcher's drivers instead, which saved that
+  time but, on the Quake II port's console, froze the game after its first level load whenever it
+  went through an old launcher's USB driver (wLaunchELF 4.43a's usbhdfsd);
+  `-DPS2_QUAKE_ALWAYS_RESET_IOP=0` brings that boot back, for comparisons. The `IOP boot:` lines in
+  the console and in `quake.log` say what the launcher left running, what the boot loaded, and when
+  each step finished.
 - **Load times.** The HDD loads a level about twice as fast as the best USB setup. The PS2's USB is 1.1, so a
   faster stick doesn't help, but fewer bytes and larger clusters do. Copy the `.pkz` packs rather
   than the `.pak` ones: a load reads half the bytes (the Quake II port's loads over USB took 25-40%
