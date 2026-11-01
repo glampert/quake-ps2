@@ -152,7 +152,7 @@ void StartPass()
         std::memset(static_cast<void *>(&p), 0, sizeof(p));
         p.ticket = aio::Ticket{};
 
-        p.length = COM_LocateFile(kItems[i].name, &p.loc);
+        p.length = COM_LocateFile(kItems[i].name, &p.loc, nullptr);
         if (p.length <= 0 || p.loc.fd < 0)
         {
             Con_Printf("AioTest:   %-24s %s\n", kItems[i].name, (p.length < 0) ? "missing, skipped" : "empty or unlocatable, skipped");

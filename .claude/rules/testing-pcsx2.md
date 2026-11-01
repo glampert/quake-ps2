@@ -14,7 +14,10 @@
 - **Edit PCSX2.ini only while PCSX2 is closed.** It rewrites the file on exit.
 - Every launch overwrites `emulog.txt`. Copy it out before the next launch if you need it.
 - **An `id1/pakN.pkz` (from `make pkz`) is loaded instead of `pakN.pak`.** The log says `Added
-  packfile host:/id1/pak0.pkz (339 files, compressed)`. To test the pak path, move the pkz out of
+  packfile host:/id1/pak0.pkz (339 files, compressed)`. Since 2026-11-01 `make pkz` stores the
+  demos (`PKZ_FLAGS`, `pakzip --store-ext .dem`), so they stream through the loader's ring: a pkz
+  made before has them deflated, and `developer 1` then shows no `Read-ahead stream on demoN.dem`
+  line at a demo's start. To test the pak path, move the pkz out of
   `id1/`, and don't leave a stale one behind after changing a pak: `make pkz` redoes a pkz only
   when its pak is newer. A pak has no such line (QuakeSpasm prints none).
 - **An ELF path of 152 characters or more never reaches `main()`.** PCSX2 passes it to the BIOS

@@ -127,7 +127,9 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   stack and 32 request slots) and a 40 KB inflate workspace on the heap from the first deflated
   request on, kept (`AioTest` reads `tag Aio holds 40.19 KB after the pass`). Each client that comes
   to it holds its own staging while a request is in flight, and drains before any sweep, so nothing
-  of it survives into a load.
+  of it survives into a load. A demo's read-ahead ring is 64 KB of `Aio` while it plays (its
+  stream struct 1.6 KB more), in place of the 72 KB a deflated pkz stream held under `Pack` before;
+  it opens before the demo's level loads, so it sits on that load's peak as the stdio buffer did.
 - **The hunk stays 16 MB:** every level fits with room to spare, but the cache fills whatever
   the levels leave. A smaller hunk would trade that room for models and sounds evicted and read
   back mid-level (`Mod_Extradata`, `S_LoadSound`), a hitch each.

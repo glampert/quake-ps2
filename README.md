@@ -409,10 +409,13 @@ sounds to 71-87%. The format and the tool are the Quake II port's.
 
 [pkz_pack.cpp](src/ps2/fs/pkz_pack.cpp) inflates on the EE, with the miniz already linked for the
 save games. A file read whole, as every map, model, sound and texture is, inflates straight into
-the memory it is loaded to. A stream, which a demo is read through, inflates through a 32 KB window
-as it is read, and can seek: `pakzip` leaves a restart point every 32 KB, for 0.1% of the pack's
-size. Both packs' tables and the whole-file workspace take 58 KB (tag `Pack`), and an open stream
-of a deflated file 72 KB more. Debug builds also check the CRC of every file they read whole.
+the memory it is loaded to. A stream of a deflated file inflates through a 32 KB window as it is
+read, and can seek: `pakzip` leaves a restart point every 32 KB, for 0.1% of the pack's size. Both
+packs' tables and the whole-file workspace take 58 KB (tag `Pack`), and an open stream of a
+deflated file 72 KB more. Debug builds also check the CRC of every file they read whole. The demos
+are stored, not deflated (`pakzip --store-ext .dem`, what `make pkz` passes), so they can stream
+through the background loader below; a pkz made before 2026-11-01 has them deflated, and they then
+read on the main thread as before.
 
 **Background loading** ([async_io.h](src/ps2/fs/async_io.h), `ps2::aio`). Every file read sleeps
 its caller until the IOP's file server answers, 41 ms for a 32 KB chunk on a USB stick, so a read
@@ -426,6 +429,14 @@ frame. Destinations are 64-byte aligned SIF DMA targets; the loader never alloca
 touches the engine, and the places that free or close behind a read drain it first. The design
 and its console measurements are the Quake II port's (`misc/docs/plans/background-loading.md`
 there); `ps2_testaio 1` is its self-test, and `ps2_aio 0` turns it off. Tag `Aio`.
+
+**Demos stream through it** ([readahead_stream.h](src/ps2/fs/readahead_stream.h)). `COM_FOpenFile`
+on a `.dem` whose source can be read by range (a pak, a stored pkz entry, a loose file) returns an
+unbuffered `fopencookie` stream over a ring of two 32 KB slots, each a loader request from the
+open, so cl_demo.c's `fscanf`, `fread` and `fclose` work unchanged and a frame's reads copy from
+memory. Before, the stream refilled on the main thread: a deflated pkz entry inflated through its
+window as it was read, and on the Quake II port's console each 64 KB refill of a demo froze a
+frame for 80 ms from the HDD. `ps2_readahead_kb 0` gives every demo the old stream.
 
 ---
 

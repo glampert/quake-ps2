@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_ctype.h"
 #include "ps2/engine_hooks.h" // [PS2_QUAKE]: COM_FindFile names what it opens, for the frame log and the loading screen; the compressed packs
 #include "ps2/fs/async_io_c.h" // [PS2_QUAKE]: PS2_AsyncIoDrain before a pack closes
+#include "ps2/fs/readahead_stream.h" // [PS2_QUAKE]: demos stream through the loader
 #include <fcntl.h>  // [PS2_QUAKE]: open, for COM_LocateFile
 #include <unistd.h> // [PS2_QUAKE]: close
 #include <errno.h>
@@ -1934,6 +1935,24 @@ into the file.
 */
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id)
 {
+	// [PS2_QUAKE]: a demo streams through the background loader's read-ahead ring when its source
+	// can be read by range (not a deflated pkz entry) and the ring can be had; otherwise it gets
+	// the plain stream below, as before. A loose file's stream is the ring's then, closed with it.
+	if (PS2_WantsReadAheadStream (filename))
+	{
+		fs_location_t loc;
+		int len = COM_LocateFile (filename, &loc, path_id);
+		if (len >= 0)
+		{
+			if (loc.fd >= 0 && loc.kind != FS_LOC_PKZ_DEFLATED)
+			{
+				*file = PS2_OpenReadAheadStream (filename, &loc);
+				if (*file)
+					return len;
+			}
+			COM_ReleaseLocation (&loc);
+		}
+	}
 	return COM_FindFile (filename, NULL, file, path_id);
 }
 
@@ -1969,7 +1988,7 @@ is -1 here, as it is from COM_FindFile, so the callers' "missing" paths are unch
 com_filesize and file_from_pak as COM_FindFile does.
 ===========
 */
-int COM_LocateFile (const char *filename, fs_location_t *out)
+int COM_LocateFile (const char *filename, fs_location_t *out, unsigned int *path_id)
 {
 	searchpath_t	*search;
 	char		netpath[MAX_OSPATH];
@@ -1992,6 +2011,8 @@ int COM_LocateFile (const char *filename, fs_location_t *out)
 				com_filesize = pak->files[i].filelen;
 				file_from_pak = 1;
 				PS2_FileOpening (filename);
+				if (path_id)
+					*path_id = search->path_id;
 				if (pak->pkz)
 				{
 					int fd, deflated;
@@ -2031,6 +2052,8 @@ int COM_LocateFile (const char *filename, fs_location_t *out)
 			if (! (Sys_FileType(netpath) & FS_ENT_FILE))
 				continue;
 
+			if (path_id)
+				*path_id = search->path_id;
 			PS2_FileOpening (filename);
 			out->looseFile = fopen (netpath, "rb");
 			com_filesize = (out->looseFile == NULL) ? -1 : COM_filelength (out->looseFile);

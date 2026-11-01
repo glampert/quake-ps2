@@ -377,7 +377,7 @@ typedef struct fs_location_s
 	unsigned	rawBytes;
 	FILE		*looseFile;
 } fs_location_t;
-int COM_LocateFile (const char *filename, fs_location_t *out);
+int COM_LocateFile (const char *filename, fs_location_t *out, unsigned int *path_id);
 void COM_ReleaseLocation (fs_location_t *loc);
 
 // these procedures open a file using COM_FindFile and loads it into a proper

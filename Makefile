@@ -95,6 +95,7 @@ PS2_CXX_SRC =                         \
 	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
 	ps2/fs/async_io.cpp               \
+	ps2/fs/readahead_stream.cpp       \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
@@ -181,6 +182,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/save/mc_icon.cpp              \
 	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
+	ps2/fs/readahead_stream.cpp       \
 	ps2/renderer/brush.cpp            \
 	ps2/input/keyboard.cpp            \
 	ps2/input/pad.cpp                 \
@@ -515,6 +517,11 @@ music: $(BUILD_DIR)/tools/musenc
 # go onto the USB stick once its pkz exists.
 PAK_DIR ?= id1
 
+# Demos stay stored, so the game streams them through its read-ahead ring
+# (ps2/fs/readahead_stream.h): a deflated one is read on the main thread, inflating as it goes,
+# which on the Quake II port froze a frame for 80 ms per 64 KB refill from the HDD.
+PKZ_FLAGS ?= --store-ext .dem
+
 pkz: $(BUILD_DIR)/tools/pakzip
 	@found=0; \
 	for pak in $(PAK_DIR)/pak[0-9].pak; do \
@@ -522,7 +529,7 @@ pkz: $(BUILD_DIR)/tools/pakzip
 		found=1; \
 		pkz="$${pak%.pak}.pkz"; \
 		if [ "$$pkz" -nt "$$pak" ] && [ "$$pkz" -nt $(BUILD_DIR)/tools/pakzip ]; then continue; fi; \
-		$(BUILD_DIR)/tools/pakzip "$$pak" "$$pkz" || exit 1; \
+		$(BUILD_DIR)/tools/pakzip $(PKZ_FLAGS) "$$pak" "$$pkz" || exit 1; \
 	done; \
 	[ $$found = 1 ] || { echo "No pakN.pak files in $(PAK_DIR)/"; exit 1; }
 

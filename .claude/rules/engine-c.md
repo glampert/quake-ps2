@@ -140,7 +140,13 @@ declared in common.h) finds a file without reading it: a `.pak` gets a second de
 entry comes back as its compressed range on the pack's reader descriptor (`PS2_PkzLocate`), a loose
 file as its own stream's `fileno`, held open until `COM_ReleaseLocation`. Missing is -1 as from
 `COM_FindFile`; found with `fd` -1 means "load synchronously". It calls `PS2_FileOpening` like an
-open, so the perf run's `FLOG#open` and the loading screen see it.
+open, so the perf run's `FLOG#open` and the loading screen see it. **A `.dem` opened through
+`COM_FOpenFile` is a read-ahead stream** (`PS2_WantsReadAheadStream`/`PS2_OpenReadAheadStream`,
+`ps2/fs/readahead_stream.h`): an unbuffered `fopencookie` stream over a 64 KB ring the loader
+fills, unless the file is a deflated pkz entry, `ps2_readahead_kb` is 0 or the ring can't be
+allocated, when it gets the plain stream as before. cl_demo.c is untouched: `fscanf`, `fgetc`,
+`fread` and `fclose` work on it (newlib pushes `fscanf`'s look-ahead back into the stream's own
+one-byte buffer, never into the cookie).
 
 For rumble: `view.c` calls `PS2_RumbleDamage` from `V_ParseDamage` and `PS2_RumblePickup` from
 `V_BonusFlash_f`. For the memory reports: `zone.c` adds `Cache_UsedBytes` (the cache's list is
