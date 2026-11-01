@@ -405,6 +405,11 @@ lands, if that is within half a second, and is dropped otherwise. Level loads st
 or the `.wav` files directly. It behaves as QuakeSpasm's external music does: "Background Music"
 (QuakeSpasm's "External Music", `bgm_extmusic`) and "Music Volume" in the options menu, `music_loop`,
 and the `music`, `music_stop`, `music_pause` and `music_resume` commands. The format is the Quake II port's, so its tracks play here too.
+[`MusicStream`](src/ps2/audio/music_stream.h) keeps two read buffers in flight, 32 KB each for
+ADPCM (~1.3 s), up to 64 KB each for a WAV, and decodes on demand; the buffers come from the heap
+when a track starts and go back when it stops. The file reads go to the background loader (see
+[Compressed packs](#compressed-packs)) at its stream priority, since a blocking read off a USB stick
+could otherwise cost a frame; one it declines is read on the main thread when it is needed.
 
 ---
 

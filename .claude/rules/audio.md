@@ -76,22 +76,29 @@ over from the Quake II port unchanged; the facts marked *(Q2)* were measured the
   buggy: it re-reads the header as ADPCM, `DeleteThread`s itself at EOF, and doesn't loop. And
   audsrv owns SPU2 core 1 and zeroes core 0's MVOL. A hardware-voice path means a custom IRX,
   which is deferred.
-- **Mechanics:** a reader thread at the main thread's priority (so it never preempts; the
-  sound feeder sits above both), two read buffers from `TryAllocAligned(64)` under
-  `MemTag::Music`, allocated when a track opens and freed when it closes. `map` and
-  `disconnect` close it (`CL_Disconnect`); a `changelevel` doesn't (`Host_Reconnect_f`), so the
-  old track and its 16 KB stay open through the load until the new map's track replaces it. The main
-  thread yields with `RotateThreadReadyQueue` after queueing: its vsync wait
-  (`graph_wait_vsync`) spins, so that and file I/O are the reader's only chances. `BGM_Update`
+- **Mechanics:** two read buffers from `TryAllocAligned(64)` under `MemTag::Music`, allocated
+  when a track opens and freed when it closes, each filled by a background-loader request
+  (fs/async_io.h) at `Priority::Stream`, submitted the moment the decode side releases it and
+  polled when decode comes back round (2026-11-01, from quake2-ps2 df349b3; a reader thread of
+  its own at the main thread's priority before, which yielded with `RotateThreadReadyQueue`).
+  ADPCM requests are 32 KB, one loader chunk, ~1.3 s: the 2 KB header leaves every stereo group
+  2 KB off a 4 KB boundary, so each request crosses one 32 KB boundary of the file and takes two
+  reads, against five per 32 KB for the old 8 KB requests. Requests are marked `sequential`, so
+  the loader skips the lseek between them. A request the loader declines (`ps2_aio 0`, every slot
+  taken) is read on the main thread when decode needs it: `ps2_aio 0` then `music track04` played
+  (PCSX2, 2026-11-01). `map` and `disconnect` close the stream (`CL_Disconnect`); a `changelevel`
+  doesn't (`Host_Reconnect_f`), so the old track and its 64 KB stay open through the load until
+  the new map's track replaces it. `BGM_Update`
   (in the main loop just before `S_Update`) tops `s_rawsamples` up to `paintedtime + 7680`,
   the raw-sample channel `bgmusic.c` used, so it costs no SIF bandwidth of its own.
 - **A main-thread file call waits out a music read.** The SDK file client and the IOP's file
   server take one request at a time, so anything the main thread reads or writes while the
-  reader has a read out waits for it. *(Q2)* On a console USB drive that took ~300 ms: the USB
+  loader has a read out waits for it. *(Q2)* On a console USB drive that took ~300 ms: the USB
   keyboard poll, a `read()` on `usbkbd:dev` every frame, stalled a frame every 640 ms in a
   2026-10-10 console capture (83 s of 171 s of gameplay), and a run with the keyboard off, then
   one with the fix, confirmed it. Here too (2026-10-13), `Keyboard::NextEvent` skips while
-  `audio::MusicReadPending()` and the driver keeps the keys queued; `Keyboard::PollDue` reads
+  `aio::Pending()` (`audio::MusicReadPending()` until the music moved onto the loader) and the
+  driver keeps the keys queued; `Keyboard::PollDue` reads
   only four times a second unless a key arrived in the last 10 s or is held, and `in_keyboard`
   is off by default in release builds. Keep any other per-frame file I/O off the main thread the
   same way. PCSX2's `host:` reads are too quick to show it. In PCSX2 (debug, e1m1, 2026-10-13)
@@ -145,7 +152,7 @@ over from the Quake II port unchanged; the facts marked *(Q2)* were measured the
   is reported once and leaves the track silent. WAV is 16-bit PCM, mono or stereo, 4-48 kHz,
   walked chunk by chunk (LIST etc. skipped, `WAVE_FORMAT_EXTENSIBLE` read, data length clamped
   to the file size). Buffers grow with the byte rate: ~3/8 s each in 4 KB pages, 8-64 KB, so a
-  44.1 kHz stereo rip holds 2 × 64 KB (vs 2 × 8 KB for ADPCM).
+  44.1 kHz stereo rip holds 2 × 64 KB (vs 2 × 32 KB for ADPCM).
 - **Rate conversion** (in `cd_audio.cpp`, for any format): equal rates copy straight in;
   exactly double goes through `half_band.h`; anything else through the linear resampler. The
   half-band is 23 taps, Kaiser beta 6.8, Q14 `{5103, -1425, 591, -232, 72, -13}` around a 0.5
@@ -162,7 +169,7 @@ over from the Quake II port unchanged; the facts marked *(Q2)* were measured the
   blocking: 5.7 ms when `bgm_extmusic 1` restarted one mid-game. *(Q2)* A 44.1 kHz WAV about
   274 µs mean, the decimator being most of it. The ADPCM speed came from keeping the history
   in locals (to dodge `-fno-strict-aliasing` spills) and unrolling per byte. Static footprint
-  ~12 KB (the 8 KB reader stack is a static member, so it stays in .bss).
+  ~12 KB with the reader thread; its 8 KB static stack went with the move to the loader.
 - **Verified (PCSX2, 2026-10-08), with the Quake II port's encoded tracks linked into
   `id1/music/` and two generated 1.5 s WAVs:** demo1's track 2 streamed as ADPCM with the raw
   ring held a full 7680 frames ahead and filled at 22050 frames a second; a 44.1 kHz WAV

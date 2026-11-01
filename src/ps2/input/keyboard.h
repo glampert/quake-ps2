@@ -45,7 +45,7 @@ public:
     // queue is empty, and always while there is no driver. Each call is a read() on the driver's
     // device file, an IOP round trip, so the caller bounds how many it makes per frame; what is
     // left stays queued for the next frame. Also false, leaving the keys queued, while the music
-    // stream has a read out (see MusicReadPending). Taking the events one at a time keeps
+    // loader has a read out (see aio::Pending). Taking the events one at a time keeps
     // re-entry safe: a key handler that polls for input itself (SCR_ModalMessage's Y/N prompt)
     // takes the next ones off the same queue.
     bool NextEvent(Event & event);

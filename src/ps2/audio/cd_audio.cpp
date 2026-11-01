@@ -568,11 +568,6 @@ void MusicStopCommand()
 
 } // namespace
 
-bool ps2::audio::MusicReadPending()
-{
-    return s_stream.ReadPending();
-}
-
 // ------------------------------------------------------------------------------------------------
 // Holding the music through a stall (cd_audio.h)
 // ------------------------------------------------------------------------------------------------
