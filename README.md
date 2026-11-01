@@ -284,7 +284,10 @@ QuakeSpasm draws through the public functions of its OpenGL renderer; the backen
 those directly on the PS2's hardware, with no GL underneath.
 
 - **The frame** is one DMA chain, built by the EE while the GS draws the previous one. 3D goes
-  through VU1 microprograms; 2D goes straight to the GS.
+  through VU1 microprograms; 2D goes straight to the GS. The wait for vsync that paces the frames
+  sleeps on the vblank interrupt (a semaphore signalled from an `INTC_VBLANK_S` handler), so the
+  8-11 ms a frame leaves before its field ends go to the other threads, the background loader
+  above all; `ps2_vsync_spin 1` brings the old status-register spin back.
 - **Textures** stay 8-bit in VRAM, as in the game's data, and read Quake's palette through a CLUT.
 - **The world** ([view.cpp](src/ps2/renderer/view.cpp)) keeps QuakeSpasm's visibility code and draws
   in its passes: textures, then the lightmaps, then the fullbright texels. Water, slime and lava

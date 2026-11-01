@@ -42,6 +42,17 @@ the world, the entity passes, the glows), `brush.cpp` (per-surface draw data, bu
 
 ## Frame model: 2D and 3D interleave
 
+- **`PresentFramebuffer` sleeps for vsync since 2026-11-01** (from quake2-ps2 647faf0, background
+  loading stage 1): the EE INTC's vblank-start line (`INTC_VBLANK_S`, installed through
+  `graph_add_vsync_handler`) signals a {0, 1} semaphore from its handler, and the wait drains it
+  with `PollSema` before `WaitSema`, so it ends at the *next* edge as `graph_wait_vsync`'s spin did
+  (that cleared VSINT before watching it). The stamp and the DISPFB write follow the wake, and the
+  frame log's closing `FLOG#note,present:` line gives the worst stamp-to-DISPFB gap of the run
+  against a blanking interval of about 1.5 ms. *(Q2)* The PCSX2 A/B against `ps2_vsync_spin 1`
+  moved no column by more than 0.4%, 0 drops both ways, the gap 1 µs; a console read 3 µs over
+  18261 presents with no tearing. The semaphore or handler failing to create falls back to the spin
+  with a console warning.
+
 - `SCR_UpdateScreen` draws the 3D view first (`V_RenderView`), then all of the 2D (`GL_Set2D`,
   tile clear, status bar, console, menus), all inside `GL_BeginRendering`/`GL_EndRendering`.
   The backend's test scene and debug overlays go last, in `GL_EndRendering`.
