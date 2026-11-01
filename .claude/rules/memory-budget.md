@@ -138,7 +138,9 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   it opens before the demo's level loads, so it sits on that load's peak as the stdio buffer did.
   **MapCycle 2026-11-01** (`q1-mapcycle-aio-sounds.emulog.txt`, debug, pkz, with the sounds on the
   loader): all 38 maps load, the heap's peak 26.86 → 27.00 MB against `q1-mapvram2` (the loader's
-  statics, the workspace and the stages' code), the hunk's 13.80 MB and the pools unchanged.
+  statics, the workspace and the stages' code), the hunk's 13.80 MB and the pools unchanged. The
+  same cycle on the finished port (`q1-mapcycle-aio-final.emulog.txt`: models, music, the game's
+  audsrv and the reset boot in) peaked at 26.99 MB, 0 warnings.
 - **The hunk stays 16 MB:** every level fits with room to spare, but the cache fills whatever
   the levels leave. A smaller hunk would trade that room for models and sounds evicted and read
   back mid-level (`Mod_Extradata`, `S_LoadSound`), a hitch each.

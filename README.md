@@ -28,7 +28,8 @@ the shareware episode or all four episodes of the registered game, with everythi
 
 - **Loading** the game data from a USB drive or the internal HDD on a console, and from PCSX2's
   host filesystem (`host:`) in the emulator, from id's paks or from compressed ones that halve what
-  a level load reads.
+  a level load reads. What is read while a level runs (demos, a sound or model asked for mid-level,
+  the music) goes through a background loader, so a frame never waits on the drive.
 - **Saving** games and settings to the memory card, or to the USB drive or hard disk the game runs
   from.
 - **The DualShock 2**, with both analog sticks and rumble. A USB keyboard works too, for the in-game console.

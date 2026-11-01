@@ -26,7 +26,10 @@ music and saves. All of them have landed, and every file in `src/quake` and `src
 included by one that is. It plays on a real PS2: loading from USB and the HDD, saves on the memory
 card, rumble and the CD music from ripped tracks all work there, and in PCSX2 from `host:`. What is
 left is refinement: performance (moving the engine's time from double to float where the profile
-probes point). GS fog was left out on purpose:
+probes point). The background loader (`src/ps2/fs/async_io.h`) came over from quake2-ps2 on
+2026-11-01: demos, mid-level sounds, evicted alias models and the music read through it, the
+vsync wait sleeps, the game builds its own audsrv, and every console boot resets the IOP; the
+hardware runs of it are still owed. GS fog was left out on purpose:
 none of id's maps sets it, so it stays a future exercise for custom maps.
 
 - **Unused files are deleted, not parked.** Whatever a change makes unused goes with it. The
