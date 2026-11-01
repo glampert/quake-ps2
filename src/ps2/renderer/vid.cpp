@@ -35,6 +35,7 @@
 #include "ps2/tests/test_quit.h"
 #include "ps2/tests/aio_test.h"
 #include "ps2/fs/async_io.h"
+#include "ps2/fs/aio_pump.h"
 #include "ps2/fs/readahead_stream.h"
 
 #include <algorithm>
@@ -389,6 +390,7 @@ void VID_Init()
     ps2::sys::RegisterCommands();
     ps2::debug::LogFileRegisterCvar();
     ps2::aio::RegisterCvars();
+    ps2::aio::RegisterPumpCvar();
     ps2::fs::RegisterReadAheadCvar();
     ps2::save::Init();
     ps2::test::RegisterPerfTestCvar();

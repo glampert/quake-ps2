@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // on the same machine.
 
 #include "quakedef.h"
+#include "ps2/fs/async_io_c.h" // [PS2_QUAKE]: PS2_AsyncIoDrain at every level change
 
 static qmodel_t*	loadmodel;
 static char	loadname[32];	// for hunk tags
@@ -225,6 +226,11 @@ void Mod_ClearAll (void)
 {
 	int		i;
 	qmodel_t	*mod;
+
+	// [PS2_QUAKE]: every level change comes through here (Host_ClearMemory): the background
+	// loader's requests finish first, so nothing asynchronous survives into the load or lands on
+	// a cache the load has swept.
+	PS2_AsyncIoDrain ();
 
 	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++)
 	{

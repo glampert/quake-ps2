@@ -28,9 +28,9 @@
  *        allocates, prints, or touches the engine, the caches or the profiler: errors are codes
  *        in the request, printed by the main thread with the name it kept. The main thread, while
  *        a request is pending, must not free or write its destination, close its descriptor or
- *        sweep the cache slot that owns it; the points that free or close behind a read call
- *        Drain() first (Mod_ClearAll at every level change, S_Shutdown, COM_Game_f before it
- *        closes a pack, a read-ahead stream's close). Destinations are SIF DMA targets: 64-byte
+ *        sweep the cache slot that owns it; the points that free or close behind a read drain
+ *        first (PS2_AsyncIoDrain: Mod_ClearAll at every level change, COM_Game_f before it closes
+ *        a pack; S_Shutdown for the sounds; a read-ahead stream's close for its ring). Destinations are SIF DMA targets: 64-byte
  *        aligned and sized in whole 64-byte units, owning their cache lines (see ps2-platform.md).
  *
  * This source code is released under the GNU GPL v2 license.

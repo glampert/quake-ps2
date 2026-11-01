@@ -16,6 +16,7 @@
 #include "ps2/debug/log_file.h"
 #include "ps2/tests/map_cycle.h"
 #include "ps2/tests/aio_test.h"
+#include "ps2/fs/aio_pump.h"
 #include "ps2/tests/perf_run.h"
 
 #include <cstdlib>
@@ -136,6 +137,12 @@ int main(int argc, char ** argv)
         // rolls the profiler over at.
         {
             PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Frame);
+
+            // What the background loader landed during the last frame's idle time becomes sounds
+            // (and models) here, before anything this frame draws or mixes. Not inside the frame
+            // bracket: a finish may print (fs/aio_pump.h).
+            ps2::aio::Pump();
+
             Host_Frame(static_cast<float>(newtime - oldtime));
         }
 

@@ -388,6 +388,14 @@ QuakeSpasm's own mixer runs unchanged, at 22050 Hz, and the backend ([audio/](sr
 streams what it mixes to the SPU2 through the audsrv IOP driver. A feeder thread keeps that stream
 topped up, so the sound carries on cleanly through stalls such as a level load or a save.
 
+**Sounds first asked for mid-level load in the background** ([sound_load.h](src/ps2/audio/sound_load.h)):
+`S_LoadSound` outside a level's precache (and with the loading plaque down) hands the WAV to the
+background loader (see [Compressed packs](#compressed-packs)), and the pump that runs before each
+frame resamples it into the cache once it lands, so the frame that first hears a menu click, the
+talk beep or a sound the cache had evicted no longer reads the file (58 ms from the HDD, 147 ms from
+a USB stick on the Quake II port's console). A sound asked for while still loading starts when it
+lands, if that is within half a second, and is dropped otherwise. Level loads stay synchronous.
+
 **CD music.** The PS2 can't play the soundtrack off the Quake CD, so it plays it from files instead:
 `id1/music/trackNN.adp`, made from a CD rip by `make music` (see [Prerequisites](#prerequisites)),
 or the `.wav` files directly. It behaves as QuakeSpasm's external music does: "Background Music"

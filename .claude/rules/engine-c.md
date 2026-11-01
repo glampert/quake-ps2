@@ -148,6 +148,14 @@ allocated, when it gets the plain stream as before. cl_demo.c is untouched: `fsc
 `fread` and `fclose` work on it (newlib pushes `fscanf`'s look-ahead back into the stream's own
 one-byte buffer, never into the cookie).
 
+For the sounds: `snd_mem.c`'s `S_LoadSound` returns NULL while `PS2_SoundLoadPending` and hands a
+sound to `PS2_SoundLoadAsync` (`ps2/audio/sound_load.h`) unless `snd_precaching` (snd_dma.c's
+`S_BeginPrecaching`/`S_EndPrecaching`, the stubs QuakeSpasm left, around `CL_ParseServerInfo`'s
+pass); the half after the read is `S_FinishLoadSound`, which the pump reaches through
+`PS2_SoundFinishLoad`. `snd_dma.c`'s `S_StartSound` gives a pending sound to
+`PS2_SoundStartDeferred` instead of dropping it, and `S_Shutdown` drains first. `gl_model.c`'s
+`Mod_ClearAll` (every level change, from `Host_ClearMemory`) calls `PS2_AsyncIoDrain`.
+
 For rumble: `view.c` calls `PS2_RumbleDamage` from `V_ParseDamage` and `PS2_RumblePickup` from
 `V_BonusFlash_f`. For the memory reports: `zone.c` adds `Cache_UsedBytes` (the cache's list is
 private to it), which `ps2_testmaps` prints.

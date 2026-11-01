@@ -132,6 +132,11 @@
   pass, the inflate workspace). The pak kind needs a run without the pkz. It writes config.cfg on
   the way out: restore it.
 
+- **A background sound load**, by script: `developer 1`, `map e1m1`, two `w100`, then `menu_main`,
+  `w10`, `togglemenu`: the console prints `sound: sound/misc/menu2.wav loaded in the background,
+  N ms after it was asked for` (14 ms, 2026-11-01). A sound the level precached never shows up,
+  and nor does one asked for under the plaque or during the precache pass.
+
 The rest are scripted runs:
 
 - **Map cycle** (debug builds): `ps2_testmaps 1` in `autoexec.cfg`. It lists every level in the

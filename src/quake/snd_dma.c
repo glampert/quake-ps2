@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // snd_dma.c -- main control for any streaming sound output device
 
 #include "quakedef.h"
+#include "ps2/audio/sound_load.h" // [PS2_QUAKE]: mid-level loads through the background loader
 #include "snd_codec.h"
 #include "bgmusic.h"
 
@@ -248,6 +249,8 @@ void S_Shutdown (void)
 {
 	if (!sound_started)
 		return;
+
+	PS2_SoundLoadsDrain (); // [PS2_QUAKE]: a cache may still be arriving for the device shut down below
 
 	sound_started = 0;
 	snd_blocked = 0;
@@ -481,6 +484,10 @@ void S_StartSound (int entnum, int entchannel, sfx_t *sfx, vec3_t origin, float 
 	sc = S_LoadSound (sfx);
 	if (!sc)
 	{
+		// [PS2_QUAKE]: a sound still in the background loader's hands is started when it lands,
+		// if that is within half a second (ps2/audio/sound_load.h). The channel goes back.
+		if (PS2_SoundLoadPending (sfx))
+			PS2_SoundStartDeferred (sfx, entnum, entchannel, origin, fvol, attenuation);
 		target_chan->sfx = NULL;
 		return;		// couldn't load the sound's data
 	}
@@ -1060,10 +1067,17 @@ void S_ClearPrecache (void)
 {
 }
 
+// [PS2_QUAKE]: CL_ParseServerInfo's precache pass, which S_LoadSound keeps synchronous whether or
+// not the loading plaque is up ("map" and "playdemo" raise none): the level wants every sound in
+// place when the pass ends, and a stall there is expected.
+qboolean snd_precaching = false;
+
 void S_BeginPrecaching (void)
 {
+	snd_precaching = true;
 }
 
 void S_EndPrecaching (void)
 {
+	snd_precaching = false;
 }

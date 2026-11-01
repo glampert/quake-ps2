@@ -23,7 +23,6 @@
 
 #include "ps2/common.h"
 #include "ps2/fs/async_io.h"
-#include "ps2/fs/async_io_c.h"
 #include "ps2/system/heap.h"
 #include "ps2/debug/profile.h" // ReadCycles
 
@@ -745,12 +744,3 @@ Stats TakeFrameStats()
 }
 
 } // namespace ps2::aio
-
-// ------------------------------------------------------------------------------------------------
-// C hooks (async_io_c.h)
-// ------------------------------------------------------------------------------------------------
-
-extern "C" void PS2_AsyncIoDrain(void)
-{
-    ps2::aio::Drain();
-}

@@ -41,6 +41,20 @@ The README's "Sound" section has the design. The facts behind it:
   release PCSX2 build. Checking the sound itself needs the user's ears.
 - **Rate (22050):** see the README. audsrv's upsamplers are sample-and-hold lookup tables
   (`upsamplers.c`), so a low output rate also images more on the way to 48 kHz.
+- **Mid-level sound effects load in the background** (`sound_load.{h,cpp}`, 2026-11-01, from
+  quake2-ps2 4b0ef5f): `S_LoadSound` outside `CL_ParseServerInfo`'s precache pass (`snd_precaching`,
+  set by the `S_BeginPrecaching`/`S_EndPrecaching` stubs: a `map` or `playdemo` raises no plaque)
+  and with the plaque down submits the WAV to `ps2::aio` at `Priority::Sound` into a 64-aligned
+  staging buffer (tag `Aio`, 8 in flight at most), and `aio::Pump`, just before `Host_Frame`,
+  finishes it (`S_FinishLoadSound`: GetWavinfo, `Cache_Alloc`, `ResampleSfx`) so that frame's
+  `S_Update` mixes it. A `S_StartSound` for a sound still loading is kept (8 at most) and replayed
+  when it lands if that is within 500 ms, else dropped; `S_PaintChannels` already skips a channel
+  whose `S_LoadSound` is NULL, so an ambient that is still loading plays once it lands. `S_Shutdown`
+  and every level change (`PS2_AsyncIoDrain` in `Mod_ClearAll`) drain first, dropping the deferred
+  starts. In PCSX2 (e1m1, `menu_main`) `misc/menu2.wav` landed 14 ms after the menu asked for it,
+  and nothing else of a level goes through it: the stock game precaches every sound a level plays.
+  Without the precache gate the `map` command's precache sent 8 sounds to the loader, landing
+  0.8 s later, since that path has no plaque.
 - **Cost (PCSX2, debug, demo1, frame log):** `SndMix` (all of `S_Update` on the main thread)
   635 µs a frame when the main thread submitted, 415 µs with the feeder. `Sound` is now the
   feeder's wall time per frame, ~450 µs, mostly spent blocked on the IOP. demo1's sounds take

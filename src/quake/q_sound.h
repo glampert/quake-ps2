@@ -106,6 +106,7 @@ void S_UnblockSound (void);
 sfx_t *S_PrecacheSound (const char *sample);
 void S_TouchSound (const char *sample);
 void S_ClearPrecache (void);
+extern qboolean snd_precaching; // [PS2_QUAKE]: between S_BeginPrecaching and S_EndPrecaching (snd_mem.c reads it)
 void S_BeginPrecaching (void);
 void S_EndPrecaching (void);
 void S_PaintChannels (int endtime);

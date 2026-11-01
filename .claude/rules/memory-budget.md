@@ -125,11 +125,16 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   (no CRCs). The logs are `build/baselines/q1-mapcycle-pkz.emulog.txt` and `-pak.emulog.txt`.
 - **The background loader** (tag `Aio`, 2026-11-01, from quake2-ps2): ~18 KB static (its 16 KB
   stack and 32 request slots) and a 40 KB inflate workspace on the heap from the first deflated
-  request on, kept (`AioTest` reads `tag Aio holds 40.19 KB after the pass`). Each client that comes
+  request on, kept (`AioTest` reads `tag Aio holds 40.19 KB after the pass`; with a pkz the
+  workspace is made at boot, by `S_Init`'s two ambient sounds). Each client that comes
   to it holds its own staging while a request is in flight, and drains before any sweep, so nothing
-  of it survives into a load. A demo's read-ahead ring is 64 KB of `Aio` while it plays (its
+  of it survives into a load. A sound in flight holds its file's size, rounded to 64, until the
+  pump finishes it (8 at most; the menu's clicks are a few KB). A demo's read-ahead ring is 64 KB of `Aio` while it plays (its
   stream struct 1.6 KB more), in place of the 72 KB a deflated pkz stream held under `Pack` before;
   it opens before the demo's level loads, so it sits on that load's peak as the stdio buffer did.
+  **MapCycle 2026-11-01** (`q1-mapcycle-aio-sounds.emulog.txt`, debug, pkz, with the sounds on the
+  loader): all 38 maps load, the heap's peak 26.86 → 27.00 MB against `q1-mapvram2` (the loader's
+  statics, the workspace and the stages' code), the hunk's 13.80 MB and the pools unchanged.
 - **The hunk stays 16 MB:** every level fits with room to spare, but the cache fills whatever
   the levels leave. A smaller hunk would trade that room for models and sounds evicted and read
   back mid-level (`Mod_Extradata`, `S_LoadSound`), a hitch each.
