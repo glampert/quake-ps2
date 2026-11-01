@@ -190,6 +190,11 @@ The boot code (`system/iop_boot.cpp`) is the Quake II port's as of quake2-ps2 94
   the log on mostly measures the log; PCSX2's USB image took 12 to 30 ms a line. A successful
   `close()` on USB or the HDD returns the iomanX slot, not 0 (libcglue passes iomanX's result
   through); only a negative one is a failure. `host:` returns 0, which hid that in PCSX2.
+- **A fatal report is written with `ps2_logfile` off too** (2026-11-01, from quake2-ps2 25d0d57:
+  its 2026-10-27 out-of-memory screen on a console left no log because the cvar was off).
+  `LogFileWriteFatal` forces the write, and the 16 KB backlog the log keeps while off (the boot
+  report, the last lines printed) goes out ahead of it, so `quake.log` after a crash holds the
+  context and the report.
 - **On a console, `quake.log` is the only report.** Fatal reports (the pipeline hang dump,
   stack traces, the out-of-memory stats) go through `ps2::debug::DumpPrintf` (log_file.h), to
   stdout and the log. Anything new printed on a fatal path must use it, not `printf`. *(Q2)* The

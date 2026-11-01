@@ -39,7 +39,9 @@ void LogFilePrintf(const char * format, ...) Q_PRINTF_FUNC(1, 2);
 
 // LogFileWrite for the fatal paths (Sys_Error, the EE exception report). These can run on a
 // thread whose own write the failure interrupted, still holding the log's lock, so this waits
-// for the lock only when another thread holds it. It also starts on a fresh line.
+// for the lock only when another thread holds it. It also starts on a fresh line, and it writes
+// whether or not ps2_logfile is on: with the log off, quake.log then holds the backlog (the boot
+// report and the last lines printed) and the fatal report alone.
 void LogFileWriteFatal(const char * text);
 
 // printf for the reports printed on the way to a fatal error: the render pipeline dump, the

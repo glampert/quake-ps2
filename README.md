@@ -265,7 +265,8 @@ below. While the console is down, L2 and R2 scroll it.
 **The log file.** `ps2_logfile 1` copies everything the console prints to `quake.log`, with a
 timestamp per line, starting from the boot report. It also catches the reports printed on the way
 to a fatal error (crash reports, stack traces, the render pipeline dump), so a crash on a console
-still leaves a record. Each line is a write to the drive, slow over USB, so leave it off when
+still leaves a record; those are written even with the cvar off, behind the 16 KB of output the
+log keeps while it is off, so a crash leaves a `quake.log` either way. Each line is a write to the drive, slow over USB, so leave it off when
 timing anything.
 
 **Render pipeline hangs.** In debug builds a wait on the GS that runs past a second dumps the state

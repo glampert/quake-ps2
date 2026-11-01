@@ -61,10 +61,17 @@ static char  s_path[MAX_OSPATH];
 static cvar_t s_logEnabled = ps2::MakeCvar("ps2_logfile", kLogFileDefaultOn ? "1" : "0", CVAR_NONE);
 static bool   s_cvarRegistered = false;
 
-// Serializes writers: the music stream's reader thread prints too. The owner is what lets a
-// fatal path tell its own thread's interrupted write from another thread's.
+// Serializes writers, for any thread that prints (the music stream's reader thread once did; the
+// background loader never does). The owner is what lets a fatal path tell its own thread's
+// interrupted write from another thread's.
 static int s_lockSema  = -1;
 static int s_lockOwner = -1;
+
+// A fatal report is being written (LogFileWriteFatal): the file takes it, the backlog ahead of
+// it, whether or not ps2_logfile is on. A console crash is the one report a run can't do without,
+// and the Quake II port's 2026-10-27 out-of-memory screen left nothing behind because its log was
+// off.
+static bool s_forceOut = false;
 
 static char s_buffer[kBufferSize];
 static int  s_used = 0;
@@ -123,11 +130,11 @@ void WriteOut(const char * data, const int size)
     s_state = State::Off;
 }
 
-// Sends what the buffer holds on: to the file while the log is on, after whatever the backlog
-// kept; to the backlog while it is off.
+// Sends what the buffer holds on: to the file while the log is on (or a fatal report is being
+// written), after whatever the backlog kept; to the backlog while it is off.
 void Flush()
 {
-    if (LogEnabled())
+    if (LogEnabled() || s_forceOut)
     {
         if (s_backlogUsed > 0)
         {
@@ -194,9 +201,10 @@ void Unlock()
 // The caller holds the lock.
 void WriteLocked(const char * text)
 {
-    // A full backlog takes nothing more until the log is on. Blank text goes in too, unlike in the
-    // Quake II port: QuakeSpasm ends a line it printed in pieces with a lone "\n" (echo does).
-    if (s_state == State::Off || (s_backlogDropped && !LogEnabled()))
+    // A full backlog takes nothing more until the log is on, or a fatal report comes. Blank text
+    // goes in too, unlike in the Quake II port: QuakeSpasm ends a line it printed in pieces with a
+    // lone "\n" (echo does).
+    if (s_state == State::Off || (s_backlogDropped && !LogEnabled() && !s_forceOut))
     {
         return;
     }
@@ -287,12 +295,16 @@ void LogFileWriteFatal(const char * text)
         Lock();
     }
 
+    // Not gated on ps2_logfile: with the log off, quake.log then holds the backlog (the boot report
+    // and the last lines printed) and the report.
+    s_forceOut = true;
     if (!s_atLineStart)
     {
         Put('\n');
         s_atLineStart = true;
     }
     WriteLocked(text);
+    s_forceOut = false;
 
     if (!ownWriteInterrupted)
     {
