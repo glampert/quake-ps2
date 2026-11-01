@@ -156,6 +156,14 @@ pass); the half after the read is `S_FinishLoadSound`, which the pump reaches th
 `PS2_SoundStartDeferred` instead of dropping it, and `S_Shutdown` drains first. `gl_model.c`'s
 `Mod_ClearAll` (every level change, from `Host_ClearMemory`) calls `PS2_AsyncIoDrain`.
 
+For the models: `gl_model.c`'s `Mod_LoadModel` is split at its read, the half after it being
+`Mod_LoadModelFromBuffer`, which the pump reaches through `PS2_ModelFinishLoad` (a no-op when the
+model is in the cache again by then, since `Cache_Alloc` of an allocated cache is a `Sys_Error`).
+`Mod_ExtradataAsync` is `Mod_Extradata` for a draw: for an alias model with no cache it asks
+`PS2_ModelLoadAsync` (`ps2/renderer/model_load.h`) and returns NULL while `PS2_ModelLoadPending`,
+falling back to `Mod_Extradata` when the loader can't take the file. Only alias.cpp's
+`DrawAliasModel` uses it; `R_TranslateNewPlayerSkin` and `PrintFrameName` keep `Mod_Extradata`.
+
 For rumble: `view.c` calls `PS2_RumbleDamage` from `V_ParseDamage` and `PS2_RumblePickup` from
 `V_BonusFlash_f`. For the memory reports: `zone.c` adds `Cache_UsedBytes` (the cache's list is
 private to it), which `ps2_testmaps` prints.
@@ -298,7 +306,9 @@ Record QuakeSpasm quirks here as they are found.
 - **Alias models live in the cache**, between the hunk's low and high marks: a load moves them
   (`Cache_Move`) and room for another evicts them (`Cache_Free`), which frees their textures
   through `TexMgr_FreeTexturesForOwner`. `Mod_Extradata` reloads an evicted one - mid-frame, if
-  that is when it is drawn. So nothing the DMA reads after the draw may live there: a model's
+  that is when it is drawn; since 2026-11-01 the draw uses `Mod_ExtradataAsync`, which has the
+  background loader read it back and skips the entity meanwhile (`flush` in a level shows it:
+  `model: progs/v_shot.mdl reloaded in the background, 23 ms after it was asked for`). So nothing the DMA reads after the draw may live there: a model's
   corners (alias.cpp) are on the heap for as long as its `qmodel_t`, its skins are copies, and a
   texture freed mid-frame is held until that frame has drawn (texmgr.cpp). The poses stay in the
   cache, read by the EE as the model draws. `aliashdr_t` data is 8-byte aligned there (a 56-byte

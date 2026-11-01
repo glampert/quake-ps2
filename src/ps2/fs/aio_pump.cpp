@@ -10,6 +10,7 @@
 #include "ps2/fs/async_io.h"
 #include "ps2/fs/async_io_c.h"
 #include "ps2/audio/sound_load.h"
+#include "ps2/renderer/model_load.h"
 #include "ps2/debug/profile.h" // kNominalCyclesPerMillisec
 
 namespace ps2::aio {
@@ -33,11 +34,13 @@ void Pump()
 
     const u32 budgetCycles = static_cast<u32>(s_pumpBudgetUs.value) * (debug::kNominalCyclesPerMillisec / 1000u);
     audio::PumpLoads(budgetCycles);
+    mod::PumpLoads(budgetCycles);
 }
 
 void DrainAll()
 {
     audio::DrainLoads();
+    mod::DrainLoads();
     Drain();
 }
 

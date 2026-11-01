@@ -512,6 +512,7 @@ void	Mod_ClearAll (void);
 void	Mod_ResetAll (void); // for gamedir changes (Host_Game_f)
 qmodel_t *Mod_ForName (const char *name, qboolean crash);
 void	*Mod_Extradata (qmodel_t *mod);	// handles caching
+void	*Mod_ExtradataAsync (qmodel_t *mod);	// [PS2_QUAKE]: NULL while the background loader reads an evicted model back
 void	Mod_TouchModel (const char *name);
 
 mleaf_t *Mod_PointInLeaf (vec3_t p, qmodel_t *model);

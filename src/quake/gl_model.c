@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "ps2/fs/async_io_c.h" // [PS2_QUAKE]: PS2_AsyncIoDrain at every level change
+#include "ps2/renderer/model_load.h" // [PS2_QUAKE]: evicted alias models reload in the background
 
 static qmodel_t*	loadmodel;
 static char	loadname[32];	// for hunk tags
@@ -34,6 +35,7 @@ static void Mod_LoadSpriteModel (qmodel_t *mod, void *buffer);
 static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer);
 static void Mod_LoadAliasModel (qmodel_t *mod, void *buffer);
 static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash);
+static void Mod_LoadModelFromBuffer (qmodel_t *mod, byte *buf); // [PS2_QUAKE]
 
 static void Mod_Print (void);
 
@@ -99,6 +101,33 @@ void *Mod_Extradata (qmodel_t *mod)
 	if (!mod->cache.data)
 		Sys_Error ("Mod_Extradata: caching failed");
 	return mod->cache.data;
+}
+
+/*
+===============
+Mod_ExtradataAsync
+
+[PS2_QUAKE]: Mod_Extradata for a draw, which can do without the model for a few frames: an alias
+model the cache evicted is read back by the background loader (ps2/renderer/model_load.h) rather
+than here, mid-frame, and this returns NULL until it is in the cache again. The caller skips the
+entity meanwhile. Falls back to Mod_Extradata when the loader can't take the file.
+===============
+*/
+void *Mod_ExtradataAsync (qmodel_t *mod)
+{
+	void	*r;
+
+	r = Cache_Check (&mod->cache);
+	if (r)
+		return r;
+
+	if (mod->type == mod_alias && !mod->needload)
+	{
+		if (PS2_ModelLoadPending (mod) || PS2_ModelLoadAsync (mod))
+			return NULL;
+	}
+
+	return Mod_Extradata (mod);
 }
 
 /*
@@ -324,7 +353,6 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 {
 	byte	*buf;
 	byte	stackbuf[1024];		// avoid dirtying the cache heap
-	int	mod_type;
 
 	if (!mod->needload)
 	{
@@ -356,6 +384,23 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		return NULL;
 	}
 
+	Mod_LoadModelFromBuffer (mod, buf); // [PS2_QUAKE]: shared with the background reload
+	return mod;
+}
+
+/*
+==================
+Mod_LoadModelFromBuffer
+
+[PS2_QUAKE]: the half of Mod_LoadModel after the file read, on the file's image in memory: shared
+by the synchronous path above and by the background loader's pump (PS2_ModelFinishLoad), which
+converts an evicted alias model once its read has landed. 'buf' stays the caller's.
+==================
+*/
+static void Mod_LoadModelFromBuffer (qmodel_t *mod, byte *buf)
+{
+	int	mod_type;
+
 //
 // allocate a new model
 //
@@ -385,8 +430,18 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash)
 		Mod_LoadBrushModel (mod, buf);
 		break;
 	}
+}
 
-	return mod;
+// [PS2_QUAKE]: the pump's entry (ps2/renderer/model_load.h). A model that was loaded again
+// meanwhile - a draw that couldn't wait went through Mod_Extradata - is left as it is: Cache_Alloc
+// of a cache already allocated is a Sys_Error.
+void PS2_ModelFinishLoad (struct qmodel_s *mod, unsigned char *data, int size, unsigned int path_id)
+{
+	(void)size;
+	if (Cache_Check (&mod->cache))
+		return;
+	mod->path_id = path_id;
+	Mod_LoadModelFromBuffer (mod, data);
 }
 
 /*

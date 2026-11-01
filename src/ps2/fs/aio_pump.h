@@ -2,7 +2,7 @@
 /* ================================================================================================
  * File: aio_pump.h
  * Brief: Where the background loader's finished requests become engine assets. The loader
- *        (async_io.h) only lands bytes; each client (sounds, and the alias models) keeps its own
+ *        (async_io.h) only lands bytes; each client (the sounds, the alias models) keeps its own
  *        table of requests in flight and finishes them on the main thread, from here, once a
  *        frame, under a time budget (ps2_aio_pump_us). The pump runs just before Host_Frame, so
  *        what landed in the last frame's idle time is in place before this frame's draws and its

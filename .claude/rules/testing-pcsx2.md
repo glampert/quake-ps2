@@ -136,6 +136,11 @@
   `w10`, `togglemenu`: the console prints `sound: sound/misc/menu2.wav loaded in the background,
   N ms after it was asked for` (14 ms, 2026-11-01). A sound the level precached never shows up,
   and nor does one asked for under the plaque or during the precache pass.
+- **A background model reload**, by script: `developer 1`, `map e1m1`, two `w100`, `flush` (zone.c's
+  command, which empties the cache), `w100`: every alias model drawn after it reloads through the
+  loader, `model: progs/v_shot.mdl reloaded in the background, 23 ms after it was asked for`
+  (2026-11-01; at e1m1's start the view weapon is the only one in view). The sounds the flush
+  evicted reload the same way when a channel next wants them.
 
 The rest are scripted runs:
 

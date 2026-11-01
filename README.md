@@ -299,7 +299,11 @@ those directly on the PS2's hardware, with no GL underneath.
   vertex of the lightmap pass, which costs the EE nothing but washes the walls a flat grey rather
   than brightening their texture. `gl_flashblend` draws QuakeSpasm's glows in their place.
 - **Models** ([alias.cpp](src/ps2/renderer/alias.cpp)) are interpolated between poses on VU1 and lit
-  as QuakeSpasm lights them, with their shadows (`r_shadows`) and the players' colours.
+  as QuakeSpasm lights them, with their shadows (`r_shadows`) and the players' colours. QuakeSpasm
+  keeps them in its cache, where room for something else can evict one, and reads it back the
+  moment it is drawn; here that read goes to the background loader
+  ([model_load.h](src/ps2/renderer/model_load.h)) and the entity sits out the few frames until the
+  model is back, instead of the frame waiting on the drive.
   [Sprites](src/ps2/renderer/sprite.cpp) face the camera in all of QuakeSpasm's orientations, and
   [particles](src/ps2/renderer/particles.cpp) are QuakeSpasm's round dots, or with `r_particles 2`
   its squares.
@@ -437,6 +441,14 @@ frame. Destinations are 64-byte aligned SIF DMA targets; the loader never alloca
 touches the engine, and the places that free or close behind a read drain it first. The design
 and its console measurements are the Quake II port's (`misc/docs/plans/background-loading.md`
 there); `ps2_testaio 1` is its self-test, and `ps2_aio 0` turns it off. Tag `Aio`.
+
+What goes through it: demos, the sounds first asked for while a level runs (see
+[Sound](#sound)), and the alias models the cache evicted and a draw wants back (see
+[Rendering](#rendering)). Level loads stay synchronous under the plaque, where a stall is expected,
+and so do the menu pictures, which load as a menu opens. An asset that is still loading is skipped
+where it would be drawn or played, never shown as a placeholder; a missing one behaves as before,
+since the existence check stays synchronous. QuakeSpasm has no other mid-level file read: its
+textures come out of the level and model files, so none is loaded from a file of its own.
 
 **Demos stream through it** ([readahead_stream.h](src/ps2/fs/readahead_stream.h)). `COM_FOpenFile`
 on a `.dem` whose source can be read by range (a pak, a stored pkz entry, a loose file) returns an

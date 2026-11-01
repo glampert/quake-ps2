@@ -113,6 +113,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/brush.cpp            \
 	ps2/renderer/lightmap.cpp         \
 	ps2/renderer/alias.cpp            \
+	ps2/renderer/model_load.cpp       \
 	ps2/renderer/sprite.cpp           \
 	ps2/renderer/particles.cpp        \
 	ps2/renderer/sky.cpp              \

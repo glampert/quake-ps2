@@ -129,7 +129,9 @@ Measure with `ps2_memstats` and `hunk_print` before raising any of them.
   workspace is made at boot, by `S_Init`'s two ambient sounds). Each client that comes
   to it holds its own staging while a request is in flight, and drains before any sweep, so nothing
   of it survives into a load. A sound in flight holds its file's size, rounded to 64, until the
-  pump finishes it (8 at most; the menu's clicks are a few KB). A demo's read-ahead ring is 64 KB of `Aio` while it plays (its
+  pump finishes it (8 at most; the menu's clicks are a few KB), and so does an alias model being
+  read back after an eviction (8 at most, 768 KB each at most; player.mdl is 190 KB), its hunk and
+  cache copies live beside the staging at the finish. A demo's read-ahead ring is 64 KB of `Aio` while it plays (its
   stream struct 1.6 KB more), in place of the 72 KB a deflated pkz stream held under `Pack` before;
   it opens before the demo's level loads, so it sits on that load's peak as the stdio buffer did.
   **MapCycle 2026-11-01** (`q1-mapcycle-aio-sounds.emulog.txt`, debug, pkz, with the sounds on the

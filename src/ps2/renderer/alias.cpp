@@ -583,8 +583,16 @@ void BeginFrame()
 
 void DrawAliasModel(entity_t & e, const bool viewModel)
 {
+    // A model the cache evicted is read back by the background loader (model_load.h): until it is
+    // in the cache again the entity, its shadow included, sits out the frame.
+    const aliashdr_t * const hdrPtr = static_cast<const aliashdr_t *>(Mod_ExtradataAsync(e.model));
+    if (hdrPtr == nullptr)
+    {
+        return;
+    }
+
     // Pose and transform first, so a model that is culled still keeps its lerp state current.
-    const aliashdr_t & hdr = *static_cast<const aliashdr_t *>(Mod_Extradata(e.model));
+    const aliashdr_t & hdr = *hdrPtr;
     const AliasDraw & draw = DrawFor(*e.model);
 
     // QuakeSpasm keeps these times in float too.
